@@ -1,0 +1,56 @@
+# delabs-approve-poll.service
+# Этап 2/2 пайплайна контента DeLabs: поллер АПРУВА.
+# Читает /opt/web3-puls/drafts/pending.json. Если владелец поставил реакцию ✅
+# на превью в Saved Messages ИЛИ ответил «+»/«опубликовать» — ингестит статьи на
+# сайт (/api/internal/digests), публикует дайджест в канал (баннер+футер+эмодзи)
+# и чистит pending. Pending старше 20ч (MAX_AGE_MS в approve-poll.ts) → expire.
+# Иначе тихо ждёт.
+# Oneshot — запускается таймером delabs-approve-poll.timer каждые ~30 мин.
+[Unit]
+Description=DeLabs draft approval poller (publish on owner approval)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=agent-team
+Group=agent-team
+WorkingDirectory=/opt/agent-team
+EnvironmentFile=/opt/agent-team/.env
+Environment=CLAUDE_BIN=/usr/local/bin/claude
+ExecStart=/usr/local/bin/bun /opt/agent-team/tools/approve-poll.ts
+# Аудит 2026-08-29: здесь стояло `TimeoutStartSec=180`. Внутри одного запуска
+# живёт единственный необратимый шаг проекта — публикация одобренного дайджеста
+# в канал, — и SIGTERM по истечении бюджета убивает процесс между отметкой
+# `publishStartedAt` и фактической отправкой. После такого обрыва каждый
+# следующий тик отвечает `publish_already_attempted`, дайджест не уходит
+# никогда, а через 20ч TTL стирает одобренный владельцем выпуск.
+# Арифметика 900с: ингест ограничен сверху SITE_INGEST_TIMEOUT_MS (дефолт 15с)
+# на статью × 4 статьи (articlesFromResearch режет .slice(0, 4)) = 60с; всё
+# остальное (рендер баннера, резолв пира, заливка медиа, хвост частями с
+# ретраями) получает 840с запаса. При этом 900 < 1800 — периода таймера, — так
+# что расписание не расползается.
+TimeoutStartSec=900
+NoNewPrivileges=true
+UMask=0077
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+ReadWritePaths=/opt/web3-puls/drafts
+
+[Install]
+WantedBy=multi-user.target

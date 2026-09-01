@@ -1,0 +1,31 @@
+[Unit]
+Description=TON Site reverse proxy for cryptodelabs.ton (ADNL -> delabs site on :8790)
+Documentation=https://github.com/tonutils/reverse-proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tonproxy
+Group=tonproxy
+WorkingDirectory=/opt/ton-proxy
+ExecStart=/opt/ton-proxy/tonutils-reverse-proxy
+Restart=always
+RestartSec=5
+
+# Hardening: сервис держит приватный ключ ADNL в config.json и смотрит в интернет
+# по UDP. Ему не нужно ничего, кроме своего каталога и сети.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/ton-proxy
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

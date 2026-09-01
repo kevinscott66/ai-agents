@@ -1,0 +1,47 @@
+[Unit]
+Description=Agent Team
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=agent-team
+Group=agent-team
+WorkingDirectory=/opt/agent-team
+Environment=NODE_ENV=production
+Environment=MINIAPP_PORT=8787
+EnvironmentFile=-/opt/agent-team/.env
+ExecStart=/usr/local/bin/bun orchestrator-team.ts
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=agent-team
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+ReadWritePaths=/opt/agent-team/data
+ReadWritePaths=/opt/agent-team/backups
+ReadWritePaths=/opt/agent-team/memory
+ReadWritePaths=/tmp
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

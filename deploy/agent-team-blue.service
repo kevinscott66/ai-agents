@@ -1,0 +1,55 @@
+[Unit]
+Description=Agent Team (Blue)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=agent-team
+Group=agent-team
+WorkingDirectory=/opt/agent-team
+Environment=NODE_ENV=production
+Environment=MINIAPP_PORT=8787
+EnvironmentFile=-/opt/agent-team/.env
+ExecStart=/usr/local/bin/bun orchestrator-team.ts
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=agent-team-blue
+
+# Security
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+ReadWritePaths=/opt/agent-team/data
+ReadWritePaths=/opt/agent-team/backups
+# Аудит 2026-08-12: memory/ здесь не было, а ProtectSystem=strict делает всё
+# остальное read-only. agent/lib/memory.ts пишет вики в MEMORY_DIR ?? "memory"
+# ОТНОСИТЕЛЬНО cwd, то есть в /opt/agent-team/memory (WorkingDirectory выше);
+# deploy/deploy.sh исключает этот каталог из rsync ровно как рантайм-состояние.
+# Без строки ниже любая запись в вики падает на EROFS, а /api/health этого не
+# замечает — деплой отчитывается успехом.
+ReadWritePaths=/opt/agent-team/memory
+ReadWritePaths=/tmp
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

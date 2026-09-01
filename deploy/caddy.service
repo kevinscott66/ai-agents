@@ -1,0 +1,51 @@
+# /etc/systemd/system/caddy.service
+# Systemd unit file for Caddy reverse proxy serving agent-team Mini App
+
+[Unit]
+Description=Caddy Web Server (HTTPS reverse proxy for agent-team)
+Documentation=https://caddyserver.com/docs/
+After=network.target network-online.target
+Requires=network-online.target
+
+[Service]
+Type=notify
+User=caddy
+Group=caddy
+# Аудит 2026-08-29, две правки в двух строках.
+#
+# Первая: убран --environ. Он печатает ВСЁ окружение процесса в журнал при
+# каждом старте. Сегодня у юнита нет EnvironmentFile и печатать нечего, но это
+# ровно та строка, которая превращается в утечку в день, когда его добавят.
+#
+# Вторая: --config теперь /etc/caddy/Caddyfile — тот файл, который кладёт и
+# проверяет deploy/setup-caddy.sh. Раньше здесь стоял
+# /opt/agent-team/deploy/Caddyfile: проверяли один файл, запускали другой, и
+# второго на хосте вообще не было — deploy/deploy.sh синхронизирует только
+# agent/ → /opt/agent-team/, каталог deploy/ туда не попадает никогда.
+ExecStart=/usr/bin/caddy run --config /etc/caddy/Caddyfile
+ExecReload=/usr/bin/caddy reload --config /etc/caddy/Caddyfile --force
+TimeoutStopSec=5s
+LimitNOFILE=1048576
+LimitNPROC=1048576
+PrivateTmp=true
+ProtectSystem=full
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+# Security hardening
+NoNewPrivileges=true
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=caddy
+
+# Restart policy
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

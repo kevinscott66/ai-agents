@@ -1,0 +1,2589 @@
+/* ====================================================================
+   Self-hosted fonts (CSP default-src 'self' — no external font CDNs).
+   Body: Manrope (clean grotesk, RU/EN). Display: Unbounded (geometric,
+   character-rich, RU/EN). Cyrillic + latin subsets loaded separately so
+   browsers fetch only what a glyph needs.
+   ==================================================================== */
+@font-face {
+  font-family: "Manrope";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/manrope-cyrillic-400.woff2") format("woff2");
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+@font-face {
+  font-family: "Manrope";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/manrope-latin-400.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+2000-206F, U+2074,
+    U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Manrope";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/manrope-cyrillic-600.woff2") format("woff2");
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+@font-face {
+  font-family: "Manrope";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/manrope-latin-600.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+2000-206F, U+2074,
+    U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Manrope";
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("/fonts/manrope-cyrillic-800.woff2") format("woff2");
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+@font-face {
+  font-family: "Manrope";
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("/fonts/manrope-latin-800.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+2000-206F, U+2074,
+    U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Unbounded";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/unbounded-cyrillic-600.woff2") format("woff2");
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+@font-face {
+  font-family: "Unbounded";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/unbounded-latin-600.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+2000-206F, U+2074,
+    U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Unbounded";
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("/fonts/unbounded-cyrillic-800.woff2") format("woff2");
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+@font-face {
+  font-family: "Unbounded";
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("/fonts/unbounded-latin-800.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+2000-206F, U+2074,
+    U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* ====================================================================
+   ТОКЕНЫ. Три слоя: primitive (сырые значения) → semantic (назначение) →
+   component. Компоненты ниже не имеют права брать сырой hex.
+
+   Почему палитра переехала. Сайт читался как сгенерированный не из-за
+   «плохого вкуса», а из-за одной механики: фиолетово-бирюзовый градиент
+   `#6d5cff → #16e0c8` стоял одновременно на кнопке, логотипе, маркере
+   секции, буллете, счётчике шага, полоске карточки и полосе разблокировки.
+   Это ровно то, что AVOID-лист дизайн-скилла для нашего типа продукта
+   называет «AI purple/pink gradients». Плюс #6d5cff на #11182b давал
+   контраст 3.89:1 — ниже порога WCAG AA (4.5), то есть каждая ссылка на
+   карточке формально нечитаема.
+
+   Решение: один бренд-оттенок вместо пары. Тогда градиенту не к чему
+   вести, и каждому цвету достаётся ровно одна работа:
+     бирюза  — бренд и вся интерактивность (ссылки, primary, фокус);
+     янтарь  — только время (скоро, дедлайны, величина разблокировки);
+     зелёный — только статус «идёт/подтверждён», никогда не ссылка;
+     серый   — «закончился»;
+     красный — ошибка.
+   Полная спека и таблица посчитанных контрастов —
+   .claude/memory/notes/site-redesign-spec-2026-08-12.md
+   ==================================================================== */
+:root {
+  /* ---------- Слой 1: примитивы ---------- */
+  /* Slate, тон ~222°. Не чистый чёрный: на OLED он даёт смазывание. */
+  --c-slate-950: #070a12;
+  --c-slate-900: #0d1220;
+  --c-slate-850: #141b2b;
+  --c-slate-800: #1b2437;
+  --c-slate-750: #232d42;
+  --c-slate-700: #263047;
+  --c-slate-650: #35415b;
+  --c-slate-500: #6e7b95;
+  --c-slate-400: #9aa3bc;
+  --c-slate-050: #e9edf6;
+  --c-white: #ffffff;
+
+  --c-teal-400: #16e0c8; /* бренд — совпадает с favicon.svg и знаком в Logo.tsx */
+  --c-teal-300: #5febd8;
+  --c-teal-600: #0fb9a6;
+  --c-teal-ink: #04121a;
+
+  --c-amber-400: #f5b94b;
+  --c-green-400: #4ade80;
+  --c-red-400: #ff7183;
+
+  /* ---------- Слой 2: семантика ---------- */
+  --bg-top: var(--c-slate-900);
+  --bg-bottom: var(--c-slate-950);
+  --surface: var(--c-slate-850);
+  --surface-2: var(--c-slate-800);
+  --surface-hover: var(--c-slate-750);
+
+  /* border/border-soft — только декоративные разделители и рамки карточек.
+     Они ниже 3:1 намеренно: WCAG 1.4.11 требует 3:1 лишь от границ, которые
+     опознают контрол или его состояние, и сам текст критерия исключает
+     декоративные. Всё, что опознаёт контрол, берёт --border-strong. */
+  --border-soft: var(--c-slate-700);
+  --border: var(--c-slate-650);
+  --border-strong: var(--c-slate-500);
+
+  --text: var(--c-slate-050);
+  --text-hi: var(--c-white); /* текст под курсором, на полтона ярче обычного */
+  --muted: var(--c-slate-400);
+
+  --accent: var(--c-teal-400);
+  --accent-hi: var(--c-teal-300); /* ховер на заливке акцентом */
+  --accent-dim: var(--c-teal-600); /* нажатие на заливке акцентом */
+  --on-accent: var(--c-teal-ink);
+  --accent-soft: rgba(22, 224, 200, 0.55); /* подчёркивание ссылки в прозе */
+  --focus: var(--accent);
+
+  --ok: var(--c-green-400);
+  --soon: var(--c-amber-400);
+  --ended: var(--c-slate-400);
+  --danger: var(--c-red-400);
+
+  --tint-ok: rgba(74, 222, 128, 0.14);
+  --tint-soon: rgba(245, 185, 75, 0.14);
+  --tint-ended: rgba(154, 163, 188, 0.16);
+  --tint-danger: rgba(255, 113, 131, 0.14);
+  --tint-accent: rgba(22, 224, 200, 0.16);
+  --ring-ok: rgba(74, 222, 128, 0.6);
+  --ring-soon: rgba(245, 185, 75, 0.6);
+  --ring-ended: rgba(154, 163, 188, 0.6);
+  --ring-danger: rgba(255, 113, 131, 0.6);
+  --ring-accent: rgba(22, 224, 200, 0.6);
+
+  /* Однооттеночное затухание. Легально ровно в одном месте — .pulse::before. */
+  --grad: linear-gradient(90deg, var(--accent) 0%, rgba(22, 224, 200, 0) 100%);
+
+  --radius: 12px;
+  --radius-sm: 8px;
+  --maxw: 1080px;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+  /* Цветных свечений нет — они и делали кнопку «неоновой». */
+
+  /* Один ритм на весь сайт. До этого в файле стояло восемь разных длительностей
+     (0.1 / 0.12 / 0.15 / 0.16 / 0.18 / 0.2 / 0.22 / 0.28) и ни одной из них не
+     соответствовал токен — то есть шкала была объявлена и не работала.
+     `--ease` — та же кривая, что уже стояла руками у карточки и стрелки;
+     `--ease-out` тормозит резче и стоит на въезде ящика меню. */
+  --dur-fast: 150ms;
+  --dur: 200ms;
+  --dur-slow: 300ms;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --opacity-disabled: 0.5;
+
+  --font: "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Unbounded", "Manrope", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  /* tabular figures for stats / sums / unlock amounts */
+  --font-num: var(--font);
+  /* Системный стек — 0 КБ. Тикеры, суммы, проценты: цифры не должны
+     «дышать» при обновлении данных. */
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    monospace;
+
+  --ring-w: 2px;
+  --ring-offset: 2px;
+
+  /* ---------- Слой 3: компоненты ---------- */
+  --btn-primary-bg: var(--accent);
+  --btn-primary-bg-hover: var(--accent-hi);
+  --btn-primary-bg-active: var(--accent-dim);
+  --btn-primary-fg: var(--on-accent);
+  --btn-ghost-bg: var(--surface-2);
+  --btn-ghost-border: var(--border-strong);
+
+  --chip-bg: var(--surface-2);
+  --chip-fg: var(--muted);
+  --chip-border: var(--border-strong);
+  --chip-active-bg: var(--tint-accent);
+  --chip-active-fg: var(--accent);
+  --chip-active-border: var(--ring-accent);
+
+  --card-bg: var(--surface);
+  --card-border: var(--border);
+
+
+  --link-fg: var(--accent);
+  --input-bg: var(--surface);
+  --input-border: var(--border-strong);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font);
+  color: var(--text);
+  background-color: var(--bg-bottom);
+  /* Одна очень слабая аура сверху. Было две — фиолетовая и бирюзовая, по
+     0.16 и 0.10: вдвоём они красили верх экрана в тот самый «AI-фиолет»,
+     который и делал страницу похожей на шаблон. */
+  background-image: radial-gradient(
+      900px 520px at 18% -8%,
+      rgba(22, 224, 200, 0.06),
+      transparent 70%
+    ),
+    linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 60%);
+  background-attachment: fixed;
+  background-repeat: no-repeat;
+  min-height: 100vh;
+  line-height: 1.6;
+  letter-spacing: 0.1px;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* tabular-nums helper: stats, sums, unlock amounts, dates */
+.pulse-num,
+.axis-when,
+.axis-sum,
+.axis-pct,
+.board-deadline,
+.dlist-n,
+.dlist-meta,
+.unlocks-table td,
+.drop-deadline,
+.card-meta {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+a {
+  color: var(--link-fg);
+  text-decoration: none;
+}
+a:not(.btn):hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+  text-decoration-color: var(--accent-soft);
+}
+
+/* Ссылка-поверхность подчёркиванию не подлежит.
+ *
+ * Правило выше — про текстовые ссылки, и там оно обязано быть: внутри абзаца
+ * ссылка не имеет права отличаться одним цветом. Но половина ссылок этого
+ * сайта — не слова в тексте, а целые блоки: карточка дайджеста, строка ленты,
+ * ячейка пульса, гайд, логотип. `text-decoration` наследуется, поэтому
+ * наведение на такой блок подчёркивало ВСЁ его содержимое разом — дату,
+ * заголовок, краткое содержание, счётчик источников, — чего никто не
+ * проектировал. Каждый из этих блоков уже показывает кликабельность
+ * собственным hover-состоянием: фон, рамка, сдвиг стрелки.
+ *
+ * Список явный, а не `a:has(*)`: подчёркивание — доступность, и снимать его
+ * оптом по структурному признаку значит однажды снять с обычной ссылки,
+ * внутри которой оказался `<span>`.
+ */
+a.card-clickable:hover,
+a.lead:hover,
+a.dlist-row:hover,
+a.pulse-cell:hover,
+a.guide:hover,
+a.board-row:hover,
+a.header-logo:hover,
+a.hhead-link:hover {
+  text-decoration: none;
+}
+
+/* Global keyboard focus ring (de-AI: deliberate, consistent) */
+:focus-visible {
+  outline: var(--ring-w) solid var(--focus);
+  outline-offset: var(--ring-offset);
+  border-radius: 4px;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+/* Обёртка-цель для скип-линка и для переноса фокуса при смене маршрута.
+   Растягивается сама, чтобы `flex: 1` у <main> внутри продолжал работать:
+   иначе подвал подтягивался вверх на коротких страницах. */
+.app-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.app-content:focus {
+  outline: none;
+}
+
+/* Первая остановка табуляции. Прячем сдвигом, а не display:none —
+   скрытый через display элемент не фокусируется вовсе. */
+.skip-link {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 100;
+  transform: translateY(-200%);
+  padding: 10px 16px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 700;
+  font-size: 15px;
+  text-decoration: none;
+  transition: transform var(--dur-fast) var(--ease);
+}
+.skip-link:focus-visible {
+  transform: translateY(0);
+}
+
+/* Текст только для скринридера. Не display:none и не visibility:hidden — оба
+   убирают элемент из дерева доступности вместе с сообщением. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.container {
+  width: 100%;
+  max-width: var(--maxw);
+  margin: 0 auto;
+  padding: 0 20px;
+}
+
+/* Текст, который приходит из ингеста, а не написан руками. В нём регулярно
+   встречаются адреса контрактов (42 знака) и голые ссылки — строки, которые
+   негде перенести. На 360px под контент остаётся 320px, адрес занимает ~390px,
+   ссылка ~480px, и уезжал не блок, а вся страница: ни у одного предка по
+   цепочке нет overflow, так что горизонтальную полосу получал документ целиком.
+   break-word, а не anywhere: перенос только когда слово иначе не влезает, и без
+   влияния на расчёт min-content у гридов. */
+.lead-title,
+.lead-summary,
+.card-title,
+.card-summary,
+.digest-body p,
+.digest-items li,
+.activity-steps li,
+.faq-a {
+  overflow-wrap: break-word;
+}
+
+/* ---------- Buttons ---------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 10px 18px;
+  font: inherit;
+  font-weight: 600;
+  font-size: 15px;
+  cursor: pointer;
+  transition: transform var(--dur-fast) var(--ease), box-shadow var(--dur) var(--ease), background var(--dur) var(--ease),
+    border-color var(--dur) var(--ease);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.btn:hover {
+  text-decoration: none;
+}
+.btn:active {
+  transform: translateY(1px);
+}
+.btn-sm {
+  padding: 7px 13px;
+  font-size: 14px;
+}
+/* Плоская заливка вместо градиента, и без цветного свечения: именно оно
+   читалось как «неоновая AI-кнопка». Тень теперь нейтральная. */
+.btn-primary {
+  color: var(--btn-primary-fg);
+  background: var(--btn-primary-bg);
+  box-shadow: var(--shadow-sm);
+  letter-spacing: 0.2px;
+}
+.btn-primary:hover {
+  transform: translateY(-1px);
+  background: var(--btn-primary-bg-hover);
+}
+.btn-primary:active {
+  transform: translateY(0);
+  background: var(--btn-primary-bg-active);
+  box-shadow: none;
+}
+.btn-ghost {
+  color: var(--text);
+  background: var(--btn-ghost-bg);
+  /* --border (1.5:1 к своей же заливке) — это разделитель между блоками, а не
+     граница элемента управления. У кнопки граница и есть то единственное, что
+     говорит «сюда можно нажать», ей нужны 3:1 (WCAG 1.4.11). */
+  border-color: var(--btn-ghost-border);
+}
+.btn-ghost:hover {
+  border-color: var(--accent);
+  color: var(--text-hi);
+}
+.btn:disabled {
+  opacity: var(--opacity-disabled);
+  cursor: default;
+}
+
+/* ---------- Header ---------- */
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  backdrop-filter: blur(12px);
+  background: rgba(8, 12, 24, 0.72);
+  border-bottom: 1px solid var(--border);
+}
+.header-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 64px;
+  gap: 16px;
+}
+.header-logo {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
+.logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+}
+.logo-img {
+  display: block;
+  object-fit: contain;
+  vertical-align: middle;
+}
+.logo-text {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 17px;
+  letter-spacing: -0.4px;
+  color: var(--text);
+}
+.logo-accent {
+  color: var(--accent);
+}
+.site-nav {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+}
+.site-nav > a:not(.btn) {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 15px;
+}
+.site-nav > a:not(.btn):hover {
+  color: var(--text);
+  text-decoration: none;
+}
+.site-nav > a:not(.btn).is-active {
+  color: var(--text);
+}
+.btn-cta {
+  margin-left: 4px;
+}
+/* 44×44 — минимальная зона касания (Apple HIG); сами полоски остаются 22px,
+   растёт только область нажатия, поэтому -10px справа держит кнопку у края. */
+.nav-toggle {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: 44px;
+  height: 44px;
+  margin-right: -10px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+.nav-toggle span {
+  width: 22px;
+  height: 2px;
+  background: var(--text);
+  border-radius: 2px;
+  transition: transform var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease);
+}
+/* Открытый бургер превращается в крестик: состояние кнопки должно читаться
+   с самой кнопки, а не только по тому, видно ли меню под ней. 3.5px — это
+   половина шага между полосками (2px высота + 5px gap). */
+.nav-toggle.is-open span:nth-child(1) {
+  transform: translateY(7px) rotate(45deg);
+}
+.nav-toggle.is-open span:nth-child(2) {
+  opacity: 0;
+}
+.nav-toggle.is-open span:nth-child(3) {
+  transform: translateY(-7px) rotate(-45deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .nav-toggle span {
+    transition: none;
+  }
+}
+
+/* ---------- Hero ---------- */
+.page-home,
+.page-digest,
+.page-activity,
+.page-section {
+  flex: 1;
+  padding-top: 36px;
+  padding-bottom: 60px;
+}
+
+/* Асимметричная пара: обещание слева, живые цифры справа. Раньше hero был
+   центрированным столбцом на 760px, а сводка — отдельной плашкой под ним. */
+.hero {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(260px, 0.9fr);
+  align-items: start;
+  gap: 32px;
+  padding: 34px 0 10px;
+  /* Декоративная сетка ::before вылезает за правый край блока и до ~1120px
+     давала горизонтальную прокрутку всей страницы (на 768 — ровно 20px).
+     clip вместо hidden: `overflow: hidden` создаёт скролл-контейнер и срезал
+     фокус-кольцо у CTA «Читать в Telegram» — оно начинается ровно на x=0
+     контент-бокса, а кольцу нужно 4px наружу (outline 2px + offset 2px). */
+  overflow: clip;
+  overflow-clip-margin: 6px;
+}
+/* Signature octagon + pulse motif from the logo, drawn very faint behind
+   the hero text. Pure CSS, decorative, hidden from AT. */
+.hero::before {
+  content: "";
+  position: absolute;
+  top: -20px;
+  right: -20px;
+  width: 280px;
+  height: 280px;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.5;
+  background:
+    repeating-linear-gradient(
+      90deg,
+      var(--border-soft) 0 1px,
+      transparent 1px 34px
+    ),
+    repeating-linear-gradient(
+      0deg,
+      var(--border-soft) 0 1px,
+      transparent 1px 34px
+    );
+  -webkit-mask-image: radial-gradient(closest-side, #000 40%, transparent 100%);
+  mask-image: radial-gradient(closest-side, #000 40%, transparent 100%);
+}
+.hero > * {
+  position: relative;
+  z-index: 1;
+}
+.hero-copy {
+  max-width: 640px;
+}
+.hero-eyebrow {
+  margin: 0 0 14px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+}
+.hero-title {
+  font-family: var(--font-display);
+  font-size: clamp(30px, 5.2vw, 46px);
+  line-height: 1.08;
+  margin: 0 0 16px;
+  font-weight: 800;
+  letter-spacing: -1.2px;
+}
+/* Выделение словом, а не заливкой по буквам: в заголовке иерархию уже
+   держат кегль 800 и трекинг. */
+.grad {
+  color: var(--accent);
+}
+.hero-sub {
+  color: var(--muted);
+  font-size: 17px;
+  margin: 0 0 20px;
+  max-width: 56ch;
+}
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.hero-trust {
+  display: inline-block;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.45;
+  margin: 0;
+  padding: 9px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+/* ---------- Пульс (правая колонка hero) ---------- */
+.pulse {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 16px 18px 14px;
+  overflow: hidden;
+}
+/* Единственное место, где сводка заслуживает фирменный градиент, —
+   тонкий «пульс» по верхней кромке, а не заливка целиком. */
+.pulse::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 3px;
+  background: var(--grad);
+}
+.pulse-cap {
+  margin: 4px 0 14px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+}
+/* gap 1px по фону-бордеру — волосяная сетка без четырёх отдельных правил. */
+.pulse-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: var(--border-soft);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.pulse-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 13px 14px;
+  background: var(--surface);
+  color: var(--text);
+  transition: background var(--dur-fast) var(--ease);
+}
+.pulse-cell:hover,
+.pulse-cell:focus-visible {
+  background: var(--surface-2);
+}
+/* Ячейки прижаты к padding-box сетки, а у неё overflow: hidden — внешнее
+   кольцо срезалось целиком, и клавиатурный обход давал четыре невидимые
+   остановки подряд (подсветка фона тут ≈1.1:1, WCAG 2.4.11 требует 3:1).
+   Рисуем кольцо внутрь. То же ниже у .board-more и .guide. */
+.pulse-cell:focus-visible {
+  outline-offset: -2px;
+}
+.pulse-num {
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.8px;
+  font-variant-numeric: tabular-nums;
+}
+.pulse-num.is-pending {
+  color: var(--muted);
+}
+.pulse-label {
+  color: var(--muted);
+  font-size: 13px;
+}
+.pulse-foot {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* ---------- Sections ---------- */
+.section {
+  margin-top: 56px;
+  scroll-margin-top: 80px;
+}
+/* On standalone section pages there's a single section right under the header —
+   no preceding block to separate from, so drop the large top margin. */
+.page-section > .section:first-child {
+  margin-top: 0;
+}
+.section-head {
+  margin-bottom: 20px;
+}
+.section-head h1 {
+  position: relative;
+  font-family: var(--font-display);
+  font-size: clamp(23px, 3.4vw, 30px);
+  margin: 0 0 5px;
+  font-weight: 800;
+  letter-spacing: -0.7px;
+  padding-left: 16px;
+}
+/* Octagon tick — brand motif as a section marker (replaces the
+   "plain heading" look that reads as template). */
+.section-head h1::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.16em;
+  width: 9px;
+  height: 9px;
+  background: var(--accent);
+  clip-path: polygon(
+    30% 0,
+    70% 0,
+    100% 30%,
+    100% 70%,
+    70% 100%,
+    30% 100%,
+    0 70%,
+    0 30%
+  );
+}
+.section-sub {
+  color: var(--muted);
+  margin: 0;
+  font-size: 16px;
+}
+
+/* ---------- Шапка блока главной ----------
+   Отличается от .section-head намеренно: ссылка «все …» живёт в шапке, а не
+   отдельной центрированной кнопкой под каждым блоком, — четыре одинаковые
+   кнопки подряд и были половиной ощущения шаблона. */
+.hhead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.hhead-title {
+  font-family: var(--font-display);
+  font-size: clamp(20px, 3vw, 25px);
+  font-weight: 700;
+  letter-spacing: -0.6px;
+  margin: 0;
+}
+.hhead-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 14px;
+  white-space: nowrap;
+  min-height: 24px;
+}
+.hhead-link:hover {
+  color: var(--text);
+}
+.hhead-sub {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--muted);
+  font-size: 16px;
+  max-width: 68ch;
+}
+
+/* ---------- Дайджесты: передовица + пронумерованный список ---------- */
+.lead {
+  display: grid;
+  grid-template-columns: 148px minmax(0, 1fr);
+  gap: 24px;
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.lead:hover,
+.lead:focus-visible {
+  border-color: var(--accent-soft);
+  background: var(--surface-2);
+}
+.lead-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-right: 20px;
+  border-right: 1px solid var(--border-soft);
+}
+.lead-date {
+  font-family: var(--font-num);
+  font-size: 15px;
+  font-weight: 600;
+}
+.lead-sources {
+  color: var(--muted);
+  font-size: 13px;
+}
+.lead-body {
+  min-width: 0;
+}
+.lead-title {
+  font-family: var(--font-display);
+  font-size: clamp(20px, 2.6vw, 27px);
+  line-height: 1.2;
+  letter-spacing: -0.7px;
+  margin: 0 0 10px;
+}
+.lead-summary {
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 0 0 14px;
+  max-width: 62ch;
+}
+.lead-skeleton {
+  pointer-events: none;
+}
+.lead-skeleton .lead-body > * + * {
+  margin-top: 10px;
+}
+.dlist {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+.dlist-row {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 15px 8px;
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--text);
+  transition: background var(--dur-fast) var(--ease);
+}
+.dlist > li:last-child .dlist-row {
+  border-bottom: none;
+}
+.dlist-row:hover,
+.dlist-row:focus-visible {
+  background: var(--surface);
+}
+.dlist-n {
+  font-family: var(--font-num);
+  font-size: 14px;
+  color: var(--muted);
+}
+.dlist-body {
+  min-width: 0;
+}
+.dlist-title {
+  display: block;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.dlist-meta {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.dlist-row svg {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.dlist-row:hover svg,
+.dlist-row:focus-visible svg {
+  color: var(--accent);
+}
+
+/* ---------- Разблокировки: ось времени ---------- */
+.axis {
+  position: relative;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+/* Вертикальная линия оси: одна на список, а не рамка вокруг каждой строки. */
+.axis::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 14px;
+  bottom: 14px;
+  width: 1px;
+  background: var(--border);
+}
+.axis-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr) minmax(170px, 230px);
+  align-items: center;
+  gap: 18px;
+  padding: 15px 0 15px 26px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.axis-row:last-child {
+  border-bottom: none;
+}
+.axis-row::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: calc(50% - 4px);
+  width: 9px;
+  height: 9px;
+  /* Узел красится по близости события: серый — дальнее, янтарь — ближайшее
+     и сегодняшнее. Цвет наконец несёт смысл, а не украшает. */
+  background: var(--ended);
+  clip-path: polygon(
+    30% 0,
+    70% 0,
+    100% 30%,
+    100% 70%,
+    70% 100%,
+    30% 100%,
+    0 70%,
+    0 30%
+  );
+}
+/* Цвет здесь дублирует подпись слева («сегодня», «через 3 дня»), а не заменяет
+   её: смысл цветом одним не передаём (WCAG 1.4.1). Класс ставит `axisTone` по
+   тому же правилу, по которому появляется подпись. */
+.axis-row.is-soon::before {
+  background: var(--soon);
+}
+/* Сегодня — тот же янтарь, что и «скоро», но узел крупнее: это следующая
+   ступень той же срочности, а не другой вид события.
+
+   Раньше здесь стоял `--accent`, то есть бирюза. В этой палитре бирюза значит
+   «сюда можно нажать» — она же `--link-fg` и `--focus`, — и неподвижный узел,
+   покрашенный ею, обещал действие, которого нет. Ровно эту ошибку двумя
+   экранами ниже уже разбирали у бирок статуса, но до оси правка не дошла;
+   соседний комментарий у `.axis-rel` («бирюза здесь читалась бы как ссылка»)
+   запрещал ровно то, что строкой выше и делалось.
+
+   Размер, а не обводка: у узла `clip-path`, а он срезает и box-shadow, и
+   outline — кольцо просто не нарисовалось бы. Центр держится на линии оси
+   (x = 4.5px), поэтому `left` уходит в минус ровно на половину прироста. */
+.axis-row.is-today::before {
+  background: var(--soon);
+  left: -2px;
+  width: 13px;
+  height: 13px;
+  top: calc(50% - 6px);
+}
+.axis-when {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+/* Янтарь = время. Бирюза здесь читалась бы как ссылка: ровно тот же
+   оттенок стоит на `a`. */
+.axis-rel {
+  color: var(--soon);
+  font-size: 13px;
+  font-weight: 600;
+}
+.axis-date {
+  color: var(--muted);
+  font-size: 14px;
+}
+.axis-what {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  min-width: 0;
+}
+.axis-project {
+  font-weight: 600;
+}
+.axis-mag {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+.axis-sum {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  letter-spacing: -0.2px;
+}
+.axis-bar {
+  display: block;
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border-soft);
+  overflow: hidden;
+}
+.axis-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--soon);
+}
+.axis-pct {
+  font-family: var(--font-mono);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* ---------- Дропы: табло ---------- */
+.board {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+/* Проект и описание — доли, а не фиксированные ширины: на 768px описание при
+   фиксированных колонках сжималось до 124px и превращалось в многоточие. */
+.board-row {
+  display: grid;
+  grid-template-columns: 104px minmax(90px, 1fr) minmax(0, 2fr) 124px 104px;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.board-row:last-child {
+  border-bottom: none;
+}
+.board-project {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.board-desc {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.board-deadline {
+  color: var(--muted);
+  font-size: 13px;
+}
+.board-open {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  font-size: 14px;
+  min-height: 24px;
+}
+/* Пустая ячейка вместо ссылки — чтобы колонки не разъезжались у дропов без url. */
+.board-open-off {
+  display: block;
+}
+.board-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 14px;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.board-more:hover,
+.board-more:focus-visible {
+  background: var(--surface-2);
+  color: var(--text);
+}
+/* Последняя строка табло прижата к его краям, а .board — overflow: hidden. */
+.board-more:focus-visible {
+  outline-offset: -3px;
+}
+
+/* ---------- Гайды: лента со снапом ---------- */
+.rail {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(230px, 1fr);
+  gap: 14px;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  padding-bottom: 6px;
+  scrollbar-width: thin;
+}
+.guide {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 176px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  scroll-snap-align: start;
+  transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.guide:hover,
+.guide:focus-visible {
+  border-color: var(--accent-soft);
+  background: var(--surface-2);
+}
+/* .rail — скролл-контейнер (overflow-x: auto тянет за собой и вертикальную
+   обрезку), плитки растянуты на всю его высоту: кольцу некуда выйти. */
+.guide:focus-visible {
+  outline-offset: -2px;
+}
+.guide-emoji {
+  font-size: 24px;
+  line-height: 1;
+}
+.guide-project {
+  color: var(--muted);
+  font-size: 13px;
+}
+.guide-title {
+  font-weight: 600;
+  line-height: 1.35;
+}
+.guide-badges {
+  margin-top: auto;
+  padding-top: 8px;
+}
+.guide-all {
+  align-items: center;
+  justify-content: center;
+  border-style: dashed;
+  color: var(--muted);
+}
+.guide-all:hover {
+  color: var(--text);
+}
+.guide-all-text {
+  font-size: 14px;
+  font-weight: 600;
+}
+.guide-skeleton {
+  pointer-events: none;
+}
+
+/* ---------- Финальный блок главной ---------- */
+.closing {
+  border-top: 1px solid var(--border-soft);
+  padding-top: 40px;
+  text-align: center;
+}
+.closing-title {
+  font-family: var(--font-display);
+  font-size: clamp(22px, 3.4vw, 30px);
+  letter-spacing: -0.8px;
+  margin: 0 0 10px;
+}
+.closing-text {
+  color: var(--muted);
+  line-height: 1.6;
+  max-width: 58ch;
+  margin: 0 auto 22px;
+}
+.closing-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: center;
+}
+
+/* ---------- Cards ---------- */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+}
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  position: relative;
+  overflow: hidden;
+  transition: border-color var(--dur) var(--ease), transform var(--dur-fast) var(--ease),
+    box-shadow var(--dur) var(--ease);
+}
+/* Top hairline that lights up on hover — a designed micro-detail
+   instead of the generic "border turns purple" template move. */
+.card::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: var(--accent);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform var(--dur-slow) var(--ease);
+}
+.card-clickable {
+  cursor: pointer;
+}
+/* `outline: none` тут стоял на :focus-visible, то есть клавиатурный фокус на
+   карточке рисовался ТОЛЬКО подъёмом на 3px и сменой цвета рамки — WCAG 2.4.11
+   это не проходит. Ховер-состояние отделено от фокуса, кольцо остаётся. */
+.card-clickable:hover,
+.card-clickable:focus-visible {
+  border-color: var(--ring-accent);
+  box-shadow: var(--shadow);
+}
+.card-clickable:hover {
+  transform: translateY(-3px);
+}
+.card-clickable:hover::after,
+.card-clickable:focus-visible::after {
+  transform: scaleX(1);
+}
+.card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+/* Дисплейная гарнитура — от 20px. Ниже она не «фирменная», а просто хуже
+   читаемая: заголовок карточки набирается Manrope, иерархию держит вес. */
+.card-title {
+  font-family: var(--font);
+  font-size: 17px;
+  margin: 0;
+  font-weight: 600;
+  line-height: 1.28;
+  letter-spacing: -0.4px;
+}
+.card-title-inline {
+  font-size: 16px;
+}
+.card-summary {
+  color: var(--muted);
+  margin: 0;
+  font-size: 16px;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.card-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 14px;
+  margin-top: auto;
+}
+/* Push the CTA button to the card bottom so CTAs line up across a row
+   regardless of summary length (drops + activities cards). */
+.card > .btn-sm {
+  margin-top: auto;
+  align-self: flex-start;
+}
+.card-link svg,
+.card-link .icon {
+  transition: transform var(--dur-fast) var(--ease);
+}
+.card-clickable:hover .card-link svg,
+.card-clickable:focus-visible .card-link svg,
+.card-link:hover svg {
+  transform: translateX(3px);
+}
+
+/* Public project status uses the same card language as the content sections,
+   but keeps verification details scannable instead of burying them in prose. */
+.status-points {
+  margin: 18px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+.status-points li + li {
+  margin-top: 6px;
+}
+.status-next {
+  margin: 18px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-soft);
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+.status-next strong {
+  color: var(--text);
+}
+.status-note {
+  max-width: 70ch;
+  margin: 24px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+/* ---------- Badges ---------- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.badge-muted {
+  background: var(--surface-2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+/* Бирки статуса — одни и те же три пары для дропов и для активностей. Раньше
+   они стояли двумя байт-в-байт одинаковыми копиями в двухстах строках друг от
+   друга: правка в одной копии молча расходилась с другой — ровно тот отказ,
+   ради которого статусы на стороне JS собраны в один `badges.ts`.
+
+   Значения — из токенов. Заливка «Идёт» была написана бирюзовым (22,224,200 —
+   это акцент), а текст на ней зелёным: две краски в одной бирке 12px, и притом
+   бирюзовый в этой палитре значит «сюда можно нажать», то есть обещал
+   несуществующее действие. Серая пара была набрана #6b7490 — цветом, которого в
+   палитре нет вообще. */
+.badge-active,
+.badge-status-ok {
+  background: var(--tint-ok);
+  color: var(--ok);
+  border: 1px solid var(--ring-ok);
+}
+.badge-soon,
+.badge-status-soon {
+  background: var(--tint-soon);
+  color: var(--soon);
+  border: 1px solid var(--ring-soon);
+}
+.badge-ended,
+.badge-status-no {
+  background: var(--tint-ended);
+  color: var(--ended);
+  border: 1px solid var(--ring-ended);
+}
+.drop-deadline {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.more-row {
+  display: flex;
+  justify-content: center;
+  margin-top: 22px;
+}
+
+/* ---------- Filter chips ---------- */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 20px;
+}
+.chip {
+  appearance: none;
+  cursor: pointer;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.1px;
+  color: var(--chip-fg);
+  background: var(--chip-bg);
+  /* Как у .btn-ghost: невыбранный чип — кнопка, её контур должен быть виден. */
+  border: 1px solid var(--chip-border);
+  transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+/* Без translateY: ряд фильтров дёргался под курсором при просмотре. */
+.chip:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+  border-color: var(--chip-border);
+}
+/* Выбранный чип — тинт акцента, а не третий градиент. */
+.chip-active {
+  color: var(--chip-active-fg);
+  background: var(--chip-active-bg);
+  border-color: var(--chip-active-border);
+}
+.chip-active:hover {
+  color: var(--accent-hi);
+  background: var(--chip-active-bg);
+}
+
+/* ---------- Search field ---------- */
+.search-row {
+  margin: 0 0 20px;
+}
+.search-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 440px;
+  padding: 0 12px;
+  border-radius: var(--radius-sm);
+  background: var(--input-bg);
+  /* Поле ввода — тоже элемент управления: без видимой рамки не понять, куда
+     кликать, чтобы начать печатать. */
+  border: 1px solid var(--input-border);
+  transition: border-color var(--dur-fast) var(--ease);
+}
+/* У самого <input> outline снят намеренно: поле безрамочное, рамку рисует
+   обёртка. Но одной смены border-color для клавиатуры мало (WCAG 2.4.11),
+   поэтому обёртка получает то же кольцо, что и все остальные контролы. */
+.search-field:focus-within {
+  border-color: var(--accent);
+  outline: var(--ring-w) solid var(--focus);
+  outline-offset: var(--ring-offset);
+}
+.search-icon {
+  display: inline-flex;
+  color: var(--muted);
+}
+.search-input {
+  flex: 1;
+  min-width: 0;
+  padding: 11px 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 16px;
+}
+/* Свой крестик уже есть — системный от input[type=search] в WebKit рисовался
+   рядом вторым, и в поле оказывалось две кнопки очистки подряд. */
+.search-input::-webkit-search-cancel-button,
+.search-input::-webkit-search-decoration {
+  appearance: none;
+  display: none;
+}
+.search-input::placeholder {
+  color: var(--muted);
+}
+/* Крестик очистки — кнопка, а не глиф: 28×28 держит минимум цели касания
+   (WCAG 2.5.8), сама иконка внутри остаётся 16px. */
+.search-clear {
+  appearance: none;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+}
+.search-clear:hover {
+  color: var(--text);
+}
+.search-clear:focus-visible {
+  outline: var(--ring-w) solid var(--focus);
+  outline-offset: var(--ring-offset);
+  border-radius: 4px;
+}
+
+/* ---------- Unlocks table ---------- */
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.unlocks-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 15px;
+  min-width: 560px;
+}
+.unlocks-table th,
+.unlocks-table td {
+  text-align: left;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.unlocks-table thead th {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--muted);
+  font-weight: 600;
+  background: var(--surface-2);
+}
+.unlocks-table tbody tr:last-child td {
+  border-bottom: none;
+}
+.unlocks-table tbody tr:hover {
+  background: var(--surface-2);
+}
+.col-num {
+  text-align: right;
+}
+/* Моноширинный — только на данных: класс висит и на <th>, а заголовок
+   «% от выпуска» моноширинным набирать незачем. */
+td.col-num {
+  font-family: var(--font-mono);
+}
+.cell-project {
+  font-weight: 600;
+}
+/* Моноширинный вместо цветного: бирюза здесь читалась как ссылка, а
+   тикер — данные. Системный стек, ноль килобайт. */
+.ticker {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  color: var(--muted);
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+.th-sort {
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+  /* Кнопка сортировки была 21px в высоту — ниже минимума 24×24 (WCAG 2.5.8).
+     Отступы внутрь <th>, а не наружу: ячейка уже даёт padding. */
+  padding: 4px 0;
+  min-height: 28px;
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+.th-sort:hover {
+  color: var(--text);
+}
+.sort-arrow {
+  display: inline-flex;
+  color: var(--accent);
+}
+.updated-note {
+  margin: 10px 2px 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* ---------- States ----------
+   Пусто и ошибка прижаты влево: центрированная пунктирная коробка читалась как
+   поломка, хотя пустой список — обычное состояние. Пунктир остался только у
+   «пусто»; ошибка получает сплошную рамку, иконку и слово «Ошибка» — цветом
+   одним смысл не передаём. */
+.state {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 24px 20px;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+.state p {
+  margin: 0;
+  max-width: 52ch;
+}
+.state-icon {
+  display: inline-flex;
+  color: var(--muted);
+}
+.state-icon svg {
+  width: 20px;
+  height: 20px;
+}
+.state-icon-lg svg {
+  width: 24px;
+  height: 24px;
+}
+.state-hints {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+/* Рамка и заливка были написаны #ff6b7d — красным из палитры ДО редизайна, и
+   отличались от #ff7183 у иконки и заголовка внутри той же карточки. Разница в
+   шесть единиц по двум каналам, но на экране это видимый шов по краю. */
+.state-error {
+  border-style: solid;
+  border-color: var(--ring-danger);
+  background: var(--tint-danger);
+  color: var(--text);
+}
+.state-error .state-icon {
+  color: var(--danger);
+}
+.state-error-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: var(--danger);
+}
+
+/* Ошибка догрузки: строка в хвосте списка, загруженное остаётся на экране. */
+.state-more {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--ring-danger);
+  border-radius: var(--radius);
+  font-size: 14px;
+  color: var(--text);
+}
+.state-more .state-icon {
+  color: var(--danger);
+}
+.state-more .state-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* 404 — страница, а не коробка: отсюда h1 и воздух вокруг. */
+.state-404 {
+  border: none;
+  padding: 64px 0;
+  gap: 14px;
+}
+.state-404 h1 {
+  margin: 0;
+  font-size: clamp(24px, 4vw, 32px);
+  color: var(--text);
+}
+
+/* ---------- Skeletons ---------- */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--surface) 0%,
+    var(--surface-2) 50%,
+    var(--surface) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.3s ease-in-out infinite;
+  border-radius: 6px;
+}
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+.sk-line {
+  height: 14px;
+  margin: 8px 0;
+}
+.sk-tall {
+  height: 24px;
+}
+.sk-w40 {
+  width: 40%;
+}
+.sk-w60 {
+  width: 60%;
+}
+.sk-w80 {
+  width: 80%;
+}
+.sk-w100 {
+  width: 100%;
+}
+.sk-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sk-row {
+  height: 44px;
+  border-radius: 8px;
+}
+
+/* ---------- Digest full page ----------
+   Дайджест — единственная длинная проза на сайте, и рамка ей мешала: коробка
+   внутри страницы сужает и без того узкую колонку и мельчит текст. Здесь нет
+   карточки — есть полоса чтения ~68 символов, крупный кегль и линейки. Гайд
+   (.activity-full) карточкой остался намеренно: это не проза, а спецификация. */
+.btn-back {
+  margin-bottom: 22px;
+}
+.digest-full {
+  max-width: 68ch;
+}
+.digest-title {
+  font-family: var(--font-display);
+  font-size: clamp(26px, 5vw, 38px);
+  margin: 10px 0 18px;
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -1px;
+}
+/* Лид: крупнее корпуса и с акцентной линейкой слева — точка входа в текст. */
+.digest-summary {
+  font-size: 19px;
+  line-height: 1.55;
+  color: var(--text);
+  margin: 0 0 26px;
+  padding-left: 16px;
+  border-left: 2px solid var(--accent);
+}
+.digest-body {
+  margin: 0 0 34px;
+}
+.digest-body p {
+  font-size: 17px;
+  line-height: 1.75;
+  color: var(--text);
+  margin: 0 0 18px;
+}
+.digest-body p:last-child {
+  margin-bottom: 0;
+}
+.digest-body strong {
+  font-weight: 700;
+  color: var(--text);
+}
+/* Источники — нумерованный список ссылок, как сноски в статье: точками они
+   читались как продолжение текста, хотя это аппарат, а не сам текст. */
+.digest-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  counter-reset: ref;
+  border-top: 1px solid var(--border-soft);
+}
+.digest-items li {
+  position: relative;
+  counter-increment: ref;
+  padding: 12px 0 12px 34px;
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1.5;
+}
+.digest-items li::before {
+  content: counter(ref);
+  position: absolute;
+  left: 0;
+  top: 12px;
+  font-family: var(--font-num);
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.digest-items a {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+.digest-refs-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: var(--muted);
+  font-weight: 700;
+  margin: 0 0 10px;
+}
+
+/* ---------- Activities (reward badge + cards) ---------- */
+/* Тип награды — атрибут, а не статус и не ссылка. Поэтому нейтральный
+   контурный чип: цветной бейдж на сайте означает состояние (идёт / скоро /
+   закончился), бирюзовый текст — «сюда можно нажать». */
+.badge-reward {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+}
+/* Статусы активностей (подтверждён / потенциальный / не подтверждён) делят
+   правила с бирками дропов — см. `.badge-active` выше. */
+.badge-row {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.activity-card-head {
+  align-items: flex-start;
+  gap: 10px;
+}
+.activity-emoji {
+  font-size: 18px;
+}
+.activity-card-title {
+  font-family: var(--font);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.2px;
+  margin: 4px 0 2px;
+  color: var(--text);
+}
+
+/* ---------- Activity detail page ---------- */
+/* Статья, а не карточка. Гайд лежал в рамке с фоном — единственная длинная
+   страница сайта, оформленная как элемент списка, хотя рядом дайджест
+   (.digest-full) давно набирается как текст. Рамка вокруг экрана текста ничего
+   не группирует: группировать не с чем, на странице одна статья. Мера строки
+   задаётся в ch, а не в px: 780px при 17px шрифта — это ~92 знака, заметно
+   больше комфортных 65–75. */
+.activity-full {
+  max-width: 68ch;
+}
+.activity-head {
+  margin-bottom: 18px;
+}
+.activity-project {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.activity-emoji-lg {
+  font-size: 30px;
+  line-height: 1;
+}
+/* Кикер над заголовком, а не ссылка — поэтому не бренд-краска. Бирюза на
+   сайте теперь означает ровно одно: «сюда можно нажать». */
+.activity-project-name {
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0.2px;
+  color: var(--muted);
+}
+.activity-title {
+  font-family: var(--font-display);
+  font-size: clamp(22px, 4vw, 30px);
+  margin: 12px 0 0;
+  font-weight: 800;
+  line-height: 1.14;
+  letter-spacing: -0.7px;
+}
+.activity-intro {
+  margin: 0 0 8px;
+}
+.activity-intro p {
+  font-size: 17px;
+  color: var(--text);
+  margin: 0 0 8px;
+}
+.activity-intro p:last-child {
+  margin-bottom: 0;
+}
+.activity-block {
+  margin-top: 26px;
+}
+.activity-block-title {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  margin: 0 0 12px;
+}
+.activity-whatis {
+  margin: 0;
+}
+.activity-whatis p {
+  font-size: 16px;
+  color: var(--muted);
+  margin: 0 0 12px;
+  line-height: 1.6;
+}
+.activity-whatis p:last-child {
+  margin-bottom: 0;
+}
+.activity-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.activity-steps li {
+  position: relative;
+  counter-increment: step;
+  padding-left: 42px;
+  min-height: 28px;
+  /* align number to the first text line, not the vertical centre of a
+     multi-line step (which looked off for long steps). */
+  display: flex;
+  align-items: flex-start;
+  padding-top: 3px;
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1.5;
+}
+.activity-steps li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  font-weight: 700;
+  /* Обводка вместо заливки: колонка из залитых брендом кружков вдоль всего
+     гайда перетягивала внимание с самих шагов. Unbounded тут тоже снят —
+     дисплейная гарнитура в 13px это украшение ради украшения. */
+  color: var(--accent);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+}
+.activity-hashtags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 24px;
+}
+/* Не ссылки (пока), поэтому и не цвет ссылки — см. спеку T-742. */
+.hashtag {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 11px;
+}
+.activity-cta {
+  margin-top: 26px;
+}
+
+/* ---------- Спецификации «ключ → значение» ----------
+   Общая форма для «О проекте» и деталей гайда. Раньше и там и там были плитки
+   в рамках: восемь одинаковых коробок на /about и семь на странице гайда — то
+   самое ощущение шаблона. Держит текст не рамка, а колонка ключей и волосяная
+   линейка между строками. */
+.specs {
+  margin: 26px 0 0;
+  border-top: 1px solid var(--border-soft);
+}
+.spec {
+  display: grid;
+  grid-template-columns: minmax(120px, 200px) minmax(0, 1fr);
+  gap: 8px 28px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+.spec-k {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.spec-v {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--text);
+  overflow-wrap: break-word;
+}
+/* Короткие значения (детали гайда) — колонка ключей уже, строки плотнее. */
+.specs-kv .spec {
+  grid-template-columns: minmax(110px, 170px) minmax(0, 1fr);
+  padding: 11px 0;
+}
+.specs-kv .spec-v {
+  font-weight: 600;
+}
+
+/* ---------- About + FAQ ---------- */
+.about-lead {
+  max-width: 62ch;
+  margin: 0;
+  font-size: clamp(18px, 2.4vw, 21px);
+  line-height: 1.5;
+  color: var(--text);
+}
+
+/* Пайплайн «Источники → Агенты → Человек → Публикация».
+   Стрелка между шагами рисуется через li + li::before, без лишних узлов. */
+.pipeline {
+  list-style: none;
+  margin: 28px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  align-items: stretch;
+}
+.pipeline-step {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 18px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  min-width: 120px;
+  position: relative;
+}
+/* Стрелка-разделитель */
+.pipeline-step + .pipeline-step {
+  margin-left: 28px;
+}
+.pipeline-step + .pipeline-step::before {
+  content: "→";
+  position: absolute;
+  left: -20px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  font-size: 14px;
+}
+.pipeline-label {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text);
+}
+.pipeline-note {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+/* На узком экране — колонка */
+@media (max-width: 600px) {
+  .pipeline {
+    flex-direction: column;
+    gap: 2px;
+  }
+  .pipeline-step + .pipeline-step {
+    margin-left: 0;
+    margin-top: 20px;
+  }
+  .pipeline-step + .pipeline-step::before {
+    content: "↓";
+    left: 18px;
+    top: -16px;
+    transform: none;
+  }
+}
+
+.faq-title {
+  font-family: var(--font-display);
+  font-size: 20px;
+  margin: 40px 0 4px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+}
+.faq-list {
+  margin: 0;
+  border-top: 1px solid var(--border-soft);
+}
+/* FAQ на <details>/<summary> — вопрос сворачивается/разворачивается нативно.
+   marker убран, вместо него SVG-шеврон через ::after, чтобы цвет и размер
+   совпадали с остальными иконками. */
+.faq-item {
+  max-width: 68ch;
+  border-bottom: 1px solid var(--border-soft);
+}
+.faq-item summary {
+  list-style: none; /* Firefox */
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 0;
+  cursor: pointer;
+  user-select: none;
+}
+/* Webkit скрывает стрелку по умолчанию через ::-webkit-details-marker */
+.faq-item summary::-webkit-details-marker { display: none; }
+.faq-q {
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--text);
+  margin: 0;
+  flex: 1;
+}
+/* Шеврон: вращается при open */
+.faq-item summary::after {
+  content: "";
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a0aec0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-size: contain;
+  transition: transform 200ms ease;
+}
+.faq-item[open] summary::after {
+  transform: rotate(180deg);
+}
+.faq-a {
+  margin: 0 0 18px;
+  padding-left: 0;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1.6;
+  max-width: 60ch;
+}
+
+/* ---------- Footer ---------- */
+.site-footer {
+  border-top: 1px solid var(--border);
+  background: rgba(5, 7, 15, 0.6);
+  margin-top: auto;
+}
+.footer-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px 20px;
+  min-height: 64px;
+  padding: 16px 0;
+  flex-wrap: wrap;
+}
+.footer-copy {
+  color: var(--muted);
+  font-size: 14px;
+}
+.footer-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+/* 24px — жёсткий минимум цели указателя (WCAG 2.5.8). Строчная ссылка в
+   14px даёт 22.4px: формально её спасает исключение по расстоянию между
+   целями, но добрать полтора пикселя дешевле, чем полагаться на него. */
+.footer-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 14px;
+}
+.footer-link:hover {
+  color: var(--accent);
+}
+.footer-disclaimer {
+  margin: 0;
+  padding: 0 0 18px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  /* Здесь стояла opacity: 0.7, и она уводила дисклеймер на 4.32:1 — ниже AA
+     для 12px. Ровно тот текст, который по смыслу обязан быть прочитан
+     («ничто на сайте не является финансовой рекомендацией»), был на сайте
+     самым нечитаемым. Без прозрачности он даёт 7.86:1. */
+  max-width: 640px;
+}
+
+/* Затемнение под открытым ящиком меню. Живёт вне медиа-запроса, потому что
+   рендерится только когда меню открыто, а открыть его можно лишь там, где
+   виден бургер. */
+.nav-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 8;
+  background: rgba(4, 7, 14, 0.6);
+  backdrop-filter: blur(2px);
+}
+
+/* ---------- Шапка: бургер ----------
+   Отдельная точка на 880px, а не общая на 760 и не «стандартные» 768.
+   Замер 2026-08-12 (Chromium, шрифты сайта): пять пунктов меню — 412px,
+   четыре зазора по 22px — 88px, CTA «В Telegram» — 145px, логотип — 97px.
+   Итого 742px содержимого плюс 40px отступов контейнера и минимальный
+   промежуток между логотипом и меню: строка перестаёт помещаться около
+   833px. На 768 она гарантированно ломается — вся страница получала
+   горизонтальную прокрутку. Замена CTA на ghost ширину не изменила
+   (те же отступы). Порог здесь диктует контент, а не каталог устройств;
+   если меню похудеет — пересчитать и опустить. */
+@media (max-width: 880px) {
+  .nav-toggle {
+    display: flex;
+  }
+  .site-nav {
+    position: absolute;
+    top: 64px;
+    left: 0;
+    right: 0;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    padding: 14px 20px 18px;
+    background: rgba(8, 12, 24, 0.97);
+    border-bottom: 1px solid var(--border);
+    transform: translateY(-8px);
+    opacity: 0;
+    pointer-events: none;
+    /* visibility, а не только opacity: без неё пять ссылок и CTA закрытого
+       меню остаются в порядке табуляции — с логотипа Tab уводил на шесть
+       невидимых остановок. Задержка снятия равна длительности фейда. */
+    visibility: hidden;
+    transition: opacity var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease),
+      visibility 0s linear var(--dur-fast);
+  }
+  .site-nav.open {
+    transform: translateY(0);
+    opacity: 1;
+    pointer-events: auto;
+    visibility: visible;
+    transition: opacity var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out), visibility 0s;
+  }
+  /* 42px при 8px отступа и строке в 16px — на два пикселя ниже минимума в
+     44pt, и это при зазоре между соседними пунктами в 5-6px. Тот же аудит,
+     что двумя блоками ниже добрал до 44px чипы, мелкие кнопки и ссылки
+     подвала, до самого меню не дошёл — хотя это главная навигация телефона и
+     самая нажимаемая цель на сайте, а кнопка «В Telegram» прямо под ними уже
+     46px. Высоту добираем min-height, а не отступом: отступ сместил бы текст
+     относительно активной подсветки. */
+  .site-nav > a:not(.btn) {
+    padding: 8px 0;
+    font-size: 16px;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+  }
+  .btn-cta {
+    margin-left: 0;
+    margin-top: 6px;
+    justify-content: center;
+  }
+
+  /* Ссылки внутри плотных строк — до 44px по вертикали на касание.
+     Порог именно 880, а не 760: планшет в портрете (768) — это касание, а не
+     мышь, и до переноса «Все дайджесты», «Весь календарь», «Все дропы»,
+     «Все гайды» и «Открыть» у каждого дропа были высотой 22px. */
+  .hhead-link,
+  .board-open {
+    min-height: 44px;
+  }
+  .hhead-link {
+    margin-bottom: -8px;
+  }
+
+  /* Чипы (30px), мелкие кнопки (38px) и ссылки подвала (22px) на касании были
+     ниже минимума: 44px по Apple HIG, 24px — жёсткий минимум WCAG 2.5.8.
+     Высоту добираем внутренним отступом, чтобы не разъезжалась вёрстка. */
+  .chip,
+  .btn-sm,
+  .footer-link {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  /* Высоту подвалу добрали, ширину — нет: «RSS» это 27px, единственная цель на
+     сайте, что не дотягивает до 44pt хоть по какой-то стороне. Соседей не
+     задевает — они и так шире, а строка подвала от этого не переносится и не
+     меняет высоту (проверено на живой странице). */
+  .footer-link {
+    min-width: 44px;
+  }
+  .footer-nav {
+    gap: 4px 16px;
+  }
+}
+
+/* ---------- Mobile ---------- */
+@media (max-width: 760px) {
+  .footer-inner {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 18px 0 14px;
+  }
+  .footer-nav {
+    gap: 14px 18px;
+  }
+  .cards {
+    grid-template-columns: 1fr;
+  }
+  .activity-full {
+    padding: 20px;
+  }
+  /* Спецификации: ключ над значением — колонке в 120px на 375px не жить. */
+  .spec {
+    grid-template-columns: 1fr;
+    gap: 4px;
+    padding: 14px 0;
+  }
+  .specs-kv .spec {
+    grid-template-columns: 1fr;
+  }
+
+  /* Hero: цифры под текстом, а не рядом — двум колонкам на 375px не жить. */
+  .hero {
+    grid-template-columns: 1fr;
+    gap: 22px;
+    padding-top: 26px;
+  }
+  .hero::before {
+    opacity: 0.35;
+  }
+  .hero-actions .btn {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  /* Передовица: рельс с датой переезжает в строку над заголовком. */
+  .lead {
+    grid-template-columns: 1fr;
+    gap: 14px;
+    padding: 18px;
+  }
+  .lead-rail {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 10px;
+    padding: 0 0 12px;
+    border-right: none;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .dlist-row {
+    grid-template-columns: 28px minmax(0, 1fr) auto;
+    gap: 10px;
+    padding: 14px 2px;
+  }
+
+  /* Ось: дата над строкой, сумма и полоса — под ней. */
+  .axis-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    padding: 16px 0 16px 22px;
+  }
+  .axis-row::before {
+    top: 22px;
+  }
+  .axis-when {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .axis-mag {
+    align-items: stretch;
+  }
+  .axis-sum,
+  .axis-pct {
+    text-align: left;
+  }
+
+  /* Табло: строка становится карточкой в две колонки. */
+  .board-row {
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 8px 12px;
+    padding: 16px;
+  }
+  .board-desc,
+  .board-deadline {
+    grid-column: 1 / -1;
+    white-space: normal;
+  }
+  .board-open {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+  .board-open-off {
+    display: none;
+  }
+
+  /* Лента гайдов уезжает под край экрана — так видно, что она листается.
+     -20px ровно гасит padding .container, шире вьюпорта не становится. */
+  .rail {
+    grid-auto-columns: minmax(220px, 78%);
+    margin: 0 -20px;
+    padding: 0 20px 8px;
+    /* Без этого снап выравнивает первую плитку по краю скроллпорта, а не по
+       padding-box, и лента сама уезжает на 20px вправо при загрузке. */
+    scroll-padding-left: 20px;
+  }
+  .closing {
+    padding-top: 32px;
+  }
+
+  /* Сворачиваем таблицу анлоков в карточки на телефоне */
+  .table-wrap {
+    overflow: visible;
+    border: none;
+    background: none;
+  }
+  .unlocks-table {
+    min-width: 0;
+    display: block;
+  }
+  .unlocks-table thead {
+    display: none;
+  }
+  .unlocks-table tbody,
+  .unlocks-table tr,
+  .unlocks-table td {
+    display: block;
+  }
+  .unlocks-table tr {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 12px;
+    padding: 6px 4px;
+  }
+  .unlocks-table tr:hover {
+    background: var(--surface);
+  }
+  .unlocks-table td {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 14px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    text-align: right;
+  }
+  .unlocks-table tr td:last-child {
+    border-bottom: none;
+  }
+  .unlocks-table td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    /* Явно, а не по наследству: у числовых ячеек шрифт моноширинный, и подпись
+       «% от выпуска» набиралась им же — в карточке половина подписей была одним
+       шрифтом, половина другим. */
+    font-family: var(--font);
+    font-size: 13px;
+    font-weight: 500;
+    text-align: left;
+    /* Подпись не сжимается в столбик, когда значение длинное («$10,17 млн»). */
+    flex: 0 0 auto;
+  }
+}
+
+/* ---------- Entrance (CSS-only, no layout shift, no JS) ---------- */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.hero,
+.page-home .section,
+.page-section .section,
+.digest-full,
+.activity-full {
+  animation: rise 0.5s var(--ease) both;
+}
+.page-home .section:nth-of-type(2) {
+  animation-delay: 0.05s;
+}
+.page-home .section:nth-of-type(3) {
+  animation-delay: 0.1s;
+}
+.page-home .section:nth-of-type(4) {
+  animation-delay: 0.15s;
+}
+.page-home .section:nth-of-type(5) {
+  animation-delay: 0.2s;
+}
+.page-home .section:nth-of-type(6) {
+  animation-delay: 0.25s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+  }
+  .hero,
+  .page-home .section,
+  .page-section .section,
+  .digest-full,
+  .activity-full,
+  .card,
+  .card::after,
+  .chip,
+  .card-link svg,
+  /* Новые ховер-аффордансы главной — той же природы, что .card и .chip выше. */
+  .pulse-cell,
+  .lead,
+  .dlist-row,
+  .board-more,
+  .guide {
+    animation: none !important;
+    transition: none !important;
+  }
+  * {
+    scroll-behavior: auto !important;
+  }
+}

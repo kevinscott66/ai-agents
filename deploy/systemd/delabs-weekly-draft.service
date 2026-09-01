@@ -1,0 +1,59 @@
+# delabs-weekly-draft.service
+# Черновик поста «Итоги недели» (T-741). Собирает то, что за неделю уже вышло
+# на delabs.space (дайджесты + активности), шлёт ПРЕВЬЮ в Saved Messages
+# юзербота и кладёт pending с kind:"weekly" в ту же очередь
+# /opt/web3-puls/drafts/pending.json, что и дневной дайджест.
+#
+# В канал НЕ постит. Публикует, как и дайджест, delabs-approve-poll после
+# апрува владельца (реакция ✅ / ответ «+») — своего апрува тут нет намеренно:
+# два механизма подтверждения на один канал означали бы, что один из них
+# владелец не смотрит.
+#
+# Слот очереди один. Если дневной черновик ещё ждёт апрува, недельный прогон
+# выходит с кодом 0, ничего не тронув: перезапись потеряла бы и апрув (его ищут
+# по previewMsgId), и оплаченный ресёрч. Тогда недельный пост просто не выйдет
+# на этой неделе — это осознанный размен в пользу дневного.
+#
+# Требует tools/weekly-draft.ts на VPS: он приходит с веткой
+# fix/audit-2026-08-02. До её слияния юнит ставить бессмысленно — ExecStart
+# упадёт с "module not found".
+#
+# Никакого Agent SDK и никаких платных запросов: весь материал берётся из
+# публичного API сайта. Отсюда TimeoutStartSec куда меньше, чем у дневного.
+[Unit]
+Description=DeLabs weekly recap draft (preview to Saved Messages)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=agent-team
+Group=agent-team
+WorkingDirectory=/opt/agent-team
+EnvironmentFile=/opt/agent-team/.env
+Environment=CLAUDE_BIN=/usr/local/bin/claude
+ExecStart=/usr/local/bin/bun /opt/agent-team/tools/weekly-draft.ts
+TimeoutStartSec=180
+NoNewPrivileges=true
+UMask=0077
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+ReadWritePaths=/opt/web3-puls/drafts
+
+[Install]
+WantedBy=multi-user.target

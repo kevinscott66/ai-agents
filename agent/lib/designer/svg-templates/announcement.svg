@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#667eea;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#764ba2;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="cardGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#ffffff;stop-opacity:0.95" />
+      <stop offset="100%" style="stop-color:#f8fafc;stop-opacity:0.95" />
+    </linearGradient>
+  </defs>
+  <rect width="800" height="600" fill="url(#bgGrad)"/>
+  <rect x="60" y="80" width="680" height="440" rx="20" fill="url(#cardGrad)" stroke="#e2e8f0" stroke-width="2"/>
+  <!-- Title placeholder -->
+  <rect x="120" y="140" width="560" height="40" rx="8" fill="#3b82f6" opacity="0.1"/>
+  <text x="400" y="165" text-anchor="middle" fill="#1e40af" font-family="Arial, sans-serif" font-size="32" font-weight="bold">{{TITLE}}</text>
+  <!-- Subtitle placeholder -->
+  <rect x="120" y="200" width="560" height="80" rx="8" fill="#6b7280" opacity="0.05"/>
+  <text x="400" y="225" text-anchor="middle" fill="#4b5563" font-family="Arial, sans-serif" font-size="18">{{SUBTITLE}}</text>
+  <!-- Content area -->
+  <rect x="120" y="300" width="560" height="160" rx="8" fill="#f8fafc"/>
+  <text x="130" y="330" fill="#374151" font-family="Arial, sans-serif" font-size="16">{{CONTENT_LINE_1}}</text>
+  <text x="130" y="360" fill="#374151" font-family="Arial, sans-serif" font-size="16">{{CONTENT_LINE_2}}</text>
+  <text x="130" y="390" fill="#374151" font-family="Arial, sans-serif" font-size="16">{{CONTENT_LINE_3}}</text>
+  <!-- Icon placeholder -->
+  <circle cx="400" cy="120" r="15" fill="#3b82f6"/>
+  <circle cx="400" cy="120" r="8" fill="#ffffff"/>
+</svg>

@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0b1020" />
+    <meta
+      name="description"
+      content="DeLabs — главное по крипте и AI за пару минут: дайджесты со ссылками на источники, календарь разблокировок токенов (DefiLlama) и живые дропы. Без кошелька и регистрации, бесплатно."
+    />
+    <!-- Preload the fonts the hero needs first (self-hosted, CSP-safe) -->
+    <link
+      rel="preload"
+      as="font"
+      type="font/woff2"
+      href="/fonts/manrope-cyrillic-400.woff2"
+      crossorigin
+    />
+    <link
+      rel="preload"
+      as="font"
+      type="font/woff2"
+      href="/fonts/unbounded-cyrillic-800.woff2"
+      crossorigin
+    />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link
+      rel="alternate"
+      type="application/rss+xml"
+      title="DeLabs дайджесты"
+      href="/rss.xml"
+    />
+    <title>DeLabs — крипта и AI без шума</title>
+
+    <!-- Open Graph / шеринг в Telegram, VK, мессенджерах -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="DeLabs" />
+    <meta property="og:url" content="https://delabs.space/" />
+    <meta property="og:title" content="DeLabs — крипта и AI без шума" />
+    <meta
+      property="og:description"
+      content="Дайджесты крипты и AI со ссылками на источники, календарь разблокировок токенов и живые дропы — в одном месте. Без кошелька и регистрации, бесплатно."
+    />
+    <!-- ?v — не украшение: перед доменом стоит Cloudflare с edge-TTL в 4 часа,
+         и после подмены og.png он ещё полдня отдавал бы старую карточку. Само
+         по себе это переживаемо, но Telegram и X кэшируют то, что соскребли,
+         куда дольше — одна ссылка, разошедшаяся в этот промежуток, закрепила
+         бы старую картинку надолго. Версия меняет ключ кэша и на краю, и у
+         них. Пуржить Cloudflare нельзя: это ключ владельца.
+         Менять при каждой замене og.png. -->
+    <meta property="og:image" content="https://delabs.space/og.png?v=2026-08" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="DeLabs — крипта и AI без шума. Дайджесты, разблокировки, дропы."
+    />
+
+    <!-- Twitter / X -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="DeLabs — крипта и AI без шума" />
+    <meta
+      name="twitter:description"
+      content="Дайджесты крипты и AI со ссылками на источники, календарь разблокировок токенов и живые дропы — в одном месте. Без кошелька и регистрации, бесплатно."
+    />
+    <meta name="twitter:image" content="https://delabs.space/og.png?v=2026-08" />
+    <meta
+      name="twitter:image:alt"
+      content="DeLabs — крипта и AI без шума. Дайджесты, разблокировки, дропы."
+    />
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

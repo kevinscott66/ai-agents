@@ -1,0 +1,13 @@
+# delabs-approve-poll.timer
+# Запускает delabs-approve-poll.service каждые 30 минут (проверка апрува черновика).
+# Persistent=true → доганивает пропущенный запуск после простоя VPS.
+[Unit]
+Description=Poll DeLabs draft approval every 30 minutes
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

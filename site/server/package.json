@@ -1,0 +1,15 @@
+{
+  "name": "web3-puls-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Web3 Пульс — backend (Bun + bun:sqlite). API + unlocks fetcher.",
+  "scripts": {
+    "start": "bun index.ts",
+    "dev": "bun --watch index.ts",
+    "test": "bun test --max-concurrency 1 --isolate"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}

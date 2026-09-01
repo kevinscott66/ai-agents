@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f172a;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1e293b;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <rect width="800" height="600" fill="url(#bgGrad)"/>
+  
+  <!-- Header -->
+  <rect x="40" y="40" width="720" height="80" rx="12" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+  <text x="80" y="70" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="24" font-weight="bold">{{TITLE}}</text>
+  <text x="80" y="95" fill="#94a3b8" font-family="Arial, sans-serif" font-size="14">{{TIMESTAMP}}</text>
+  <circle cx="720" cy="80" r="8" fill="#10b981"/>
+  <text x="680" y="85" text-anchor="middle" fill="#10b981" font-family="Arial, sans-serif" font-size="12">ONLINE</text>
+  
+  <!-- Status cards -->
+  <g id="status1">
+    <rect x="60" y="160" width="220" height="120" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+    <circle cx="90" cy="190" r="6" fill="{{STATUS_1_COLOR}}"/>
+    <text x="110" y="195" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="16" font-weight="bold">{{SERVICE_1}}</text>
+    <text x="80" y="220" fill="#94a3b8" font-family="Arial, sans-serif" font-size="12">{{STATUS_1_TEXT}}</text>
+    <text x="80" y="240" fill="#64748b" font-family="Arial, sans-serif" font-size="12">{{METRIC_1}}</text>
+    <text x="80" y="255" fill="#64748b" font-family="Arial, sans-serif" font-size="12">{{VALUE_1}}</text>
+  </g>
+  
+  <g id="status2">
+    <rect x="290" y="160" width="220" height="120" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+    <circle cx="320" cy="190" r="6" fill="{{STATUS_2_COLOR}}"/>
+    <text x="340" y="195" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="16" font-weight="bold">{{SERVICE_2}}</text>
+    <text x="310" y="220" fill="#94a3b8" font-family="Arial, sans-serif" font-size="12">{{STATUS_2_TEXT}}</text>
+    <text x="310" y="240" fill="#64748b" font-family="Arial, sans-serif" font-size="12">{{METRIC_2}}</text>
+    <text x="310" y="255" fill="#64748b" font-family="Arial, sans-serif" font-size="12">{{VALUE_2}}</text>
+  </g>
+  
+  <g id="status3">
+    <rect x="520" y="160" width="220" height="120" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+    <circle cx="550" cy="190" r="6" fill="{{STATUS_3_COLOR}}"/>
+    <text x="570" y="195" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="16" font-weight="bold">{{SERVICE_3}}</text>
+    <text x="540" y="220" fill="#94a3b8" font-family="Arial, sans-serif" font-size="12">{{STATUS_3_TEXT}}</text>
+    <text x="540" y="240" fill="#64748b" font-family="Arial, sans-serif" font-size="12">{{METRIC_3}}</text>
+    <text x="540" y="255" fill="#64748b" font-family="Arial, sans-serif" font-size="12">{{VALUE_3}}</text>
+  </g>
+  
+  <!-- Metrics area -->
+  <rect x="60" y="320" width="680" height="220" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+  <text x="80" y="350" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="18" font-weight="bold">{{METRICS_TITLE}}</text>
+  
+  <!-- Simple line chart simulation -->
+  <g stroke="#3b82f6" stroke-width="2" fill="none">
+    <polyline points="100,400 150,380 200,390 250,370 300,360 350,375 400,350 450,340 500,355 550,330 600,320 650,335"/>
+  </g>
+  
+  <!-- Chart labels -->
+  <text x="100" y="470" fill="#64748b" font-family="Arial, sans-serif" font-size="10">0h</text>
+  <text x="300" y="470" fill="#64748b" font-family="Arial, sans-serif" font-size="10">12h</text>
+  <text x="650" y="470" fill="#64748b" font-family="Arial, sans-serif" font-size="10">24h</text>
+  
+  <!-- Legend -->
+  <text x="80" y="510" fill="#94a3b8" font-family="Arial, sans-serif" font-size="12">{{LEGEND_ITEM_1}}</text>
+  <text x="200" y="510" fill="#94a3b8" font-family="Arial, sans-serif" font-size="12">{{LEGEND_ITEM_2}}</text>
+  <text x="320" y="510" fill="#94a3b8" font-family="Arial, sans-serif" font-size="12">{{LEGEND_ITEM_3}}</text>
+</svg>

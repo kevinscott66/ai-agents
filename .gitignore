@@ -1,0 +1,72 @@
+node_modules/
+.venv/
+__pycache__/
+.DS_Store
+.env
+.env.local
+*.log
+
+.claude/secrets/
+
+output.txt
+
+# SQLite database files (runtime, should not be versioned)
+agent/data/*.db
+agent/data/*.db-wal
+agent/data/*.db-shm
+agent/data/*.db-journal
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/*.db-journal
+
+# Eliza database directory (runtime PostgreSQL data)
+agent/.eliza/.elizadb/
+eliza
+
+# Frontend build artifacts
+agent/miniapp/dist/
+
+# Telegram userbot session files (StringSession = credential, never commit)
+agent/.session
+*.session
+data/*.session
+agent/data/*.session
+
+# Local debugging/smoke/probe scripts (throwaway, contain hardcoded infra IDs)
+agent/debug-*.ts
+agent/probe-*.ts
+agent/smoke-*.ts
+agent/join-and-smoke.ts
+
+# Local git worktrees used for parallel role agents
+.claude/worktrees/
+
+# Session transcripts may contain secret values shown during a run — never track
+.claude/handoff/
+
+# Local backups + cold-storage (contain message PII) — never track
+backups/
+agent/backups/
+
+# Симлинки на дизайн-скиллы из ~/.claude/skills — Mac-локальные, в CI ведут в никуда
+.claude/skills/
+
+# Бэкапы правок агентов — их метёт `git add -A`. До 2026-08-13 защищал только
+# pre-push gate §6 (греп по стейджу), а TASKS.md T-500 уже утверждал, что они здесь.
+*.original
+*.bak
+
+# Claude Desktop synchronization exports and raw IndexedDB/LevelDB dumps are
+# local memory inventory, not project source. Retain them locally as needed;
+# never add them to commits or CI artifacts. Delete only with explicit request.
+/claude_desktop_sync_recent/
+/memory/
+
+# Артефакт tests/wiki-view.test.ts: тест создаёт эту страницу в beforeAll и
+# удаляет в afterAll. 2026-08-13 автономная итерация на VPS засосала её в
+# коммит (af94f80f) — ровно то, от чего предостерегает CLAUDE.md §4.5 про
+# `git add -A`. После этого КАЖДЫЙ прогон `bun test` удалял отслеживаемый
+# файл и оставлял грязное рабочее дерево, а страница-заглушка висела в
+# Wiki-вью Mini App у владельца.
+agent/memory/_team/projects/wiki-view-test-page.md

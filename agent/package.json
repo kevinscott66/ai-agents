@@ -1,0 +1,30 @@
+{
+  "name": "ai-agents-orchestrator",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "start": "bun run orchestrator-team.ts",
+    "agent": "bun run agent.ts",
+    "dev": "bun --watch run orchestrator-team.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "E2E_SMOKE=1 bun test tests/c19-e2e-smoke.test.ts",
+    "miniapp:build": "cd miniapp && bun install && bun run build"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.175",
+    "@anthropic-ai/sdk": "^0.98.0",
+    "@resvg/resvg-js": "^2.6.2",
+    "telegraf": "^4.16.3",
+    "telegram": "^2.26.22",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "bun-types": "^1.3.14",
+    "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

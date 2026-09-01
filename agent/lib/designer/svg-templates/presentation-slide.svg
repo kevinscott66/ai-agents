@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1e293b;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#0f172a;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <rect width="1600" height="900" fill="url(#bgGrad)"/>
+  
+  <!-- Header -->
+  <rect x="80" y="60" width="1440" height="120" rx="16" fill="rgba(255,255,255,0.05)" stroke="rgba(255,255,255,0.1)" stroke-width="1"/>
+  <text x="150" y="110" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="42" font-weight="bold">{{SLIDE_TITLE}}</text>
+  <text x="150" y="145" fill="#94a3b8" font-family="Arial, sans-serif" font-size="20">{{SLIDE_SUBTITLE}}</text>
+  
+  <!-- Main content area -->
+  <rect x="80" y="220" width="900" height="560" rx="16" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
+  
+  <!-- Bullet points -->
+  <circle cx="130" cy="280" r="4" fill="#3b82f6"/>
+  <text x="160" y="290" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="24" font-weight="600">{{POINT_1_TITLE}}</text>
+  <text x="160" y="315" fill="#cbd5e1" font-family="Arial, sans-serif" font-size="16">{{POINT_1_DESCRIPTION}}</text>
+  
+  <circle cx="130" cy="360" r="4" fill="#10b981"/>
+  <text x="160" y="370" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="24" font-weight="600">{{POINT_2_TITLE}}</text>
+  <text x="160" y="395" fill="#cbd5e1" font-family="Arial, sans-serif" font-size="16">{{POINT_2_DESCRIPTION}}</text>
+  
+  <circle cx="130" cy="440" r="4" fill="#f59e0b"/>
+  <text x="160" y="450" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="24" font-weight="600">{{POINT_3_TITLE}}</text>
+  <text x="160" y="475" fill="#cbd5e1" font-family="Arial, sans-serif" font-size="16">{{POINT_3_DESCRIPTION}}</text>
+  
+  <circle cx="130" cy="520" r="4" fill="#ef4444"/>
+  <text x="160" y="530" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="24" font-weight="600">{{POINT_4_TITLE}}</text>
+  <text x="160" y="555" fill="#cbd5e1" font-family="Arial, sans-serif" font-size="16">{{POINT_4_DESCRIPTION}}</text>
+  
+  <!-- Key takeaway -->
+  <rect x="160" y="600" width="780" height="120" rx="12" fill="rgba(59, 130, 246, 0.1)" stroke="#3b82f6" stroke-width="1"/>
+  <text x="180" y="635" fill="#93c5fd" font-family="Arial, sans-serif" font-size="18" font-weight="bold">{{TAKEAWAY_TITLE}}</text>
+  <text x="180" y="665" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="20" font-weight="600">{{TAKEAWAY_CONTENT}}</text>
+  <text x="180" y="690" fill="#cbd5e1" font-family="Arial, sans-serif" font-size="16">{{TAKEAWAY_DETAIL}}</text>
+  
+  <!-- Side panel -->
+  <rect x="1020" y="220" width="500" height="560" rx="16" fill="rgba(255,255,255,0.05)" stroke="rgba(255,255,255,0.1)" stroke-width="1"/>
+  
+  <!-- Chart area -->
+  <text x="1050" y="260" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="20" font-weight="bold">{{CHART_TITLE}}</text>
+  
+  <!-- Simple pie chart simulation -->
+  <circle cx="1270" cy="400" r="80" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="2"/>
+  <path d="M 1270,320 A 80,80 0 0,1 1350,400 L 1270,400 Z" fill="#3b82f6"/>
+  <path d="M 1350,400 A 80,80 0 0,1 1270,480 L 1270,400 Z" fill="#10b981"/>
+  <path d="M 1270,480 A 80,80 0 0,1 1190,400 L 1270,400 Z" fill="#f59e0b"/>
+  <path d="M 1190,400 A 80,80 0 0,1 1270,320 L 1270,400 Z" fill="#ef4444"/>
+  
+  <!-- Legend -->
+  <rect x="1050" y="520" width="15" height="15" fill="#3b82f6"/>
+  <text x="1080" y="532" fill="#cbd5e1" font-family="Arial, sans-serif" font-size="14">{{LEGEND_1}} ({{PERCENT_1}}%)</text>
+  <rect x="1050" y="545" width="15" height="15" fill="#10b981"/>
+  <text x="1080" y="557" fill="#cbd5e1" font-family="Arial, sans-serif" font-size="14">{{LEGEND_2}} ({{PERCENT_2}}%)</text>
+  <rect x="1050" y="570" width="15" height="15" fill="#f59e0b"/>
+  <text x="1080" y="582" fill="#cbd5e1" font-family="Arial, sans-serif" font-size="14">{{LEGEND_3}} ({{PERCENT_3}}%)</text>
+  <rect x="1050" y="595" width="15" height="15" fill="#ef4444"/>
+  <text x="1080" y="607" fill="#cbd5e1" font-family="Arial, sans-serif" font-size="14">{{LEGEND_4}} ({{PERCENT_4}}%)</text>
+  
+  <!-- Footer -->
+  <text x="80" y="850" fill="#64748b" font-family="Arial, sans-serif" font-size="14">{{FOOTER_TEXT}}</text>
+  <text x="1420" y="850" text-anchor="end" fill="#64748b" font-family="Arial, sans-serif" font-size="14">{{SLIDE_NUMBER}}</text>
+</svg>

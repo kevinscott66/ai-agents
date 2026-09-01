@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="1000" viewBox="0 0 800 1000">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#f0f9ff;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#e0f2fe;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <rect width="800" height="1000" fill="url(#bgGrad)"/>
+  
+  <!-- Header -->
+  <rect x="40" y="40" width="720" height="120" rx="12" fill="#0ea5e9" fill-opacity="0.1" stroke="#0ea5e9" stroke-width="2"/>
+  <text x="400" y="85" text-anchor="middle" fill="#0c4a6e" font-family="Arial, sans-serif" font-size="28" font-weight="bold">{{TITLE}}</text>
+  <text x="400" y="115" text-anchor="middle" fill="#075985" font-family="Arial, sans-serif" font-size="16">{{SUBTITLE}}</text>
+  
+  <!-- Stat boxes -->
+  <g id="stat1">
+    <rect x="60" y="200" width="180" height="120" rx="8" fill="#ffffff" stroke="#e2e8f0" stroke-width="1"/>
+    <circle cx="150" cy="230" r="12" fill="#10b981"/>
+    <text x="150" y="255" text-anchor="middle" fill="#059669" font-family="Arial, sans-serif" font-size="24" font-weight="bold">{{STAT_1}}</text>
+    <text x="150" y="280" text-anchor="middle" fill="#6b7280" font-family="Arial, sans-serif" font-size="14">{{LABEL_1}}</text>
+  </g>
+  
+  <g id="stat2">
+    <rect x="310" y="200" width="180" height="120" rx="8" fill="#ffffff" stroke="#e2e8f0" stroke-width="1"/>
+    <circle cx="400" cy="230" r="12" fill="#f59e0b"/>
+    <text x="400" y="255" text-anchor="middle" fill="#d97706" font-family="Arial, sans-serif" font-size="24" font-weight="bold">{{STAT_2}}</text>
+    <text x="400" y="280" text-anchor="middle" fill="#6b7280" font-family="Arial, sans-serif" font-size="14">{{LABEL_2}}</text>
+  </g>
+  
+  <g id="stat3">
+    <rect x="560" y="200" width="180" height="120" rx="8" fill="#ffffff" stroke="#e2e8f0" stroke-width="1"/>
+    <circle cx="650" cy="230" r="12" fill="#ef4444"/>
+    <text x="650" y="255" text-anchor="middle" fill="#dc2626" font-family="Arial, sans-serif" font-size="24" font-weight="bold">{{STAT_3}}</text>
+    <text x="650" y="280" text-anchor="middle" fill="#6b7280" font-family="Arial, sans-serif" font-size="14">{{LABEL_3}}</text>
+  </g>
+  
+  <!-- Chart area -->
+  <rect x="60" y="360" width="680" height="300" rx="8" fill="#ffffff" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="400" y="390" text-anchor="middle" fill="#374151" font-family="Arial, sans-serif" font-size="18" font-weight="bold">{{CHART_TITLE}}</text>
+  
+  <!-- Simple bar chart placeholder -->
+  <rect x="120" y="420" width="40" height="80" fill="#0ea5e9"/>
+  <rect x="200" y="440" width="40" height="60" fill="#10b981"/>
+  <rect x="280" y="450" width="40" height="50" fill="#f59e0b"/>
+  <rect x="360" y="430" width="40" height="70" fill="#ef4444"/>
+  <rect x="440" y="410" width="40" height="90" fill="#8b5cf6"/>
+  <rect x="520" y="460" width="40" height="40" fill="#06b6d4"/>
+  <rect x="600" y="435" width="40" height="65" fill="#84cc16"/>
+  
+  <!-- Content area -->
+  <rect x="60" y="700" width="680" height="240" rx="8" fill="#f8fafc"/>
+  <text x="80" y="730" fill="#374151" font-family="Arial, sans-serif" font-size="16" font-weight="bold">{{CONTENT_TITLE}}</text>
+  <text x="80" y="760" fill="#6b7280" font-family="Arial, sans-serif" font-size="14">{{CONTENT_LINE_1}}</text>
+  <text x="80" y="780" fill="#6b7280" font-family="Arial, sans-serif" font-size="14">{{CONTENT_LINE_2}}</text>
+  <text x="80" y="800" fill="#6b7280" font-family="Arial, sans-serif" font-size="14">{{CONTENT_LINE_3}}</text>
+  <text x="80" y="820" fill="#6b7280" font-family="Arial, sans-serif" font-size="14">{{CONTENT_LINE_4}}</text>
+  <text x="80" y="840" fill="#6b7280" font-family="Arial, sans-serif" font-size="14">{{CONTENT_LINE_5}}</text>
+</svg>

@@ -1,0 +1,44 @@
+# delabs-daily-draft.service
+# Этап 1/2 пайплайна контента DeLabs: ежедневный ЧЕРНОВИК.
+# Ресёрчит свежие новости крипты+AI (Agent SDK / подписка, WebSearch), собирает
+# 3-4 мини-статьи, рендерит бренд-баннер, шлёт ПРЕВЬЮ в Saved Messages юзербота
+# и пишет /opt/web3-puls/drafts/pending.json. НЕ постит в публичный канал —
+# публикацию делает delabs-approve-poll после апрува владельца (реакция ✅ / «+»).
+# Oneshot — запускается таймером delabs-daily-draft.timer.
+[Unit]
+Description=DeLabs daily content draft (research + preview to Saved Messages)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=agent-team
+Group=agent-team
+WorkingDirectory=/opt/agent-team
+EnvironmentFile=/opt/agent-team/.env
+Environment=CLAUDE_BIN=/usr/local/bin/claude
+ExecStart=/usr/local/bin/bun /opt/agent-team/tools/daily-draft.ts
+TimeoutStartSec=600
+NoNewPrivileges=true
+UMask=0077
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+ReadWritePaths=/opt/web3-puls/drafts
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,89 @@
+# Caddyfile for agent-team production deployment
+# Provides HTTPS reverse proxy with automatic TLS via Let's Encrypt
+#
+# Аудит 2026-08-29: файл не прошёл бы `caddy validate` — четыре разных места.
+# Ни одно из них не всплывало, потому что setup-caddy.sh валидировал ПОСЛЕ
+# включения автозапуска, а сам Caddy на этом хосте ни разу не поднимался: прод
+# ходит через nginx на :8443, :443 занят сторонним xray VPN (CLAUDE.md §1).
+#
+# 1. `header` стоял в глобальном блоке. Это директива сайта, а не глобальная
+#    опция — заголовки переехали в блок домена.
+# 2. `keepalive`/`keepalive_idle_conns`/`dial_timeout` — субдирективы
+#    `transport http`, а не самого `reverse_proxy`.
+# 3. `read_timeout`/`write_timeout` в reverse_proxy не существуют вовсе (это
+#    настройки сервера, `servers { timeouts { … } }`) — убраны.
+# 4. `rate_limit` — сторонний плагин (github.com/mholt/caddy-ratelimit).
+#    В пакете из cloudsmith-репозитория, который ставит setup-caddy.sh, его
+#    нет: нужен свой бинарь через xcaddy. Блок убран, потому что конфиг,
+#    который не загружается, не ограничивает вообще ничего. Понадобится —
+#    сначала соберите caddy через xcaddy с этим плагином, потом верните блок.
+
+{
+    # Global configuration
+    email dobropalm@users.noreply.github.com
+    # Enable production-grade logging
+    log {
+        output file /var/log/caddy/access.log
+        format json
+    }
+}
+
+# Main Mini App and API server
+agents.example.com {
+    # Reverse proxy to local agent-team service on :8787
+    reverse_proxy localhost:8787 {
+        # WebSocket support for Mac Bridge and SSE
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+
+        # Health check endpoint
+        health_uri /api/health
+        health_interval 30s
+        health_timeout 10s
+
+        # Connection pooling and timeouts
+        transport http {
+            keepalive 30s
+            keepalive_idle_conns 10
+            dial_timeout 5s
+        }
+    }
+
+    # Security headers
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy strict-origin-when-cross-origin
+
+        # Встраивание в Telegram разрешается через frame-ancestors, а не через
+        # X-Frame-Options: у последнего нет значения "ALLOWALL" — браузеры такой
+        # заголовок игнорируют целиком, так что прежняя строка не «переопределяла
+        # глобальный DENY», а просто ничего не значила.
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://telegram.org; style-src 'self' 'unsafe-inline'; connect-src 'self' https://api.telegram.org; img-src 'self' data: https:; font-src 'self' data:; frame-ancestors https://web.telegram.org https://telegram.org;"
+
+        # Telegram Web App specific headers
+        Cross-Origin-Embedder-Policy "unsafe-none"
+        Cross-Origin-Opener-Policy "unsafe-none"
+    }
+
+    # Logging with request details
+    log {
+        output file /var/log/caddy/agents.log {
+            roll_size 100mb
+            roll_keep 5
+        }
+        format json
+        level INFO
+    }
+
+    # Error handling
+    handle_errors {
+        respond "Service temporarily unavailable" 503
+    }
+}
+
+# Optional: redirect www subdomain
+www.agents.example.com {
+    redir https://agents.example.com{uri} permanent
+}

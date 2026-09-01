@@ -1,0 +1,11 @@
+[Unit]
+Description=Run autonomous agent iteration every 2 hours (VPS, replaces GitHub Actions)
+
+[Timer]
+# Каждые 2 часа, со сдвигом чтобы не совпадать с daily-draft (08:00).
+OnCalendar=*-*-* 01,03,05,07,09,11,13,15,17,19,21,23:15:00 UTC
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

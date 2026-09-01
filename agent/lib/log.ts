@@ -1,0 +1,362 @@
+/**
+ * Structured logging module
+ * Replaces scattered console.log calls with leveled, structured JSON logging
+ */
+
+type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+type LogData = Record<string, unknown>;
+
+/**
+ * SEC-audit 2026-06-10: centralized secret scrubber. Defense-in-depth so a
+ * careless `log.x("...", { token })` or a token-bearing URL never lands in
+ * logs verbatim. ALWAYS on (unlike PII redaction) — secrets must never log.
+ */
+const SENSITIVE_KEY =
+  /(token|secret|password|passwd|authorization|bearer|api[-_]?key|access[-_]?key|private[-_]?key|x-figma-token)/i;
+// initdata: SSE-подключение Mini App передаёт initData в query (EventSource не
+// умеет заголовки). Это полноценный, реиграбельный 24 часа credential —
+// перехват даёт полную имперсонацию пользователя на всех /api/*. Само
+// приложение URL целиком не логирует, но одно слово здесь закрывает регрессию
+// на будущее: любой будущий лог с полным URL уже будет вычищен.
+const INLINE_QS_SECRET =
+  /([?&](?:token|secret|api[-_]?key|access[-_]?token|key|initdata)=)[^&\s"']+/gi;
+/**
+ * Значение заголовка `Authorization` внутри обычного текста.
+ *
+ * Аудит 2026-08-29: класс значения был `[A-Za-z0-9._\-]+` — без `+`, `/` и
+ * `=`, то есть без трёх символов base64. На обычном base64-токене прогон
+ * обрывался на первом же из них, и в лог уезжал хвост: у 44-символьного
+ * значения переживало в среднем около двух третей. Уезжало не «в файл на
+ * машине владельца» — `scrubSecretString` стоит на выходной границе
+ * `agent_actions.error` и снапшота health, то есть остаток ключа попадал в
+ * SQLite и наружу админам через `/api/actions` и SSE.
+ *
+ * Соседний `SECRET_ASSIGNMENT` в этом же файле уже считал `+` и `/` частью
+ * секрета (`[A-Za-z0-9_/+.:-]{16,}`) — файл противоречил сам себе. `=` добавлен
+ * сверх того класса: там это разделитель, здесь — паддинг base64. `~` — из
+ * base64url-вариантов, встречается у сторонних API.
+ *
+ * `Basic` покрыт тем же правилом: это тот же заголовок, тот же путь наружу и
+ * тот же вид значения (base64 от `user:password`), а поймать его больше нечем
+ * — `SENSITIVE_KEY` сверяет ИМЕНА полей объекта, и в свободном тексте не
+ * участвует. В `SENSITIVE_KEY` слова `basic` при этом быть не должно: поле с
+ * таким именем секретом не является.
+ */
+const BEARER = /((?:Bearer|Basic)\s+)[A-Za-z0-9._\-+/=~]+/gi;
+// Токен Telegram-бота внутри обычного текста. node-fetch@2 (на нём telegraf
+// 4.16) на любой сетевой ошибке бросает `request to <url> failed, reason: ...`,
+// а url у Bot API — `https://api.telegram.org/bot<ТОКЕН>/getMe`. Такие строки
+// ходят по коду как рядовой message: ни SENSITIVE_KEY (это не ключ объекта), ни
+// INLINE_QS_SECRET (это не query-параметр), ни BEARER их не ловили. Скруббер
+// объявлен ALWAYS on — значит, эта форма и была дырой в постоянной защите.
+// Оставляем bot_id: он не секрет и говорит, чей именно токен светился.
+// Граница слова здесь не работает: в `/bot7123456789:…` между «t» и «7» её нет
+// (обе — word-символы), и `\b` молча не совпадал ни разу. Отсекаем только от
+// цифр слева, чтобы bot_id захватился целиком.
+const TELEGRAM_TOKEN = /(?<!\d)(\d{6,12}):[A-Za-z0-9_-]{30,}/g;
+
+// Аудит 2026-08-20: скраббер не ловил ровно ту форму, ради которой его зовут
+// из mac-bridge.ts. Комментарий у `snapshotOf` (lib/mac-bridge.ts:294) называет
+// её дословно: «`git push` по HTTPS печатает в stderr URL вида
+// `https://x-access-token:ghp_…@github.com/…`». Это вывод произвольной
+// программы, запущенной на машине владельца, и он уходит двумя дорогами — в
+// чат и в `agent_actions.error`, то есть на диск в SQLite и наружу админам
+// через /api/actions.
+//
+// Формы взяты из существующего определения «как выглядит секрет» в этом же
+// репо — deploy/vps-autonomous/scan-staged-secrets.sh:27-34. Определений и так
+// было два, и на выходной границе стояло более слабое; теперь они совпадают.
+//
+// Аудит 2026-08-28: совпадали не полностью — из шести форм скрипта здесь было
+// пять, не хватало `ИМЯ=значение`. Паритет теперь проверяется тестом
+// (tests/audit-2026-08-28-scrub-secret-assignment.test.ts), а не только этим
+// абзацем: правку любой из двух сторон приходится делать вместе.
+
+/**
+ * `scheme://user:secret@host` — пароль вырезается, пользователь остаётся.
+ *
+ * `{0,30}` вместо `*` — не косметика, а граница сложности. С `*` часть про
+ * схему жадно съедала любой прогон из букв/цифр/`+.-`, упиралась в отсутствие
+ * `://` и отступала по одному символу — и так с каждой стартовой позиции.
+ * Получалось O(n²) на строку БЕЗ единого `://`, то есть на обычном выводе
+ * чужой программы. Замер на прогоне из `A` (bun 1.x, M1):
+ *   32 КБ → 1043 мс,  16 КБ → 261 мс,  8 КБ → 64 мс  (учетверение на каждое
+ *   удвоение), 4 МБ — часы. С `{0,30}`: 32 КБ → 2.2 мс, линейно.
+ *
+ * Важно, ГДЕ это считается: `scrubSecretString` зовёт `snapshotOf`
+ * (lib/mac-bridge.ts) на потоке с мака — в том же однопоточном процессе, где
+ * 12 ботов, HTTP Mini App и планировщики. Вывод `bun test` или сборки на
+ * несколько мегабайт вешал бы их все. 30 символов схемы хватает с запасом:
+ * самая длинная реальная — `git+ssh` (7).
+ */
+const CREDENTIAL_URL = /([a-z][a-z0-9+.-]{0,30}:\/\/[^\s/:@]+:)[^\s/@]+@/gi;
+/** GitHub PAT: classic `ghp_`, а также `gho_`/`ghu_`/`ghs_`/`ghr_`. */
+const GITHUB_TOKEN = /\b(gh[pousr]_)[A-Za-z0-9]{20,}/g;
+/** GitHub fine-grained PAT. */
+const GITHUB_PAT_FG = /\b(github_pat_)[A-Za-z0-9_]{20,}/g;
+/** Anthropic. */
+const ANTHROPIC_KEY = /\b(sk-ant-)[A-Za-z0-9_-]{20,}/g;
+/**
+ * OpenAI. Длина 40+ и только буквы-цифры после `sk-` — намеренно узко: `sk-`
+ * встречается и в обычном тексте, а рубить лишнее в выводе чужой программы
+ * значит ломать диагностику ради ложного срабатывания.
+ */
+const OPENAI_KEY = /\b(sk-)[A-Za-z0-9]{40,}/g;
+/**
+ * Аудит 2026-08-28: ключи, которые консоль OpenAI выдаёт сегодня, правилом
+ * выше не ловились вовсе. У `sk-proj-…` (а также `sk-svcacct-…`,
+ * `sk-admin-…`) четвёртый символ после `sk-` — дефис, прогон
+ * `[A-Za-z0-9]{40,}` обрывается на четырёх, совпадения нет.
+ *
+ * Довод об узости к дефисной форме не применим: `sk-` в прозе встречается,
+ * `sk-<слово>-` с двадцатью знаками payload — нет. Проект OpenAI использует
+ * (GENERATE_IMAGE), так что это ключ платящего аккаунта.
+ */
+const OPENAI_PREFIXED_KEY = /\b(sk-[a-z]{2,12}-)[A-Za-z0-9_-]{20,}/g;
+/**
+ * Присваивание `ИМЯ=значение` — шестая форма из
+ * deploy/vps-autonomous/scan-staged-secrets.sh, единственная, которой здесь
+ * не было. Комментарий выше утверждал, что определения совпадают; аудит
+ * 2026-08-28 показал, что нет, и что именно этой формой выглядит всё
+ * содержимое `.env`: `printenv` или упавший скрипт с `set -x` на маке отдавал
+ * `TELEGRAM_SESSION=1BQ…` — полную сессию юзербота — нетронутой.
+ *
+ * Идёт ПОСЛЕ префиксных правил: тогда в `GITHUB_TOKEN=ghp_…` остаётся видно
+ * `ghp_***`, то есть тип засветившегося ключа, а не голое `***`.
+ *
+ * Верхний регистр и класс значения — дословно как в скрипте, чтобы двум
+ * определениям было не с чего разъезжаться снова. Отсюда же граница в 16
+ * символов: ниже неё это счётчик, а не секрет.
+ */
+const SECRET_ASSIGNMENT =
+  /((?:TOKEN|SECRET|PASSWORD|API_KEY|APIKEY|SESSION)[A-Z0-9_]*\s*=\s*["']?)[A-Za-z0-9_/+.:-]{16,}/g;
+
+/**
+ * Вычистить секреты из произвольной строки. Экспортируется, чтобы у «как
+ * выглядит секрет» было ровно одно определение: тот же скруббер зовёт
+ * lib/health.ts перед тем, как положить текст ошибки в снапшот, который уходит
+ * наружу по SSE. Две копии правил разъехались бы — на этом и построен баг.
+ */
+export function scrubSecretString(s: string): string {
+  return s
+    .replace(INLINE_QS_SECRET, "$1***")
+    .replace(BEARER, "$1***")
+    .replace(TELEGRAM_TOKEN, "$1:***")
+    // Раньше остальных: в `https://x-access-token:ghp_…@host` вырезается весь
+    // пароль целиком, и до префиксных правил ниже там уже нечего ловить.
+    .replace(CREDENTIAL_URL, "$1***@")
+    .replace(GITHUB_TOKEN, "$1***")
+    .replace(GITHUB_PAT_FG, "$1***")
+    .replace(ANTHROPIC_KEY, "$1***")
+    .replace(OPENAI_PREFIXED_KEY, "$1***")
+    .replace(OPENAI_KEY, "$1***")
+    .replace(SECRET_ASSIGNMENT, "$1***");
+}
+
+/**
+ * Тот же скраббер, но по произвольной структуре: строки чистятся правилами
+ * выше, значения под «говорящими» ключами (`token`, `secret`, …) заменяются
+ * целиком. Экспортируется по той же причине, что и `scrubSecretString`:
+ * определение «как выглядит секрет» на проекте одно. Второй сток — строка
+ * `audit_logs.payload` в `emitAlert`, которая уходит наружу по /api/audit.
+ */
+export function scrubSecretsDeep<T>(value: T): T {
+  return scrubSecrets(value) as T;
+}
+
+function scrubSecrets(value: unknown, depth = 0): unknown {
+  if (depth > 6) return value;
+  if (typeof value === "string") return scrubSecretString(value);
+  if (Array.isArray(value)) return value.map((v) => scrubSecrets(v, depth + 1));
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) {
+      out[k] = SENSITIVE_KEY.test(k) ? "***" : scrubSecrets(v, depth + 1);
+    }
+    return out;
+  }
+  return value;
+}
+
+interface LogEntry {
+  level: LogLevel;
+  msg: string;
+  time: string;
+  data?: LogData;
+}
+
+const LOG_LEVELS: readonly LogLevel[] = ['debug', 'info', 'warn', 'error'];
+
+/**
+ * Разбор LOG_LEVEL.
+ *
+ * Аудит 2026-08-12: значение бралось из env как есть — `process.env.LOG_LEVEL
+ * as LogLevel` — и не проверялось ничем. А порог сравнивается через
+ * `levels.indexOf(this.level)`: незнакомая строка даёт -1, и `shouldLog`
+ * становится истинным ДЛЯ ВСЕХ уровней, включая debug. То есть `verbose`,
+ * `INFO` в верхнем регистре или `warning` в /opt/agent-team/.env выглядят
+ * рабочей настройкой, а на деле открывают весь debug-поток в journalctl —
+ * отказ в сторону «логировать больше, чем просили».
+ *
+ * Регистр и пробелы теперь нормализуем (это очевидная опечатка, а не другой
+ * уровень), а по-настоящему незнакомое значение — дефолт по окружению плюс
+ * жалоба в stderr: молча понижать порог нельзя.
+ */
+export function resolveLogLevel(
+  raw: string | undefined,
+  isProduction: boolean,
+): LogLevel {
+  const fallback: LogLevel = isProduction ? 'info' : 'debug';
+  const s = (raw ?? '').trim().toLowerCase();
+  if (!s) return fallback;
+  if ((LOG_LEVELS as readonly string[]).includes(s)) return s as LogLevel;
+  console.warn(
+    `[log] LOG_LEVEL='${raw}' не распознан (ожидается ${LOG_LEVELS.join('|')}) — беру '${fallback}'`,
+  );
+  return fallback;
+}
+
+class Logger {
+  private level: LogLevel;
+  private isProduction: boolean;
+
+  constructor() {
+    // Default to 'info' in production, 'debug' locally
+    this.isProduction = process.env.NODE_ENV === 'production';
+    this.level = resolveLogLevel(process.env.LOG_LEVEL, this.isProduction);
+  }
+
+  private shouldLog(level: LogLevel): boolean {
+    return LOG_LEVELS.indexOf(level) >= LOG_LEVELS.indexOf(this.level);
+  }
+
+  private formatEntry(level: LogLevel, msg: string, data?: LogData): LogEntry {
+    return {
+      level,
+      msg: scrubSecretString(msg),
+      time: new Date().toISOString(),
+      ...(data && { data: scrubSecrets(data) as LogData })
+    };
+  }
+
+  private output(entry: LogEntry): void {
+    if (this.isProduction) {
+      // JSON output for production (easier for journalctl parsing)
+      console.log(JSON.stringify(entry));
+    } else {
+      // Human-readable for development
+      const timestamp = entry.time.substring(11, 23); // HH:MM:SS.sss
+      const levelStr = entry.level.toUpperCase().padEnd(5);
+      const dataStr = entry.data ? ` ${JSON.stringify(entry.data)}` : '';
+      console.log(`${timestamp} ${levelStr} ${entry.msg}${dataStr}`);
+    }
+  }
+
+  debug(msg: string, data?: LogData): void {
+    if (this.shouldLog('debug')) {
+      this.output(this.formatEntry('debug', msg, data));
+    }
+  }
+
+  info(msg: string, data?: LogData): void {
+    if (this.shouldLog('info')) {
+      this.output(this.formatEntry('info', msg, data));
+    }
+  }
+
+  warn(msg: string, data?: LogData): void {
+    if (this.shouldLog('warn')) {
+      this.output(this.formatEntry('warn', msg, data));
+    }
+  }
+
+  error(msg: string, data?: LogData): void {
+    if (this.shouldLog('error')) {
+      this.output(this.formatEntry('error', msg, data));
+    }
+  }
+
+  // Convenience method for error objects
+  errorWithStack(msg: string, error: Error, data?: LogData): void {
+    this.error(msg, {
+      ...data,
+      error: error.message,
+      stack: error.stack
+    });
+  }
+}
+
+// Singleton instance
+export const log = new Logger();
+
+/**
+ * PII redaction helpers (T-319 / T-305).
+ *
+ * Use these around any user-supplied string before it lands in:
+ *   - console.log / log.info / log.warn / log.error
+ *   - persistent stores (wiki notes, SQLite payload columns)
+ *   - outbound HTTP bodies to third parties (OpenAI, etc.) when the prompt
+ *     was assembled from user content
+ *
+ * Disable with env LOG_REDACT=0 ONLY for short local debugging.
+ */
+const REDACT_DISABLED = process.env.LOG_REDACT === "0";
+
+/**
+ * Redact a Telegram user identifier (numeric id or username).
+ * Returns a stable short form `uid:<last4>` so logs remain correlatable
+ * within a session without leaking the full identifier.
+ */
+export function redactUserId(value: string | number | null | undefined): string {
+  if (value === null || value === undefined || value === "") return "uid:<empty>";
+  if (REDACT_DISABLED) return `uid:${String(value)}`;
+  const s = String(value);
+  if (s.length <= 4) return `uid:${s}`;
+  return `uid:${s.slice(-4)}`;
+}
+
+/**
+ * Источник сообщения одной строкой: id, если он есть, иначе имя, иначе прочерк.
+ *
+ * Аудит 2026-08-27: на этом месте стоял `redactUserId(id ?? name)`. Когда id
+ * нет (MTProto отдаёт апдейты, где доступно только отображаемое имя), в
+ * редактор уезжало ИМЯ и он резал его как идентификатор — `uid:анов`. Строка
+ * утверждала «последние 4 символа id», хотя это последние 4 символа фамилии:
+ * коррелировать по ней между сообщениями нельзя, а читающий лог об этом не
+ * знает и будет считать двух разных Ивановых одним отправителем. Разные вещи
+ * должны и выглядеть по-разному, поэтому имя маркируется как `name:` и режется
+ * текстовым редактором.
+ */
+export function redactSender(
+  userId: string | number | null | undefined,
+  name: string | null | undefined,
+): string {
+  if (userId !== null && userId !== undefined && String(userId) !== "") {
+    return redactUserId(userId);
+  }
+  if (name) return `name:${redactText(name)}`;
+  return "unknown";
+}
+
+/**
+ * Redact arbitrary user-authored text. Returns either:
+ *   - `<len=N>` for short strings (≤7 chars), or
+ *   - `<len=N first4=XXXX last4=YYYY>` for longer strings.
+ * Never reveals middle content, regardless of length.
+ */
+export function redactText(value: string | null | undefined): string {
+  if (value === null || value === undefined) return "<len=0>";
+  const s = String(value);
+  if (REDACT_DISABLED) return s;
+  if (s.length <= 7) return `<len=${s.length}>`;
+  return `<len=${s.length} first4=${s.slice(0, 4)} last4=${s.slice(-4)}>`;
+}
+
+// Legacy compatibility - can be used to gradually migrate console.log calls
+export function legacyLog(level: LogLevel, ...args: unknown[]): void {
+  const msg = args.map(arg => 
+    typeof arg === 'string' ? arg : JSON.stringify(arg)
+  ).join(' ');
+  
+  log[level](msg);
+}

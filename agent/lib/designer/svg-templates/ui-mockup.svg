@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="800" viewBox="0 0 400 800">
+  <defs>
+    <linearGradient id="screenGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#f8fafc;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#f1f5f9;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Phone frame -->
+  <rect x="20" y="40" width="360" height="720" rx="30" fill="#1f2937" stroke="#374151" stroke-width="2"/>
+  <rect x="35" y="60" width="330" height="680" rx="20" fill="url(#screenGrad)"/>
+  
+  <!-- Status bar -->
+  <rect x="35" y="60" width="330" height="40" rx="20" fill="#ffffff"/>
+  <text x="55" y="85" fill="#1f2937" font-family="Arial, sans-serif" font-size="14" font-weight="bold">{{APP_NAME}}</text>
+  <circle cx="330" cy="80" r="3" fill="#10b981"/>
+  <circle cx="340" cy="80" r="3" fill="#f59e0b"/>
+  <circle cx="350" cy="80" r="3" fill="#ef4444"/>
+  
+  <!-- Header -->
+  <rect x="50" y="120" width="300" height="60" rx="8" fill="#3b82f6"/>
+  <text x="200" y="140" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-size="16" font-weight="bold">{{HEADER_TITLE}}</text>
+  <text x="200" y="160" text-anchor="middle" fill="#dbeafe" font-family="Arial, sans-serif" font-size="12">{{HEADER_SUBTITLE}}</text>
+  
+  <!-- Navigation tabs -->
+  <rect x="50" y="200" width="100" height="35" rx="6" fill="#e5e7eb"/>
+  <text x="100" y="222" text-anchor="middle" fill="#374151" font-family="Arial, sans-serif" font-size="12">{{TAB_1}}</text>
+  <rect x="150" y="200" width="100" height="35" rx="6" fill="#3b82f6"/>
+  <text x="200" y="222" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-size="12">{{TAB_2}}</text>
+  <rect x="250" y="200" width="100" height="35" rx="6" fill="#e5e7eb"/>
+  <text x="300" y="222" text-anchor="middle" fill="#374151" font-family="Arial, sans-serif" font-size="12">{{TAB_3}}</text>
+  
+  <!-- Content cards -->
+  <rect x="60" y="260" width="280" height="80" rx="8" fill="#ffffff" stroke="#e5e7eb" stroke-width="1"/>
+  <circle cx="85" cy="285" r="8" fill="#10b981"/>
+  <text x="105" y="280" fill="#1f2937" font-family="Arial, sans-serif" font-size="14" font-weight="bold">{{CARD_1_TITLE}}</text>
+  <text x="105" y="300" fill="#6b7280" font-family="Arial, sans-serif" font-size="12">{{CARD_1_CONTENT}}</text>
+  <text x="105" y="320" fill="#9ca3af" font-family="Arial, sans-serif" font-size="10">{{CARD_1_META}}</text>
+  
+  <rect x="60" y="360" width="280" height="80" rx="8" fill="#ffffff" stroke="#e5e7eb" stroke-width="1"/>
+  <circle cx="85" cy="385" r="8" fill="#f59e0b"/>
+  <text x="105" y="380" fill="#1f2937" font-family="Arial, sans-serif" font-size="14" font-weight="bold">{{CARD_2_TITLE}}</text>
+  <text x="105" y="400" fill="#6b7280" font-family="Arial, sans-serif" font-size="12">{{CARD_2_CONTENT}}</text>
+  <text x="105" y="420" fill="#9ca3af" font-family="Arial, sans-serif" font-size="10">{{CARD_2_META}}</text>
+  
+  <rect x="60" y="460" width="280" height="80" rx="8" fill="#ffffff" stroke="#e5e7eb" stroke-width="1"/>
+  <circle cx="85" cy="485" r="8" fill="#ef4444"/>
+  <text x="105" y="480" fill="#1f2937" font-family="Arial, sans-serif" font-size="14" font-weight="bold">{{CARD_3_TITLE}}</text>
+  <text x="105" y="500" fill="#6b7280" font-family="Arial, sans-serif" font-size="12">{{CARD_3_CONTENT}}</text>
+  <text x="105" y="520" fill="#9ca3af" font-family="Arial, sans-serif" font-size="10">{{CARD_3_META}}</text>
+  
+  <!-- Action buttons -->
+  <rect x="60" y="570" width="130" height="40" rx="20" fill="#3b82f6"/>
+  <text x="125" y="595" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-size="14" font-weight="bold">{{BUTTON_1}}</text>
+  
+  <rect x="210" y="570" width="130" height="40" rx="20" fill="#e5e7eb"/>
+  <text x="275" y="595" text-anchor="middle" fill="#374151" font-family="Arial, sans-serif" font-size="14" font-weight="bold">{{BUTTON_2}}</text>
+  
+  <!-- Bottom navigation -->
+  <rect x="50" y="640" width="300" height="60" rx="8" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <circle cx="100" cy="670" r="8" fill="#3b82f6"/>
+  <circle cx="150" cy="670" r="8" fill="#d1d5db"/>
+  <circle cx="200" cy="670" r="8" fill="#d1d5db"/>
+  <circle cx="250" cy="670" r="8" fill="#d1d5db"/>
+  <circle cx="300" cy="670" r="8" fill="#d1d5db"/>
+</svg>

@@ -1,0 +1,66 @@
+[Unit]
+Description=Autonomous agent iteration (VPS replacement for GitHub Actions)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# The autonomous runner is isolated from the production service and never runs
+# as root. Provision this account and its writable directories during install.
+User=agent-autonomous
+Group=agent-autonomous
+WorkingDirectory=/opt/agent-autonomous
+UMask=0077
+# Role is unset: the script performs deterministic rotation. To pin one role,
+# add a drop-in with Environment=AUTO_ROLE=backend.
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/var/lib/agent-autonomous
+Environment=USER=agent-autonomous
+Environment=LOGNAME=agent-autonomous
+Environment=SHELL=/bin/bash
+Environment=LANG=C
+Environment=TERM=dumb
+Environment=CLAUDE_BIN=/usr/local/bin/claude
+Environment=AUTO_ENV_FILE=/etc/agent-autonomous/credentials
+Environment=AUTO_LOG=/var/log/agent-autonomous/agent-autonomous.log
+Environment=AUTO_STRUCTURED_LOG=/var/log/agent-autonomous/agent-autonomous.jsonl
+Environment=AUTO_LOCK_DIR=/run/agent-autonomous/cycle
+Environment=AUTO_STATE_DIR=/var/lib/agent-autonomous/state
+Environment=AUTO_REPORT_DIR=/var/log/agent-autonomous/reports
+EnvironmentFile=-/etc/agent-autonomous/credentials
+ExecStart=/bin/bash /opt/vps-autonomous/autonomous-cycle.sh
+# Жёсткий потолок на случай зависания (скрипт сам ставит timeout 540 на claude)
+TimeoutStartSec=900
+Nice=10
+
+# Filesystem and privilege boundary for a shell-capable coding agent.
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+InaccessiblePaths=/opt/agent-team/.env /opt/agent-team/data /opt/agent-team/backups /opt/agent-team/memory
+
+# systemd creates and owns these paths for the service account.
+StateDirectory=agent-autonomous
+RuntimeDirectory=agent-autonomous
+LogsDirectory=agent-autonomous
+ReadWritePaths=/opt/agent-autonomous /var/lib/agent-autonomous /run/agent-autonomous /var/log/agent-autonomous
+
+[Install]
+WantedBy=multi-user.target

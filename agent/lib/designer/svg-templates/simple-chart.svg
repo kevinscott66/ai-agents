@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="500" viewBox="0 0 800 500">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#ffffff;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#f8fafc;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <rect width="800" height="500" fill="url(#bgGrad)" stroke="#e2e8f0" stroke-width="1"/>
+  
+  <!-- Title -->
+  <text x="400" y="40" text-anchor="middle" fill="#1f2937" font-family="Arial, sans-serif" font-size="24" font-weight="bold">{{CHART_TITLE}}</text>
+  <text x="400" y="65" text-anchor="middle" fill="#6b7280" font-family="Arial, sans-serif" font-size="14">{{CHART_SUBTITLE}}</text>
+  
+  <!-- Chart area -->
+  <rect x="100" y="100" width="600" height="320" rx="4" fill="#ffffff" stroke="#e5e7eb" stroke-width="1"/>
+  
+  <!-- Y-axis -->
+  <line x1="100" y1="100" x2="100" y2="420" stroke="#d1d5db" stroke-width="1"/>
+  <!-- X-axis -->
+  <line x1="100" y1="420" x2="700" y2="420" stroke="#d1d5db" stroke-width="1"/>
+  
+  <!-- Grid lines -->
+  <line x1="100" y1="340" x2="700" y2="340" stroke="#f3f4f6" stroke-width="1"/>
+  <line x1="100" y1="260" x2="700" y2="260" stroke="#f3f4f6" stroke-width="1"/>
+  <line x1="100" y1="180" x2="700" y2="180" stroke="#f3f4f6" stroke-width="1"/>
+  
+  <!-- Y-axis labels -->
+  <text x="90" y="425" text-anchor="end" fill="#6b7280" font-family="Arial, sans-serif" font-size="12">0</text>
+  <text x="90" y="345" text-anchor="end" fill="#6b7280" font-family="Arial, sans-serif" font-size="12">{{Y_LABEL_1}}</text>
+  <text x="90" y="265" text-anchor="end" fill="#6b7280" font-family="Arial, sans-serif" font-size="12">{{Y_LABEL_2}}</text>
+  <text x="90" y="185" text-anchor="end" fill="#6b7280" font-family="Arial, sans-serif" font-size="12">{{Y_LABEL_3}}</text>
+  <text x="90" y="105" text-anchor="end" fill="#6b7280" font-family="Arial, sans-serif" font-size="12">{{Y_LABEL_4}}</text>
+  
+  <!-- X-axis labels -->
+  <text x="150" y="440" text-anchor="middle" fill="#6b7280" font-family="Arial, sans-serif" font-size="12">{{X_LABEL_1}}</text>
+  <text x="250" y="440" text-anchor="middle" fill="#6b7280" font-family="Arial, sans-serif" font-size="12">{{X_LABEL_2}}</text>
+  <text x="350" y="440" text-anchor="middle" fill="#6b7280" font-family="Arial, sans-serif" font-size="12">{{X_LABEL_3}}</text>
+  <text x="450" y="440" text-anchor="middle" fill="#6b7280" font-family="Arial, sans-serif" font-size="12">{{X_LABEL_4}}</text>
+  <text x="550" y="440" text-anchor="middle" fill="#6b7280" font-family="Arial, sans-serif" font-size="12">{{X_LABEL_5}}</text>
+  <text x="650" y="440" text-anchor="middle" fill="#6b7280" font-family="Arial, sans-serif" font-size="12">{{X_LABEL_6}}</text>
+  
+  <!-- Data bars -->
+  <rect x="130" y="300" width="40" height="120" fill="#3b82f6"/>
+  <rect x="230" y="250" width="40" height="170" fill="#10b981"/>
+  <rect x="330" y="200" width="40" height="220" fill="#f59e0b"/>
+  <rect x="430" y="180" width="40" height="240" fill="#ef4444"/>
+  <rect x="530" y="220" width="40" height="200" fill="#8b5cf6"/>
+  <rect x="630" y="160" width="40" height="260" fill="#06b6d4"/>
+  
+  <!-- Data values on bars -->
+  <text x="150" y="290" text-anchor="middle" fill="#1f2937" font-family="Arial, sans-serif" font-size="12" font-weight="bold">{{VALUE_1}}</text>
+  <text x="250" y="240" text-anchor="middle" fill="#1f2937" font-family="Arial, sans-serif" font-size="12" font-weight="bold">{{VALUE_2}}</text>
+  <text x="350" y="190" text-anchor="middle" fill="#1f2937" font-family="Arial, sans-serif" font-size="12" font-weight="bold">{{VALUE_3}}</text>
+  <text x="450" y="170" text-anchor="middle" fill="#1f2937" font-family="Arial, sans-serif" font-size="12" font-weight="bold">{{VALUE_4}}</text>
+  <text x="550" y="210" text-anchor="middle" fill="#1f2937" font-family="Arial, sans-serif" font-size="12" font-weight="bold">{{VALUE_5}}</text>
+  <text x="650" y="150" text-anchor="middle" fill="#1f2937" font-family="Arial, sans-serif" font-size="12" font-weight="bold">{{VALUE_6}}</text>
+  
+  <!-- Legend -->
+  <rect x="150" y="460" width="500" height="30" rx="4" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="170" y="480" fill="#374151" font-family="Arial, sans-serif" font-size="12" font-weight="bold">{{LEGEND_TITLE}}:</text>
+  <rect x="280" y="470" width="12" height="12" fill="#3b82f6"/>
+  <text x="300" y="480" fill="#6b7280" font-family="Arial, sans-serif" font-size="12">{{SERIES_1}}</text>
+  <rect x="370" y="470" width="12" height="12" fill="#10b981"/>
+  <text x="390" y="480" fill="#6b7280" font-family="Arial, sans-serif" font-size="12">{{SERIES_2}}</text>
+</svg>

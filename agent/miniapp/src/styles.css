@@ -1,0 +1,744 @@
+:root {
+  /* Без этого нативная хрома (выпадающий список select, каретка, выделение,
+     скроллбары) остаётся светлой при любой теме Telegram: CSS красит только
+     закрытый контрол, список рисует движок. `light dark` — запасной вариант
+     на случай, когда Telegram темы не сообщил: тогда хрома идёт за системной.
+     Точное значение проставляет theme.ts из Telegram.WebApp.colorScheme. */
+  color-scheme: light dark;
+
+  /* M3: prefer JS-applied --tg-* vars (from theme.ts), then legacy
+     --tg-theme-* CSS vars Telegram WebView injects, then hard fallbacks. */
+  --bg: var(--tg-bg, var(--tg-theme-bg-color, #ffffff));
+  --text: var(--tg-text, var(--tg-theme-text-color, #111111));
+  --hint: var(--tg-hint, var(--tg-theme-hint-color, #999999));
+  --link: var(--tg-link, var(--tg-theme-link-color, #2481cc));
+  --button: var(--tg-button, var(--tg-theme-button-color, #2481cc));
+  --button-text: var(--tg-button-text, var(--tg-theme-button-text-color, #ffffff));
+  --secondary-bg: var(--tg-secondary-bg, var(--tg-theme-secondary-bg-color, #f4f4f5));
+  --border: rgba(127, 127, 127, 0.2);
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.header h1 {
+  font-size: 17px;
+  margin: 0;
+}
+
+.header .user {
+  font-size: 13px;
+  color: var(--hint);
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sse-dot {
+  font-size: 10px;
+  line-height: 1;
+}
+
+.content {
+  flex: 1;
+  padding: 12px 16px 80px;
+  overflow-y: auto;
+}
+
+.tabs {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  display: flex;
+  background: var(--secondary-bg);
+  border-top: 1px solid var(--border);
+  z-index: 10;
+  /* Кнопок много (9+) — на узком экране они раньше сжимались до нечитаемых.
+     Теперь ряд прокручивается влево-вправо свайпом, чтобы дотянуться до крайних. */
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none; /* Firefox */
+}
+.tabs::-webkit-scrollbar { display: none; } /* WebKit/Telegram */
+
+.tabs button {
+  /* Не сжиматься: держим комфортный размер, лишнее уходит в горизонтальный скролл. */
+  flex: 0 0 auto;
+  min-width: 64px;
+  padding: 10px 6px;
+  background: transparent;
+  border: none;
+  font-size: 12px;
+  color: var(--hint);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.tabs button.active {
+  color: var(--button);
+  font-weight: 600;
+}
+
+.tabs button .icon { font-size: 18px; }
+
+.card {
+  background: var(--secondary-bg);
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 10px;
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.stat-card {
+  background: var(--secondary-bg);
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.stat-card .label {
+  font-size: 12px;
+  color: var(--hint);
+  margin-bottom: 4px;
+}
+
+.stat-card .value {
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--hint);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 12px 0 8px;
+}
+
+.list-item {
+  background: var(--secondary-bg);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.list-item .title { font-weight: 500; }
+.list-item .meta { font-size: 12px; color: var(--hint); margin-top: 2px; }
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: #fff;
+  white-space: nowrap;
+  /* Фон по умолчанию обязателен. Модификатор подставляется из строки статуса
+     прямо в className, промах по имени класса ничем не отличим от попадания —
+     элемент просто остаётся без фона, а белый текст ложится на белый --bg.
+     Список статусов растёт на бэкенде, CSS об этом не узнаёт: без этой строки
+     каждый новый статус доезжает до прода невидимым. Проверяется в
+     tests/miniapp-badge-contrast.test.ts. */
+  background: #586069;
+}
+
+/* Updated badge colors for WCAG AA contrast compliance (4.5:1 ratio with white text) */
+.badge.pending { background: #666666; } /* Improved from #888 for better contrast */
+.badge.running { background: #1c5a8a; } /* Darkened #2481cc for better contrast */
+.badge.done, .badge.ok, .badge.approved { background: #22703a; } /* Darkened #2ea043 for better contrast */
+.badge.failed, .badge.error, .badge.rejected, .badge.forbidden { background: #c1273a; } /* Darkened #d73a49 for better contrast */
+.badge.awaiting_approval, .badge.pending_approval { background: #cc4e00; } /* Darkened #e36209 for better contrast */
+.badge.awaiting_review { background: #5d3398; } /* Darkened #6f42c1 for better contrast */
+.badge.rate_limited { background: #7440d4; } /* Darkened #8957e5 for better contrast */
+.badge.cancelled, .badge.attempted { background: #586069; } /* Improved from #6a737d for better contrast */
+/* `expired` — заявку на одобрение никто не решил за срок (lib/approvals.ts).
+   Это не отказ, поэтому не красный: то же «не состоялось», что и cancelled. */
+.badge.expired { background: #586069; }
+
+.filter-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.filter-row select, .filter-row input {
+  flex: 1;
+  min-width: 100px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.btn {
+  background: var(--button);
+  color: var(--button-text);
+  border: none;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-weight: 500;
+}
+
+.btn.secondary {
+  background: var(--secondary-bg);
+  color: var(--text);
+}
+
+.btn.danger { background: #d73a49; color: #fff; }
+.btn.success { background: #2ea043; color: #fff; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+
+.modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.45);
+  display: flex; align-items: flex-end;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal {
+  background: var(--bg);
+  border-radius: 16px 16px 0 0;
+  width: 100%;
+  max-width: 520px;
+  max-height: 85vh;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.modal h2 { margin: 0 0 10px; font-size: 17px; }
+
+.json-block {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+textarea {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  min-height: 60px;
+  resize: vertical;
+}
+
+.empty {
+  color: var(--hint);
+  text-align: center;
+  padding: 40px 16px;
+  font-size: 14px;
+}
+
+.error-box {
+  background: #d73a4920;
+  border: 1px solid #d73a49;
+  color: #d73a49;
+  padding: 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+
+.perm-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.perm-row:last-child { border-bottom: none; }
+
+.perm-flags { display: flex; gap: 6px; }
+
+/* Флаг права — тоже кнопка, а не подкрашенный span (аудит 2026-08-14). */
+.flag {
+  font-size: 11px;
+  font-family: inherit;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: var(--secondary-bg);
+  color: var(--hint);
+  cursor: pointer;
+}
+.flag:disabled { cursor: default; opacity: 0.6; }
+
+.flag.on { background: var(--button); color: var(--button-text); }
+
+.toast-host {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  bottom: 72px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 200;
+  pointer-events: none;
+}
+
+.toast {
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  animation: toast-fade 1.5s ease forwards;
+}
+.toast.success { background: #2ea043; }
+.toast.error   { background: #d73a49; }
+.toast.info    { background: #2481cc; }
+
+@keyframes toast-fade {
+  0%   { opacity: 0; transform: translateY(8px); }
+  10%  { opacity: 1; transform: translateY(0); }
+  80%  { opacity: 1; }
+  100% { opacity: 0; transform: translateY(-4px); }
+}
+
+/* Respect users' motion preferences for accessibility */
+@media (prefers-reduced-motion: reduce) {
+  @keyframes toast-fade {
+    0%   { opacity: 0; }
+    10%  { opacity: 1; }
+    80%  { opacity: 1; }
+    100% { opacity: 0; }
+  }
+  
+  @keyframes shimmer {
+    /* Disable shimmer animation for reduced motion */
+    0%, 100% { background-position: 0 0; }
+  }
+  
+  @keyframes spin {
+    /* Disable spinning animation for reduced motion */
+    to { transform: rotate(0deg); }
+  }
+  
+  /* Reduce transition durations */
+  .budget-fill {
+    transition: width 0.1s ease;
+  }
+  
+  * {
+    animation-duration: 0.01s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01s !important;
+  }
+}
+
+.action-btn {
+  padding: 4px 8px;
+  font-size: 11px;
+  border-radius: 6px;
+  border: none;
+}
+.action-btn.success { background: #2ea043; color: #fff; }
+.action-btn.danger  { background: #d73a49; color: #fff; }
+.action-btn.warn    { background: #e36209; color: #fff; }
+.action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.task-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: 8px;
+  flex-shrink: 0;
+}
+
+.pending-count {
+  display: inline-block;
+  background: #e36209;
+  color: #fff;
+  border-radius: 10px;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+.perm-matrix {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.perm-matrix th, .perm-matrix td {
+  border: 1px solid var(--border);
+  padding: 4px;
+  text-align: center;
+  white-space: nowrap;
+}
+.perm-matrix th {
+  background: var(--secondary-bg);
+  position: sticky;
+  top: 0;
+}
+.perm-matrix td.agent-cell {
+  text-align: left;
+  font-family: monospace;
+}
+.perm-matrix .perm-cell {
+  cursor: pointer;
+  font-weight: 600;
+  padding: 0;
+}
+.perm-matrix .perm-cell.allowed  { background: #2ea04330; color: #2ea043; }
+.perm-matrix .perm-cell.approval { background: #e3620930; color: #e36209; }
+/* Аудит 2026-08-14: правило звалось `.denied`, а страница ставит класс
+   `forbidden` (Permissions.tsx: тип Cell). Запрещённые ячейки красились
+   в никуда — тем же цветом, что и фон таблицы, то есть отличить их от
+   пустого места можно было только по точке. */
+.perm-matrix .perm-cell.forbidden { background: #d73a4920; color: #d73a49; }
+/* Ячейка — настоящая кнопка: до неё надо доходить табом и жать Enter/Space.
+   Цвет и фон остаются на td, кнопка их наследует и занимает клетку целиком. */
+.perm-matrix .perm-cell-btn {
+  display: block;
+  width: 100%;
+  padding: 4px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+  cursor: pointer;
+}
+.perm-matrix .perm-cell-btn:disabled { cursor: default; }
+.perm-matrix .perm-cell-btn:focus-visible,
+.flag:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: -2px;
+}
+.perm-matrix-wrap {
+  overflow-x: auto;
+  max-height: 70vh;
+  border-radius: 8px;
+}
+.spinner {
+  display: inline-block;
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* M3: skeleton shimmer loader */
+.skeleton {
+  display: block;
+  background: linear-gradient(
+    90deg,
+    rgba(127,127,127,0.10) 0%,
+    rgba(127,127,127,0.22) 50%,
+    rgba(127,127,127,0.10) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.2s ease-in-out infinite;
+}
+@keyframes shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* T-403: Agent status grid */
+.agents-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.agent-status-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--secondary-bg);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.agent-provider {
+  color: var(--text-muted, #777);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.agent-status-card:hover {
+  background: var(--hover-bg);
+}
+
+.agent-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.status-lamp {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.agent-name {
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-status {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 500;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.agent-status.online {
+  background: #2ea04320;
+  color: #2ea043;
+}
+
+.agent-status.idle {
+  background: #88888820;
+  color: #888;
+}
+
+.agent-status.blocked {
+  background: #e3620920;
+  color: #e36209;
+}
+
+.agent-status.error {
+  background: #d73a4920;
+  color: #d73a49;
+}
+
+/* T-403: Autonomy mode control */
+.autonomy-selector {
+  margin-left: auto;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.autonomy-display {
+  padding: 12px;
+  background: var(--secondary-bg);
+  border-radius: 8px;
+  margin-bottom: 20px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 20px 0 10px 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* M3: empty state */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.empty-icon {
+  font-size: 32px;
+  opacity: 0.5;
+  line-height: 1;
+}
+.empty-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.empty-hint  { font-size: 12px; color: var(--hint); }
+
+/* M3: token-budget bars */
+.budget-row {
+  background: var(--secondary-bg);
+  border-radius: 10px;
+  padding: 8px 12px;
+  margin-bottom: 6px;
+}
+.budget-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+.budget-head .agent { font-weight: 600; color: var(--text); }
+.budget-head .nums  { color: var(--hint); font-family: ui-monospace, Menlo, monospace; }
+.budget-bar {
+  position: relative;
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+.budget-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+.budget-fill.ok    { background: #2ea043; }
+.budget-fill.warn  { background: #e3a008; }
+.budget-fill.crit  { background: #d73a49; }
+.budget-fill.unlimited { background: linear-gradient(90deg, #2481cc, #6f42c1); }
+
+/* A11y: visible focus ring for keyboard navigation. Doesn't affect mouse users. */
+:focus-visible {
+  outline: 2px solid var(--button, #2481cc);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+button:focus:not(:focus-visible) { outline: none; }
+
+/* Narrow-screen guard: keep wide content scrollable instead of breaking layout. */
+@media (max-width: 360px) {
+  .header h1 { font-size: 15px; }
+  .header .user { max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .stat-grid { grid-template-columns: 1fr; }
+  .tabs button { font-size: 11px; padding: 8px 2px; }
+  .tabs button .icon { font-size: 16px; }
+}
+
+/* Generic horizontal-overflow wrapper for any tables added later. */
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+/* T-107: Mac Control page styles */
+.mac-container {
+  display: grid;
+  gap: 20px;
+  grid-template-columns: 1fr;
+}
+
+.mac-sessions, .mac-output, .mac-history {
+  background: var(--secondary-bg);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.mac-sessions h3, .mac-output h3, .mac-history h3 {
+  margin: 0 0 12px 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.mac-session-card {
+  transition: background-color 0.2s ease;
+}
+
+.mac-session-card:hover {
+  background-color: var(--hover-bg, #f0f0f0) !important;
+}
+
+.mac-session-card.selected {
+  border-color: var(--button) !important;
+  box-shadow: 0 0 0 1px var(--button);
+}
+
+/* Desktop layout for larger screens */
+@media (min-width: 768px) {
+  .mac-container {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto auto;
+  }
+  
+  .mac-sessions {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  
+  .mac-output {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  
+  .mac-history {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}

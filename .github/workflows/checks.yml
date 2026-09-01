@@ -1,0 +1,215 @@
+name: Repo Checks
+
+# T-507 — lightweight invariants that protect main from autonomous-agent
+# regressions. Currently:
+#   - committed git conflict markers (6/9 PRs blocked on 2026-05-23)
+# Add new repo-wide invariants here rather than spinning up new workflows.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# NOTE: push trigger on main is intentionally omitted while pre-existing
+# conflict markers in README.md / agent/ONBOARDING.md remain unresolved
+# (tracked as a discovered follow-up of T-507). Re-enable once those are
+# cleaned and the check is green on a one-shot manual dispatch.
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repo-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  conflict-markers:
+    name: No committed conflict markers
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Scan tracked files
+        run: .github/scripts/check-conflict-markers.sh
+
+  secret-hygiene:
+    name: Secret hygiene (added PR content)
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Scan added lines
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          BASE_SHA="$PR_BASE_SHA"
+          if [ -z "$BASE_SHA" ]; then
+            BASE_SHA="$(git rev-parse "origin/${DEFAULT_BRANCH}")"
+          fi
+          bash .github/scripts/check-secret-hygiene.sh "$BASE_SHA" "$PR_HEAD_SHA"
+
+  # Аудит 2026-08-10: джоба называлась «Backend typecheck» — и это была не
+  # оговорка, а факт. Корневой agent/tsconfig.json имеет include ["**/*.ts"]
+  # (только .ts, не .tsx) и exclude ["miniapp"], а miniapp/package.json знал
+  # лишь dev/build/preview, где build — голый `vite build` (esbuild
+  # транспилирует, не проверяя типы). То есть ни один .tsx за всю жизнь
+  # проекта не был проверен компилятором: первый же запуск дал 52 ошибки,
+  # включая <ErrorBox error={...}> при пропе `message` — из-за чего вкладка
+  # Mac при сбое загрузки рисовала пустую страницу без кнопки «Повторить».
+  # Тот же класс, что и 70c6dad (191 тестовый файл вне проверки).
+  typecheck:
+    name: Typecheck (tsc --noEmit, backend + miniapp)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.0.2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install deps
+        working-directory: agent
+        run: bun install --frozen-lockfile
+
+      # Ставится ДО бэкендового шага, а не после. `agent/tsconfig.json`
+      # исключает каталог miniapp, но exclude не действует на файлы, которые
+      # притянуты импортом: тесты c25/c32 импортируют .tsx из miniapp, а те —
+      # "react", и paths ведут в `./miniapp/node_modules/preact/compat`.
+      # Пока этого каталога нет, tsc валит бэкенд-шаг на 30+ ошибках вида
+      # «Cannot find module 'react'» и «Cannot find name 'window'» — то есть
+      # на файлах miniapp, которые сами по себе типизируются нормально.
+      # Джоба была красной на КАЖДОЙ ветке, включая базовую, и в этом виде
+      # ничего не проверяла: тот же класс отказа, что у гейта на маркеры
+      # конфликтов (CLAUDE.md §3.8.5).
+      - name: Install miniapp deps
+        working-directory: agent/miniapp
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck backend
+        working-directory: agent
+        run: bun run typecheck
+
+      - name: Typecheck miniapp (.tsx)
+        working-directory: agent/miniapp
+        run: bun run typecheck
+
+  # T-210 — страховка от массового исчезновения тестов: шаг с `bun test` ловит
+  # падения, а счётчик — «сколько их вообще осталось».
+  #
+  # Аудит 2026-08-20: порог был вкомпилирован сюда как `FLOOR=670` с подписью
+  # «baseline 673 на 2026-06-06». Набор с тех пор вырос до 3134 — то есть из
+  # него могло испариться ~78% тестов, и джоба осталась бы зелёной. Тот же
+  # класс отказа, что у мёртвого условия предеплойного смоука и у гейта на
+  # маркеры конфликтов без якорей: проверка на месте, проверять перестала.
+  #
+  # Дело не в самом числе, а в том, что его обязаны были обновлять руками и не
+  # обновляли. Поэтому число вынесено в .github/test-baseline.txt, а коридор
+  # стал двусторонним: пол ловит удаление тестов, потолок ловит устаревание
+  # самой базовой линии и требует обновить файл.
+  test-baseline:
+    name: Test suite baseline (коридор вокруг .github/test-baseline.txt)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.0.2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install deps
+        working-directory: agent
+        run: bun install --frozen-lockfile
+
+      # tests/c25-miniapp-ux.test.ts и tests/c32-approval-inter-agent.test.ts
+      # импортируют .tsx прямо из agent/miniapp/src, поэтому бэкендовому
+      # прогону нужен preact — иначе JSX-рантайм не резолвится и оба файла
+      # падают. Локально это было не видно: в agent/miniapp/node_modules лежал
+      # react, оставшийся от прошлой жизни приложения (в package.json и
+      # bun.lock его нет), и bun по умолчанию тянет react/jsx-runtime. Отсюда
+      # же правка jsxImportSource в agent/tsconfig.json — без неё установка
+      # preact ничего бы не изменила.
+      - name: Install miniapp deps (preact — нужен для .tsx в тестах)
+        working-directory: agent/miniapp
+        run: bun install --frozen-lockfile
+
+      # Mini App tests own Bun.serve({ port: 0 }) listeners. Run the tracked
+      # suite in isolated serial workers so server lifecycles cannot overlap.
+      # This preserves every test and assertion; it only removes Bun runner
+      # concurrency as a source of EADDRINUSE/port-0 failures.
+      - name: Run tests and capture output
+        working-directory: agent
+        run: bun test --max-concurrency 1 --isolate 2>&1 | tee /tmp/bun-test-output.txt; exit ${PIPESTATUS[0]}
+
+      - name: Assert test count is inside the baseline corridor
+        run: .github/scripts/assert-test-baseline.sh /tmp/bun-test-output.txt
+
+  # Аудит 2026-08-12: в site/ лежат 15 тестовых файлов — 146 тестов сервера
+  # (site/server: cors, rate-limit, api-hardening, ingest-slug, digest-meta,
+  # seed-once, drops-paging, unlocks…) и 29 тестов веба. Ни один из них не
+  # запускался НИ РАЗУ: слова `site` не было ни в одном воркфлоу, а
+  # site/web/package.json не знал скрипта `test` вовсе.
+  #
+  # Большинство этих файлов написаны как регрессии к уже починенным дырам
+  # публичного сайта — CORS-аллоулист, брутфорс ingest-токена, коллизия слагов,
+  # ведро рейт-лимита. То есть защита стояла ровно там, где её никто не
+  # проверял: тест, который не запускается, — это не тест, а комментарий.
+  #
+  # Проверено локально на момент добавления джобы: 146 pass / 0 fail (server),
+  # 29 pass / 0 fail (web), tsc --noEmit чист. Джоба заводится зелёной.
+  site-tests:
+    name: Site tests (server + web)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.0.2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install server deps
+        working-directory: site/server
+        run: bun install --frozen-lockfile
+
+      - name: Server tests
+        working-directory: site/server
+        # Каждый файл поднимает свой Bun.serve({ port: 0 }). Последовательный
+        # isolated-run исключает гонки ephemeral listeners и module/env state,
+        # не пропуская и не уменьшая набор тестов.
+        run: bun test --max-concurrency 1 --isolate
+
+      - name: Install web deps
+        working-directory: site/web
+        run: bun install --frozen-lockfile
+
+      - name: Web tests
+        working-directory: site/web
+        run: bun test
+
+      # `build` в site/web — это `tsc --noEmit && vite build`, то есть типы и
+      # сборка одним шагом. Ровно та проверка, отсутствие которой на miniapp
+      # дало 52 ошибки при первом же запуске (см. джобу typecheck выше).
+      - name: Web typecheck + build
+        working-directory: site/web
+        run: bun run build

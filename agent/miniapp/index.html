@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>AI Agents</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script>
+      // Сигналим Telegram о готовности максимально рано, чтобы убрать спиннер.
+      try {
+        window.Telegram?.WebApp?.ready?.();
+        window.Telegram?.WebApp?.expand?.();
+      } catch (e) {}
+      window.addEventListener("error", function (e) {
+        var el = document.getElementById("boot-err");
+        if (el) el.textContent = "Интерфейс не загрузился. Перезагрузите панель.";
+      });
+      window.addEventListener("unhandledrejection", function (e) {
+        var el = document.getElementById("boot-err");
+        if (el) el.textContent = "Интерфейс не загрузился. Перезагрузите панель.";
+      });
+      window.setTimeout(function () {
+        var root = document.getElementById("root");
+        var splash = document.getElementById("boot-splash");
+        if (root && splash && !root.childElementCount) {
+          var label = document.getElementById("boot-label");
+          if (label) label.textContent = "Интерфейс не загрузился. Проверьте URL панели и доступность сервера.";
+          splash.style.zIndex = "20";
+          splash.querySelector(".dot").style.display = "none";
+        }
+      }, 8000);
+    </script>
+    <style>
+      html, body { background: #1a1a1a; color: #eee; margin: 0; font-family: -apple-system, system-ui, sans-serif; }
+      #boot-err { position: fixed; top: 0; left: 0; right: 0; padding: 8px 12px; background: #c0392b; color: #fff; font: 12px/1.3 monospace; z-index: 9999; white-space: pre-wrap; }
+      #boot-err:empty { display: none; }
+      #boot-splash { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: #1a1a1a; z-index: 10; }
+      #boot-splash .dot { width: 10px; height: 10px; border-radius: 50%; background: #4a9eff; animation: pulse 1s infinite ease-in-out; }
+      #boot-splash .label { font-size: 13px; color: #888; }
+      @keyframes pulse { 0%, 100% { opacity: 0.3; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.1); } }
+    </style>
+  </head>
+  <body>
+    <div id="boot-err"></div>
+    <div id="boot-splash"><div class="dot"></div><div class="label" id="boot-label">Загрузка…</div></div>
+    <div id="root"></div>
+    <script>
+      // Show progress before main JS arrives
+      document.getElementById("boot-label").textContent = "Загружаем интерфейс…";
+    </script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

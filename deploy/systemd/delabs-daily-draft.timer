@@ -1,0 +1,12 @@
+# delabs-daily-draft.timer
+# Запускает delabs-daily-draft.service раз в день в 08:00 UTC.
+# Persistent=true → если VPS был выключен в момент срабатывания, запустит при старте.
+[Unit]
+Description=Run DeLabs daily content draft once per day (08:00 UTC)
+
+[Timer]
+OnCalendar=*-*-* 08:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "lib": ["ESNext"],
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "strict": false,
+    "noImplicitAny": false,
+    "strictNullChecks": true,
+    "skipLibCheck": true,
+    "types": ["bun-types"],
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact",
+    "resolveJsonModule": true,
+    // Тесты импортируют .tsx из miniapp (c25, c32), а те импортируют "react" —
+    // в рантайме это preact/compat через alias в vite.config.ts. Без зеркала
+    // алиаса tsc спотыкался на «Cannot find module 'react'» в файлах, которые
+    // прекрасно собираются. Пути те же, что в miniapp/tsconfig.json.
+    "paths": {
+      "react": ["./miniapp/node_modules/preact/compat"],
+      "react-dom": ["./miniapp/node_modules/preact/compat"],
+      "react-dom/client": ["./miniapp/node_modules/preact/compat/client"]
+    },
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "noUncheckedIndexedAccess": false
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["node_modules", "miniapp", "data", "dist", "archive"]
+}

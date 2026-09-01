@@ -1,0 +1,58 @@
+[Unit]
+Description=Agent Team (Green/Staging)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=agent-team
+Group=agent-team
+WorkingDirectory=/opt/agent-team
+Environment=NODE_ENV=production
+Environment=MINIAPP_PORT=8788
+EnvironmentFile=-/opt/agent-team/.env
+ExecStart=/usr/local/bin/bun orchestrator-team.ts
+# Аудит 2026-08-29: было `Restart=no`, тогда как у blue — always/5. Цвета не
+# закреплены за ролями: staged-deploy.sh после health-check'а поднимает
+# staging-цвет на боевом порту и оставляет жить (main(), шаги 4-5). Значит
+# green бывает боевым, и в этой половине циклов прод после падения процесса
+# оставался лежать. Явный `systemctl stop` при always рестарта не вызывает,
+# поэтому переключению цветов симметрия не мешает.
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=agent-team-green
+
+# Security
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+ReadWritePaths=/opt/agent-team/data
+ReadWritePaths=/opt/agent-team/backups
+# См. комментарий в agent-team-blue.service: memory/ — рантайм-вики, пишется
+# относительно WorkingDirectory, и под ProtectSystem=strict без этой строки
+# недоступен на запись. Списки обоих цветов обязаны совпадать.
+ReadWritePaths=/opt/agent-team/memory
+ReadWritePaths=/tmp
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
