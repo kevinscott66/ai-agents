@@ -377,7 +377,7 @@ async function fetchOnce(timeoutMs: number): Promise<unknown> {
     const res = await fetch(EMISSIONS_URL, {
       signal: ctrl.signal,
       headers: {
-        "User-Agent": "web3-puls/1.0 (+https://agents.example.com)",
+        "User-Agent": "web3-puls/1.0 (+https://delabs.space)",
         Accept: "application/json",
         // The datasets host streams large gzip; request compression explicitly.
         "Accept-Encoding": "gzip, deflate, br",
