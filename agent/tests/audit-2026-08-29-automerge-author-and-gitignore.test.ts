@@ -28,7 +28,7 @@
  * `--json` уберут `author`, перестанет мёрджиться всё, а не «всё подряд».
  */
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -197,8 +197,12 @@ describe(".gitignore больше не безопасный путь", () => {
   });
 });
 
-describe("источник", () => {
-  const YML = readFileSync(WORKFLOW, "utf8");
+// auto-merge.yml удалён при публичном релизе 2026-09-01 — половину сверки
+// (шапка воркфлоу) читать неоткуда. Вернётся файл — блок включится сам.
+const HAS_WORKFLOW = existsSync(WORKFLOW);
+
+describe.skipIf(!HAS_WORKFLOW)("источник", () => {
+  const YML = HAS_WORKFLOW ? readFileSync(WORKFLOW, "utf8") : "";
   const SH = readFileSync(SCRIPT, "utf8");
 
   test("воркфлоу запрашивает поля, по которым фильтр судит об авторе", () => {

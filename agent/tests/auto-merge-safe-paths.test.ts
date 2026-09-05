@@ -20,15 +20,17 @@
  * осталась в воркфлоу, и её сверка со списком — по-прежнему здесь.
  */
 import { describe, test, expect } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isRiskyPath } from "../lib/dispatch/github.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
-const WF = readFileSync(
-  join(ROOT, ".github", "workflows", "auto-merge.yml"),
-  "utf8",
-);
+// auto-merge.yml удалён при публичном релизе 2026-09-01 — шапку сверять не с
+// чем; сам `case` живёт в automerge-filter.sh и проверяется как раньше.
+// Вернётся воркфлоу в .github/workflows/ — тест про шапку включится сам.
+const WF_PATH = join(ROOT, ".github", "workflows", "auto-merge.yml");
+const HAS_WF = existsSync(WF_PATH);
+const WF = HAS_WF ? readFileSync(WF_PATH, "utf8") : "";
 const FILTER = readFileSync(
   join(ROOT, ".github", "scripts", "automerge-filter.sh"),
   "utf8",
@@ -73,7 +75,7 @@ describe("белый список автомержа", () => {
     }
   });
 
-  test("шапка описывает тот же список, что и код", () => {
+  test.skipIf(!HAS_WF)("шапка описывает тот же список, что и код", () => {
     // Расхождение кода с описанием и было тем, из-за чего правило «CLAUDE.md
     // не автомержится» выглядело соблюдённым, не будучи им.
     const header = WF.slice(0, WF.indexOf("on:"));

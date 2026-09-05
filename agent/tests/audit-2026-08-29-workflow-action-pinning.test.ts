@@ -25,7 +25,7 @@
  * после записи прод-ключа быть не должно.
  */
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 
 const WF_DIR = new URL("../../.github/workflows/", import.meta.url).pathname;
 const FILES = readdirSync(WF_DIR).filter((n) => n.endsWith(".yml") || n.endsWith(".yaml"));
@@ -48,8 +48,10 @@ const ALL = FILES.flatMap(uses);
 
 describe("предпосылки", () => {
   test("воркфлоу нашлись и в них есть uses:", () => {
-    expect(FILES.length).toBeGreaterThan(3);
-    expect(ALL.length).toBeGreaterThan(5);
+    // Публичный релиз 2026-09-01 оставил в репо три воркфлоу вместо восьми:
+    // порог сторожит теперь только пустой скан, а не прежнее их количество.
+    expect(FILES.length).toBeGreaterThan(0);
+    expect(ALL.length).toBeGreaterThan(0);
   });
 });
 
@@ -62,8 +64,12 @@ describe("actions pinned immutably", () => {
   });
 });
 
-describe("deploy.yml: сторонний код не выполняется после прод-ключа", () => {
-  const SRC = readFileSync(WF_DIR + "deploy.yml", "utf-8");
+// deploy.yml удалён при публичном релизе 2026-09-01, проверять нечего.
+// Вернётся файл в .github/workflows/ — блок снова включится сам.
+const HAS_DEPLOY = existsSync(WF_DIR + "deploy.yml");
+
+describe.skipIf(!HAS_DEPLOY)("deploy.yml: сторонний код не выполняется после прод-ключа", () => {
+  const SRC = HAS_DEPLOY ? readFileSync(WF_DIR + "deploy.yml", "utf-8") : "";
   const LINES = SRC.split("\n");
   // Именно подстановка секрета, а не упоминание имени: список требуемых
   // секретов перечислен в шапке файла комментарием, и он идёт первым.

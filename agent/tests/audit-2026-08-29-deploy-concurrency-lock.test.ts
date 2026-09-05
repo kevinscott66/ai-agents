@@ -392,8 +392,12 @@ describe("deploy.sh — вторая выкатка не начинается, �
   });
 });
 
-describe("deploy.yml — CI берёт тот же замок", () => {
-  const yml = readFileSync(WORKFLOW, "utf8");
+// deploy.yml удалён при публичном релизе 2026-09-01 — сверять замок не с чем.
+// Вернётся воркфлоу в .github/workflows/ — блок включится сам, без правок.
+const HAS_WORKFLOW = existsSync(WORKFLOW);
+
+describe.skipIf(!HAS_WORKFLOW)("deploy.yml — CI берёт тот же замок", () => {
+  const yml = HAS_WORKFLOW ? readFileSync(WORKFLOW, "utf8") : "";
   const stepNames = [...yml.matchAll(/^ {6}- name: (.+)$/gm)].map((m) => m[1]);
   const idxOf = (needle: string) => stepNames.findIndex((n) => n.includes(needle));
 

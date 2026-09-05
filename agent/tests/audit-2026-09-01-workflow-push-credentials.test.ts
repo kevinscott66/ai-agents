@@ -18,7 +18,7 @@
  * не добавляет защиты, а отнимает функцию.
  */
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -26,13 +26,17 @@ const PUSHING = ["watchdog.yml", "monitor.yml", "unblock-stale.yml"];
 
 describe("воркфлоу, пишущие в main, сохраняют учётку checkout", () => {
   for (const name of PUSHING) {
-    const src = readFileSync(join(ROOT, ".github", "workflows", name), "utf8");
+    // Все три воркфлоу удалены при публичном релизе 2026-09-01 — в main из CI
+    // больше никто не пушит. Вернётся любой из них — его пара тестов оживёт.
+    const path = join(ROOT, ".github", "workflows", name);
+    const exists = existsSync(path);
+    const src = exists ? readFileSync(path, "utf8") : "";
 
-    test(`${name} действительно пушит в main`, () => {
+    test.skipIf(!exists)(`${name} действительно пушит в main`, () => {
       expect(src).toContain("git push origin HEAD:main");
     });
 
-    test(`${name} не снимает креды у checkout`, () => {
+    test.skipIf(!exists)(`${name} не снимает креды у checkout`, () => {
       const active = src
         .split("\n")
         .filter((l) => !l.trim().startsWith("#"))

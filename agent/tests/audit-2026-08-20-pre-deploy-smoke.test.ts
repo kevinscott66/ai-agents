@@ -25,7 +25,7 @@
  * чтобы её можно было прогнать здесь настоящим bash с подставным `bun`.
  */
 import { describe, expect, test, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, statSync, chmodSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, statSync, chmodSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -167,8 +167,12 @@ describe("падение любого шага останавливает деп
   });
 });
 
-describe("сам deploy.yml", () => {
-  const wf = readFileSync(WORKFLOW, "utf-8");
+// deploy.yml удалён при публичном релизе 2026-09-01 — читать нечего; сам
+// скрипт смоука на месте и проверяется выше. Вернётся файл — вернётся блок.
+const HAS_WORKFLOW = existsSync(WORKFLOW);
+
+describe.skipIf(!HAS_WORKFLOW)("сам deploy.yml", () => {
+  const wf = HAS_WORKFLOW ? readFileSync(WORKFLOW, "utf-8") : "";
   // Комментарий шага цитирует прежнее условие целиком — по сырому тексту
   // «старого кода не осталось» не проверить. Срезаем строки-комментарии YAML;
   // shell-комментарии внутри `run:` начинаются с той же решётки и уходят тоже,

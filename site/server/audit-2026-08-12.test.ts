@@ -328,7 +328,7 @@ describe("CORS отвечает только своим", () => {
   test("свой домен и его поддомены проходят", async () => {
     expect(await acao("https://delabs.space")).toBe("https://delabs.space");
     expect(await acao("https://www.delabs.space")).toBe("https://www.delabs.space");
-    expect(await acao("https://agents.example.com")).toBe("https://agents.example.com");
+    expect(await acao("https://web3.dobropalm.tech")).toBe("https://web3.dobropalm.tech");
   });
 
   test("похожий чужой домен не проходит", async () => {

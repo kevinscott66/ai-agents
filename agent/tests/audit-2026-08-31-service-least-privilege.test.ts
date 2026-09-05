@@ -1,6 +1,6 @@
 /** Runtime units must not execute application code as root. */
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -51,8 +51,12 @@ test("content timer units have a strict filesystem boundary", () => {
   }
 });
 
-test("CI deploy accepts only the hardened canonical unit", () => {
-  const src = readFileSync(join(ROOT, ".github", "workflows", "deploy.yml"), "utf8");
+// deploy.yml удалён при публичном релизе 2026-09-01: CI-половину проверки
+// сверять не с чем. Вернётся воркфлоу — тест включится сам.
+const DEPLOY_YML = join(ROOT, ".github", "workflows", "deploy.yml");
+
+test.skipIf(!existsSync(DEPLOY_YML))("CI deploy accepts only the hardened canonical unit", () => {
+  const src = readFileSync(DEPLOY_YML, "utf8");
   expect(src).toContain("DEPLOY_SERVICE must be the hardened canonical agent-team unit");
   expect(src).toContain("sudo -n /usr/local/sbin/agent-team-deploy restart");
   expect(src).toContain("sudo -n /usr/local/sbin/agent-team-deploy restore-session");

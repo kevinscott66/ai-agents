@@ -24,13 +24,17 @@
  * Прод и сеть не задействованы: тест только читает файлы workflow.
  */
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const WF_DIR = join(REPO_ROOT, ".github", "workflows");
 const DEPLOY_YML = join(WF_DIR, "deploy.yml");
-const DEPLOY = readFileSync(DEPLOY_YML, "utf8");
+// deploy.yml удалён при публичном релизе 2026-09-01: его шаги ниже проверять
+// нечего. Вернётся файл в .github/workflows/ — блоки включатся сами.
+// Общий скан всех воркфлоу этим не затронут — он идёт по readdirSync.
+const HAS_DEPLOY = existsSync(DEPLOY_YML);
+const DEPLOY = HAS_DEPLOY ? readFileSync(DEPLOY_YML, "utf8") : "";
 
 interface Step {
   name: string;
@@ -135,7 +139,7 @@ describe("во всех workflow: секреты не подставляются
   });
 });
 
-describe("deploy.yml: rsync на VPS", () => {
+describe.skipIf(!HAS_DEPLOY)("deploy.yml: rsync на VPS", () => {
   const NAME = "Rsync to VPS";
 
   test("адрес назначения собран из env, а не из подстановки", () => {
@@ -158,7 +162,7 @@ describe("deploy.yml: rsync на VPS", () => {
   });
 });
 
-describe("deploy.yml: удалённые install/restart и health check", () => {
+describe.skipIf(!HAS_DEPLOY)("deploy.yml: удалённые install/restart и health check", () => {
   const INSTALL = "Remote install + restart";
   const HEALTH = "Post-deploy health check";
 
@@ -211,7 +215,7 @@ describe("deploy.yml: удалённые install/restart и health check", () =>
   });
 });
 
-describe("deploy.yml: образец, по которому чинились остальные", () => {
+describe.skipIf(!HAS_DEPLOY)("deploy.yml: образец, по которому чинились остальные", () => {
   test("«Restore userbot session» не растерял передачу секрета по stdin", () => {
     const body = runText("Restore userbot session if missing");
     expect(body).toContain('printf \'%s\' "$USERBOT_SESSION_B64" | ssh');

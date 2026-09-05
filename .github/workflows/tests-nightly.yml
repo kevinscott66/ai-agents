@@ -35,12 +35,26 @@ jobs:
         working-directory: agent
         run: bun install --frozen-lockfile
 
+      # Тот же шаг и по той же причине, что в checks.yml (джобы typecheck и
+      # test-baseline): десяток файлов в agent/tests импортирует .tsx прямо из
+      # agent/miniapp/src, а preact лежит только в agent/miniapp/node_modules
+      # (в agent/package.json его нет вовсе). Без этой установки JSX-рантайм не
+      # резолвится и прогон падает на `Cannot find module
+      # 'preact/jsx-dev-runtime'` — из-за чего nightly был красным, и красным
+      # не по вине флейков, а по вине окружения.
+      - name: Install miniapp deps (preact — нужен для .tsx в тестах)
+        working-directory: agent/miniapp
+        run: bun install --frozen-lockfile
+
       - name: Run suite with reruns (detect flakes)
         working-directory: agent
         # --rerun-each=5 runs every test file 5 times back-to-back.
         # Any file that passes on some runs and fails on others is flaky.
         # Output is captured so we can upload it as an artifact if the job fails.
-        run: bun test --rerun-each=5 2>&1 | tee /tmp/bun-flaky-output.txt; exit ${PIPESTATUS[0]}
+        # Аргумент `tests` — тот же набор, что гоняет локальный гейт
+        # (CLAUDE.md §3.8) и checks.yml: прогон явно ограничен tests/, чтобы
+        # ничто вне него в набор не попадало.
+        run: bun test tests --rerun-each=5 2>&1 | tee /tmp/bun-flaky-output.txt; exit ${PIPESTATUS[0]}
 
       - name: Upload test output on failure
         if: failure()

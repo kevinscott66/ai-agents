@@ -84,8 +84,10 @@ const FILES = readdirSync(WF_DIR).filter((f) => f.endsWith(".yml") || f.endsWith
 describe("недоверенный ввод не склеивается в текст run:", () => {
   test("сканер вообще находит run-блоки (иначе тест зелёный впустую)", () => {
     const total = FILES.flatMap((f) => runBlocks(f, readFileSync(join(WF_DIR, f), "utf8")));
-    expect(FILES.length).toBeGreaterThan(5);
-    expect(total.length).toBeGreaterThan(20);
+    // Публичный релиз 2026-09-01 оставил три воркфлоу вместо восьми: порог
+    // держим на «скан не пустой», иначе его придётся двигать при каждой правке.
+    expect(FILES.length).toBeGreaterThan(0);
+    expect(total.length).toBeGreaterThan(0);
   });
 
   for (const f of FILES) {
