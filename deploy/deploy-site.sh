@@ -16,8 +16,20 @@
 # фронтом. Локальная сборка падает ДО того, как что-либо уехало.
 #
 # Usage:
-#   DEPLOY_HOST=agent-deploy@203.0.113.10 deploy/deploy-site.sh
-#   DRY_RUN=1 DEPLOY_HOST=agent-deploy@203.0.113.10 deploy/deploy-site.sh
+#   DEPLOY_HOST=agent-deploy@203.0.113.10 DEPLOY_SSH_KEY=~/.ssh/site_deploy deploy/deploy-site.sh
+#   DRY_RUN=1 DEPLOY_HOST=agent-deploy@203.0.113.10 DEPLOY_SSH_KEY=... deploy/deploy-site.sh
+#
+# DEPLOY_SSH_KEY формально не обязателен, практически — да: у оператора в
+# ~/.ssh/config на этот хост стоит `IdentitiesOnly yes`, и rsync, запущенный с
+# голым `-e ssh`, ключ сам не подберёт — выкатка падала на
+# `Permission denied (publickey)` ещё в dry-run. Лечение то же, что в deploy.sh.
+#
+# DEPLOY_ALLOW_ROOT=1 — осознанный обход запрета на root ниже. Прод сайта пока
+# не умеет иначе: /opt/web3-puls принадлежит root, снапшот кладётся в /root,
+# рестарт — systemctl. Выделенного site-deploy пользователя и sudo-обёртки для
+# него нет (обёртка agent-deploy умеет только agent-team). Пока их не заведёт
+# владелец сервера, единственный работающий путь — root; лучше явным флагом,
+# чем скриптом, который не выкатывает ничего.
 #
 # На проде выполняется только `bun install --frozen-lockfile` в server/ и рестарт
 # юнита. Скрипт НЕ трогает прод .env, server/data/ (боевой SQLite) и systemd drop-in'ы.
@@ -30,6 +42,8 @@ SERVICE="${DEPLOY_SITE_SERVICE:-web3-puls}"
 LOCAL_HEALTH="${DEPLOY_SITE_LOCAL_HEALTH:-http://127.0.0.1:8790/api/health}"
 PUBLIC_HEALTH="${DEPLOY_SITE_HEALTH_URL:-https://delabs.space:8443/api/health}"
 DRY_RUN="${DRY_RUN:-0}"
+DEPLOY_SSH_KEY="${DEPLOY_SSH_KEY-}"
+ALLOW_ROOT="${DEPLOY_ALLOW_ROOT:-0}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -45,10 +59,40 @@ if [ -z "${HOST//[[:space:]]/}" ]; then
 fi
 case "$HOST" in
   root|root@*)
-    red "DEPLOY_HOST не может использовать root; настройте выделенного deploy-пользователя."
-    exit 2
+    if [ "$ALLOW_ROOT" != "1" ]; then
+      red "DEPLOY_HOST не может использовать root; настройте выделенного deploy-пользователя."
+      red "  Если выделенного пользователя ещё нет — осознанно: DEPLOY_ALLOW_ROOT=1."
+      exit 2
+    fi
+    red "WARNING: выкатываем под root (DEPLOY_ALLOW_ROOT=1). Это временно, см. шапку."
     ;;
 esac
+
+# Не полагаемся на ssh-agent и ~/.ssh/config оператора: глобальный
+# `IdentitiesOnly yes` молча игнорирует ключ, добавленный в агент, и rsync
+# падает на publickey. Один и тот же ключ уходит и в ssh, и в rsync.
+# Раскрытие через `${SSH_ARGS[@]+...}` — чтобы пустой массив не ронял скрипт под
+# `set -u` в bash 3.2 (/bin/bash на macOS): там голое "${a[@]}" даёт
+# `unbound variable`.
+SSH_ARGS=()
+RSYNC_SSH="ssh"
+SSH_HINT=""
+if [ -n "${DEPLOY_SSH_KEY//[[:space:]]/}" ]; then
+  case "$DEPLOY_SSH_KEY" in
+    *[!A-Za-z0-9_./-]*)
+      red "DEPLOY_SSH_KEY должен быть простым локальным путём без shell-символов."
+      exit 2
+      ;;
+  esac
+  [ -r "$DEPLOY_SSH_KEY" ] || { red "DEPLOY_SSH_KEY не читается: $DEPLOY_SSH_KEY"; exit 2; }
+  SSH_ARGS=(-i "$DEPLOY_SSH_KEY" -o IdentitiesOnly=yes)
+  RSYNC_SSH="ssh -i $DEPLOY_SSH_KEY -o IdentitiesOnly=yes"
+  SSH_HINT="-i $DEPLOY_SSH_KEY -o IdentitiesOnly=yes "
+fi
+
+ssh_remote() {
+  ssh ${SSH_ARGS[@]+"${SSH_ARGS[@]}"} "$@"
+}
 
 [ -d "$SRC_SERVER" ] || { red "site/server не найден: $SRC_SERVER"; exit 1; }
 [ -d "$SRC_WEB" ]    || { red "site/web не найден: $SRC_WEB"; exit 1; }
@@ -108,9 +152,9 @@ WEB_EXCLUDES+=(--exclude-from "$UNTRACKED_WEB")
 if [ "$DRY_RUN" = "1" ]; then
   cyan "== DRY RUN: rsync --dry-run, без сборки и рестарта =="
   cyan "-- server --"
-  rsync -az --dry-run --itemize-changes "${SERVER_EXCLUDES[@]}" -e ssh "$SRC_SERVER" "$HOST:$REMOTE/server/"
+  rsync -az --dry-run --itemize-changes "${SERVER_EXCLUDES[@]}" -e "$RSYNC_SSH" "$SRC_SERVER" "$HOST:$REMOTE/server/"
   cyan "-- web (без dist) --"
-  rsync -az --dry-run --itemize-changes "${WEB_EXCLUDES[@]}" -e ssh "$SRC_WEB" "$HOST:$REMOTE/web/"
+  rsync -az --dry-run --itemize-changes "${WEB_EXCLUDES[@]}" -e "$RSYNC_SSH" "$SRC_WEB" "$HOST:$REMOTE/web/"
   exit 0
 fi
 
@@ -139,7 +183,7 @@ cyan "== 1. snapshot prod on remote =="
 # работающий сервис. Поэтому ограничиваем права и не копим копии — держим
 # последние SNAP_KEEP, остальные удаляем. Раньше не удалялась ни одна.
 SNAP_KEEP="${DEPLOY_SITE_SNAPSHOT_KEEP:-5}"
-SNAP_OUT="$(ssh "$HOST" "cd '$REMOTE' && SNAP=/root/web3-puls-predeploy-\$(date +%Y%m%d-%H%M%S) && mkdir -p \$SNAP && chmod 700 \$SNAP && rsync -a --exclude node_modules --exclude server/data ./ \$SNAP/ && ls -1d /root/web3-puls-predeploy-* 2>/dev/null | sort -r | tail -n +$(( SNAP_KEEP + 1 )) | xargs -r rm -rf; echo snapshot=\$SNAP")"
+SNAP_OUT="$(ssh_remote "$HOST" "cd '$REMOTE' && SNAP=/root/web3-puls-predeploy-\$(date +%Y%m%d-%H%M%S) && mkdir -p \$SNAP && chmod 700 \$SNAP && rsync -a --exclude node_modules --exclude server/data ./ \$SNAP/ && ls -1d /root/web3-puls-predeploy-* 2>/dev/null | sort -r | tail -n +$(( SNAP_KEEP + 1 )) | xargs -r rm -rf; echo snapshot=\$SNAP")"
 printf '%s\n' "$SNAP_OUT"
 SNAP="$(printf '%s\n' "$SNAP_OUT" | sed -n 's/^snapshot=//p' | tail -1)"
 [ -n "$SNAP" ] || SNAP="/root/web3-puls-predeploy-<TS>"
@@ -152,7 +196,7 @@ SNAP="$(printf '%s\n' "$SNAP_OUT" | sed -n 's/^snapshot=//p' | tail -1)"
 # возвращает старый package.json, а node_modules на проде остался от неудачной
 # выкатки. Ставим ДО рестарта.
 rollback_hint() {
-  red "Rollback: ssh $HOST 'rsync -a --delete --exclude node_modules --exclude server/data $SNAP/ $REMOTE/ && export PATH=/root/.bun/bin:\$PATH && cd $REMOTE/server && bun install --frozen-lockfile && systemctl restart $SERVICE'"
+  red "Rollback: ssh ${SSH_HINT}$HOST 'rsync -a --delete --exclude node_modules --exclude server/data $SNAP/ $REMOTE/ && export PATH=/root/.bun/bin:\$PATH && cd $REMOTE/server && bun install --frozen-lockfile && systemctl restart $SERVICE'"
 }
 
 # --- 2. rsync ---
@@ -160,9 +204,9 @@ rollback_hint() {
 # наполовину синхронизированного кода — это и есть худший из исходов.
 cyan "== 2. rsync server + web =="
 RSYNC_LOG="$(mktemp)"
-if ! { rsync -az --stats "${SERVER_EXCLUDES[@]}" -e ssh "$SRC_SERVER" "$HOST:$REMOTE/server/" \
-       && rsync -az --stats "${WEB_EXCLUDES[@]}" -e ssh "$SRC_WEB" "$HOST:$REMOTE/web/" \
-       && rsync -az --stats -e ssh "$SRC_WEB/dist/" "$HOST:$REMOTE/web/dist/"; } \
+if ! { rsync -az --stats "${SERVER_EXCLUDES[@]}" -e "$RSYNC_SSH" "$SRC_SERVER" "$HOST:$REMOTE/server/" \
+       && rsync -az --stats "${WEB_EXCLUDES[@]}" -e "$RSYNC_SSH" "$SRC_WEB" "$HOST:$REMOTE/web/" \
+       && rsync -az --stats -e "$RSYNC_SSH" "$SRC_WEB/dist/" "$HOST:$REMOTE/web/dist/"; } \
      >"$RSYNC_LOG" 2>&1; then
   red "rsync упал — прод НЕ перезапускаем, код остаётся прежним:"
   tail -20 "$RSYNC_LOG"
@@ -192,11 +236,11 @@ cyan "== 3. bun install + restart $SERVICE =="
 # --frozen-lockfile: расхождение bun.lock с package.json на выкатке — повод
 # отказаться, а не молча переписать локфайл на проде и разъехаться с репо.
 # PATH: ssh без логин-шелла не знает про /root/.bun/bin.
-if ! ssh "$HOST" "set -e; export PATH=/root/.bun/bin:\$PATH; cd '$REMOTE/server'; \
+if ! ssh_remote "$HOST" "set -e; export PATH=/root/.bun/bin:\$PATH; cd '$REMOTE/server'; \
   bun install --frozen-lockfile >/tmp/deploy-site-install.log 2>&1 || { tail -20 /tmp/deploy-site-install.log; exit 1; }; \
   systemctl restart '$SERVICE'; sleep 3; systemctl is-active '$SERVICE'"; then
   red "❌ шаг 3 (bun install / restart $SERVICE) упал — на проде уже новый код, но сервис не поднялся."
-  ssh "$HOST" "tail -30 /var/log/${SERVICE}.log" || true
+  ssh_remote "$HOST" "tail -30 /var/log/${SERVICE}.log" || true
   rollback_hint
   exit 1
 fi
@@ -205,7 +249,7 @@ fi
 cyan "== 4. health check (local, with retries) =="
 OK=0
 for i in $(seq 1 10); do
-  CODE="$(ssh "$HOST" "curl -sS -o /dev/null -w '%{http_code}' '$LOCAL_HEALTH' --max-time 6" 2>/dev/null || echo 000)"
+  CODE="$(ssh_remote "$HOST" "curl -sS -o /dev/null -w '%{http_code}' '$LOCAL_HEALTH' --max-time 6" 2>/dev/null || echo 000)"
   if [ "$CODE" = "200" ]; then OK=1; break; fi
   sleep 3
 done
@@ -215,7 +259,7 @@ if [ "$OK" = "1" ]; then
   cyan "   public $PUBLIC_HEALTH → $PUB"
 else
   red "❌ health check FAILED (local $LOCAL_HEALTH не отдал 200 за ~30с). Лог:"
-  ssh "$HOST" "tail -30 /var/log/${SERVICE}.log" || true
+  ssh_remote "$HOST" "tail -30 /var/log/${SERVICE}.log" || true
   rollback_hint
   exit 1
 fi
