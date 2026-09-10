@@ -241,6 +241,10 @@ export async function executeApproved(
     // dispatchAndAudit лениво минтил НОВЫЙ id, и одобренное действие висело в
     // audit_logs сиротой — связать его с исходным запросом было нечем.
     requestId: approval.request_id ?? undefined,
+    // Аудит 2026-09-10: id самой заявки. `agent_prompts` пишет его при
+    // постановке в очередь, а применение искало свою строку по содержимому —
+    // связь была, но ею не пользовались (см. `handleUpdateAgentPromptApproved`).
+    approvalId: approval.id,
     resolveAgent: deps.resolveAgent,
     handoffDeps: deps.handoffDeps,
     respondAsImpl: deps.respondAsImpl,

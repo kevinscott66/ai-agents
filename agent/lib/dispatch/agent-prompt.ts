@@ -188,7 +188,7 @@ export function closeAgentPromptProposals(
  */
 export function handleUpdateAgentPromptApproved(
   payload: UpdateAgentPromptPayload,
-  ctx: { agentKey: string; chatId: number },
+  ctx: { agentKey: string; chatId: number; approvalId?: string },
 ): UpdateAgentPromptResult | UpdateAgentPromptFailure {
   const err = validateUpdateAgentPromptPayload(payload);
   if (err) return { ok: false, error: err };
@@ -212,19 +212,50 @@ export function handleUpdateAgentPromptApproved(
   // текстом, владелец одобрял v6 — а applied_at по ASC вставал на v5, на
   // ОТКЛОНЁННУЮ. Одобренная v6 при этом числилась «не применена никогда»
   // (воспроизведено на чистой БД: v1 applied, v2 NULL).
-  const pending = db
-    .prepare(
-      `SELECT id, version FROM agent_prompts
-       WHERE agent_key = ? AND applied_at IS NULL AND rejected_at IS NULL
-         AND closed_at IS NULL
-         AND prompt = ? AND reason = ?
-       ORDER BY version ASC LIMIT 1`,
-    )
-    .get(
-      payload.target_agent_key,
-      payload.new_prompt,
-      payload.reason,
-    ) as { id: number; version: number } | undefined;
+  // Аудит 2026-09-10: точная связь, если она есть. `approval_id` пишется в
+  // строку при постановке в очередь, а `closeAgentPromptProposals` по нему уже
+  // закрывает строки протухших заявок — то есть ключ был, им просто не
+  // пользовались на применении. Всё, чего не хватало, — довезти id сюда:
+  // теперь его ставит `executeApproved`, единственный исполнитель одобренного
+  // (DispatchCtx.approvalId).
+  //
+  // Что это чинит поверх ASC-порядка ниже. Порядок — компромисс: он совпадает
+  // с тем, КАК заявки решают (очередь показывает старшую первой), но угадывает
+  // намерение владельца, а не читает его. Стоит владельцу решить очередь не по
+  // порядку — из Mini App это одно нажатие — и applied_at снова встаёт не на
+  // ту версию, а тексты одинаковы, так что заметить нечем. По id угадывать
+  // нечего: одобрена ровно эта строка.
+  //
+  // Сопоставление по содержимому остаётся запасным путём и удалено быть не
+  // может: `approval_id` у строк, заведённых до миграции, пуст, и у любого
+  // будущего вызывающего, который id не довезёт, поведение должно остаться
+  // прежним, а не «не нашли — вставим новую версию».
+  const byApproval = ctx.approvalId
+    ? (db
+        .prepare(
+          `SELECT id, version FROM agent_prompts
+           WHERE approval_id = ? AND applied_at IS NULL AND rejected_at IS NULL
+             AND closed_at IS NULL
+           LIMIT 1`,
+        )
+        .get(ctx.approvalId) as { id: number; version: number } | undefined)
+    : undefined;
+
+  const pending =
+    byApproval ??
+    (db
+      .prepare(
+        `SELECT id, version FROM agent_prompts
+         WHERE agent_key = ? AND applied_at IS NULL AND rejected_at IS NULL
+           AND closed_at IS NULL
+           AND prompt = ? AND reason = ?
+         ORDER BY version ASC LIMIT 1`,
+      )
+      .get(
+        payload.target_agent_key,
+        payload.new_prompt,
+        payload.reason,
+      ) as { id: number; version: number } | undefined);
 
   // `!` — присваиваются внутри транзакции ниже, обе ветки её `if` пишут обе.
   let rowId!: number;

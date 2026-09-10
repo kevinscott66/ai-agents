@@ -92,6 +92,26 @@ function parseJSON(v: string | null): unknown | null {
   }
 }
 
+/**
+ * Задача-«роль» из очереди рантайма (`SPAWN_ROLE`).
+ *
+ * Аудит 2026-09-10. Такая задача — не узел плана, а вторая половина строки
+ * `role_runtime_queue`: id у них общий (role-runtime.ts:230-285 вставляет обе
+ * в одной транзакции), а статусом её двигает только воркер, и каждый его
+ * UPDATE обусловлен `AND status='running'` / `AND state='running'`
+ * (role-runtime.ts:343-395, :552, :578). Признак `_spawn_role` в `input`
+ * ставит он же; по нему её нашла и миграция, заводившая очередь задним числом
+ * (migrations.ts:999). Отличать её от обычной задачи нужно ровно затем, чтобы
+ * логика набора детей не переписывала итог чужого прогона — см. `createTask`.
+ */
+function isSpawnRoleTask(task: Task): boolean {
+  return (
+    typeof task.input === "object" &&
+    task.input !== null &&
+    (task.input as { _spawn_role?: unknown })._spawn_role === true
+  );
+}
+
 function rowToTask(row: TaskRow): Task {
   return {
     ...row,
@@ -149,7 +169,34 @@ export function createTask(input: CreateTaskInput): Task {
     // деда выведен из статуса родителя, который мы только что признали
     // преждевременным. Переоткрываем всех терминальных предков подряд —
     // следующий rollup пересчитает каждого по его полному набору.
-    if (FSM[parent.status].length === 0) {
+    //
+    // Аудит 2026-09-10: `_spawn_role` не переоткрываем — ни прямого родителя,
+    // ни предка. Обоснование переоткрытия — «новый ребёнок опровергает вывод
+    // КОДА о полноте набора»; у задачи-роли статус выведен не из набора детей
+    // вообще, а из прогона: его пишет воркер (role-runtime.ts:552, :578) и
+    // пишет в паре со строкой `role_runtime_queue`. Дети у неё есть только
+    // потому, что модель внутри роли имеет право на CREATE_TASK{parentId} —
+    // это её работа, а не её план.
+    //
+    // Что ломалось. Роль отработала: `tasks.status='done'`,
+    // `role_runtime_queue.state='done'`. Модель создаёт под ней ещё одну
+    // подзадачу — и эта ветка переводит задачу в `running`, гася `error`.
+    // Очередь остаётся `done`: `claimNextRoleTask` берёт только `queued`, а
+    // все UPDATE'ы воркера обусловлены `state='running'`, так что второго
+    // прогона не будет никогда. Две таблицы про один прогон расходятся
+    // навсегда. У провалившейся роли к этому добавляется потеря причины:
+    // `error=NULL` затирает текст падения, который в очереди уже не лежит.
+    // А дальше rollupParent досчитывает роль по её детям — то есть итог
+    // прогона задним числом определяет посторонняя подзадача, и упавшая роль
+    // выезжает `done`.
+    //
+    // Прямой родитель здесь, в отличие от `cancelled`, тоже под запретом:
+    // снятие отмены человеком — законный сценарий, а «переоткрыть завершённый
+    // прогон» смысла не имеет, повторный запуск роли — это новый SPAWN_ROLE.
+    // Останавливаться на такой задаче безопасно по той же причине, что и на
+    // отменённой: rollupParent на терминальном узле выходит первой строкой,
+    // так что каскад вверх она и так глушит.
+    if (FSM[parent.status].length === 0 && !isSpawnRoleTask(parent)) {
       reopenChain = [parent];
       let anc = parent.parent_id ? getTask(parent.parent_id) : null;
       // Ограничение на длину — против битой цепочки parent_id: depth в
@@ -177,6 +224,7 @@ export function createTask(input: CreateTaskInput): Task {
         anc &&
         FSM[anc.status].length === 0 &&
         anc.status !== "cancelled" &&
+        !isSpawnRoleTask(anc) &&
         reopenChain.length <= MAX_DEPTH
       ) {
         reopenChain.push(anc);
@@ -187,7 +235,17 @@ export function createTask(input: CreateTaskInput): Task {
           cancelled_ancestor: anc.id,
           reopened: reopenChain.map((t) => t.id),
         });
+      } else if (anc && isSpawnRoleTask(anc)) {
+        log.warn("[tasks] предок — завершённый прогон роли, подъём остановлен", {
+          spawn_role_ancestor: anc.id,
+          reopened: reopenChain.map((t) => t.id),
+        });
       }
+    } else if (FSM[parent.status].length === 0) {
+      log.warn("[tasks] родитель — завершённый прогон роли, переоткрытия нет", {
+        spawn_role_parent: parent.id,
+        parent_status: parent.status,
+      });
     }
   }
   if (depth > MAX_DEPTH) {
@@ -543,6 +601,13 @@ function fsmPath(from: TaskStatus, to: TaskStatus): TaskStatus[] | null {
   return null;
 }
 
+/** Внутренний сигнал «CAS не сошёлся» — наружу из `forceTerminalStatus` не выходит. */
+class StaleTaskStatus extends Error {
+  constructor(readonly expected: TaskStatus) {
+    super(`task status changed under reconciler (expected ${expected})`);
+  }
+}
+
 /**
  * Проставить терминальный статус в обход FSM — но не в обход его смысла.
  *
@@ -585,7 +650,10 @@ function forceTerminalStatus(
     sql += `, error=?`;
     vals.push(error);
   }
-  sql += ` WHERE id=?`;
+  // `AND status=?` — CAS, см. комментарий у транзакции ниже. Ожидаемое
+  // значение подставляется на вызове: для первого шага это снимок вызывающего,
+  // дальше — предыдущий шаг моста.
+  sql += ` WHERE id=? AND status=?`;
   vals.push(task.id);
 
   // Аудит 2026-08-14: мост писался по одному UPDATE на шаг, каждый в своём
@@ -603,16 +671,50 @@ function forceTerminalStatus(
   // Мост и терминал — одна запись, а не последовательность: наружу видно либо
   // старый статус, либо конечный. bun:sqlite вкладывает транзакции через
   // SAVEPOINT, так что вызов изнутри чужой транзакции безопасен.
-  db.transaction(() => {
-    for (const step of bridge) {
-      db.prepare(`UPDATE tasks SET status=?, updated_at=? WHERE id=?`).run(
-        step,
-        now,
-        task.id,
-      );
-    }
-    db.prepare(sql).run(...(vals as never[]));
-  })();
+  //
+  // Аудит 2026-09-10: шаги писались голым `WHERE id=?`, то есть каждый UPDATE
+  // верил снимку `task`, прочитанному вызывающим ДО транзакции. Оба
+  // вызывающих — реконсиляторы (rollupParent по финишу ребёнка и failTask),
+  // они читают задачу, считают детей и только потом пишут; между чтением и
+  // записью статус успевает измениться — параллельным финишем второго ребёнка,
+  // отменой из Mini App, воркером. Мост при этом проходил ПО СТАРОМУ пути:
+  // задачу, уже ушедшую в `cancelled` рукой человека, следующий вызов молча
+  // проводил `cancelled → running → done`, потому что путь считался от
+  // устаревшего `task.status`, а WHERE не спорил. Транзакция от аудита
+  // 2026-08-14 защищает от обрыва между шагами, но не от гонки: она делает
+  // запись атомарной, а не обусловленной.
+  //
+  // Теперь каждый шаг проверяет то значение, которое сам же и ожидает увидеть:
+  // первый — снимок вызывающего, каждый следующий — результат предыдущего.
+  // Не совпало — вся запись откатывается (мост и терминал по-прежнему одна
+  // запись) и не повторяется: победил чужой переход, и наш вывод о детях
+  // построен на устаревшем чтении. Обоим вызывающим это ровно то, что нужно —
+  // они best-effort, бросать наверх нечего, поэтому наружу уходит WARN, а не
+  // исключение.
+  try {
+    db.transaction(() => {
+      let expected: TaskStatus = task.status;
+      for (const step of bridge) {
+        const res = db
+          .prepare(
+            `UPDATE tasks SET status=?, updated_at=? WHERE id=? AND status=?`,
+          )
+          .run(step, now, task.id, expected);
+        if (res.changes !== 1) throw new StaleTaskStatus(expected);
+        expected = step;
+      }
+      const res = db.prepare(sql).run(...([...vals, expected] as never[]));
+      if (res.changes !== 1) throw new StaleTaskStatus(expected);
+    })();
+  } catch (e) {
+    if (!(e instanceof StaleTaskStatus)) throw e;
+    log.warn("[tasks] статус изменился под реконсилятором — запись отменена", {
+      task_id: task.id,
+      expected: e.expected,
+      actual: getTask(task.id)?.status ?? null,
+      target,
+    });
+  }
 }
 
 /**

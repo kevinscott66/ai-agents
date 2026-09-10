@@ -168,11 +168,25 @@ export function handleAssignTask(
     return { ok: false, error: assigneeError(String(payload.assignedTo ?? "")) };
   }
   // Аудит 2026-09-10: сами инварианты стоят в `assignTask` (докблок там же) —
-  // это последний рубеж у самой записи. Но брошенное оттуда исключение
-  // приходит к модели как `dispatch/audit failed: …` и пишет ERROR-строку
-  // «dispatch threw», то есть отказ по правилу выглядит внутренней поломкой.
-  // Отказ по правилу — работа этого слоя, ровно как проверка авторства у
-  // отмены ниже: сюда его и выносим, с текстом, по которому видно, что делать.
+  // это последний рубеж у самой записи. Здесь — тот же отказ на своём слое.
+  //
+  // Уточнение того же аудита, вечером: первая редакция этого комментария
+  // обосновывала вынос тем, что исключение из `lib/tasks.ts` приходит к модели
+  // как `dispatch/audit failed: …`. Это неверно. `dispatchAction` ловит всё
+  // сам (action-dispatch.ts:1013) и возвращает обычный `{ok:false, error}`;
+  // префикс `dispatch/audit failed:` ставится ровно в одном месте
+  // (action-dispatch.ts:1877) и только когда бросает сам `dispatchAndAudit`,
+  // то есть на записи строки аудита. По ФОРМЕ ответа отказ от броска не
+  // отличить.
+  //
+  // Вынос от этого не перестаёт быть правильным, но причины у него другие, и
+  // их стоит назвать честно: (1) текст. Инвариант у записи написан для того,
+  // кто читает код, а сюда нужен ответ модели — с именем роли и указанием,
+  // что делать. (2) Лог. Отказ по правилу оставляет `[security]`-строку с
+  // ролью, задачей и запрошенным исполнителем; исключение из библиотеки —
+  // только стек. (3) Слой. Правило — работа диспетчера, ровно как проверка
+  // авторства у отмены ниже; инварианту у записи остаётся роль последнего
+  // рубежа, до которого в норме не доходит.
   if (isDiagTaskInput(current.input) && assignedTo !== DIAG_ASSIGNEE) {
     log.warn("[security] ASSIGN_TASK: увод задачи самопочинки — отказ", {
       task_id: current.id,
@@ -200,6 +214,54 @@ export function handleAssignTask(
     ok: true,
     taskId: task.id,
     result: { taskId: task.id, status: task.status },
+  };
+}
+
+/**
+ * Статус diag-задачи двигает поллер самопочинки, а не роли с доски.
+ *
+ * Аудит 2026-09-10. Соседний запрет в ASSIGN_TASK держит задачу самопочинки
+ * У aieng; эта проверка держит её В ТОМ СТАТУСЕ, в котором её ищут. Обе
+ * половины нужны вместе, потому что оба поставщика работы смотрят на статус
+ * в упор: `listPendingDiagTasks` берёт строго `status='pending'`
+ * (self-diag.ts:492), подборщик осиротевших — строго `status='running'`
+ * (self-diag.ts:397), а `processDiagTask` пишет терминал сам, каждым UPDATE'ом
+ * с `AND status='running'` (:430, :442, :461, :476).
+ *
+ * Что ломалось. Пока задача в `running` (поллер поставил его ДО вызова
+ * модели), любая роль с той же доски могла увести её в сторону: REQUEST_REVIEW
+ * → `awaiting_review`, UPDATE_TASK_STATUS → `done`. После этого её не видит
+ * никто: поллер ждёт `pending`, подборщик — `running`, а `gcStaleTasks`
+ * `awaiting_review` не трогает НАМЕРЕННО (это ожидание человека, tasks.ts:70).
+ * Единственный разрешённый ретрай упавшего действия сгорал, не состоявшись,
+ * и следа об этом не оставалось нигде — ровно тот исход, который аудит
+ * 2026-08-21 закрыл для убитого процесса, только дверь другая и открыть её
+ * может любая роль в чате.
+ *
+ * Границу проводим по действующему, а не по статусу: aieng — единственный, у
+ * кого своя работа с этой задачей есть. Остаток размена назван честно: aieng
+ * своей же ранней записью статуса может обесценить текст, который поллер
+ * собирался положить в `error`; задачу это не роняет (терминал остаётся
+ * терминалом), а закрывать роли доступ к собственной задаче ради этого
+ * дороже, чем оставить.
+ */
+function diagStatusGuard(
+  current: { id: string; input: unknown },
+  ctx: TaskHandlerContext,
+  action: string,
+): TaskHandlerResult | null {
+  if (!isDiagTaskInput(current.input)) return null;
+  if (ctx.agentKey === DIAG_ASSIGNEE) return null;
+  log.warn(`[security] ${action}: смена статуса задачи самопочинки — отказ`, {
+    task_id: current.id,
+    agent: ctx.agentKey,
+  });
+  return {
+    ok: false,
+    error:
+      `cannot change status of task ${current.id}: это задача самодиагностики, ` +
+      `её статусом управляет поллер самопочинки (иначе ретрая упавшего действия ` +
+      `не будет). Своя работа — заведи задачу через CREATE_TASK.`,
   };
 }
 
@@ -238,6 +300,8 @@ export function handleUpdateTaskStatus(
         `failed с причиной в error; если задача лишняя — скажи об этом её автору.`,
     };
   }
+  const diagErr = diagStatusGuard(current, ctx, "UPDATE_TASK_STATUS");
+  if (diagErr) return diagErr;
   const patch: { output?: unknown; error?: string | null } = {};
   if (payload.output !== undefined) patch.output = payload.output;
   if (payload.error !== undefined) patch.error = payload.error;
@@ -253,9 +317,12 @@ export function handleRequestReview(
   payload: PayloadByType["REQUEST_REVIEW"],
   ctx: TaskHandlerContext,
 ): TaskHandlerResult {
-  if (!ownTask(payload.taskId, ctx, "REQUEST_REVIEW")) {
+  const current = ownTask(payload.taskId, ctx, "REQUEST_REVIEW");
+  if (!current) {
     return { ok: false, error: `task not found: ${payload.taskId}` };
   }
+  const diagErr = diagStatusGuard(current, ctx, "REQUEST_REVIEW");
+  if (diagErr) return diagErr;
   const task = updateTaskStatus(payload.taskId, "awaiting_review");
   return {
     ok: true,

@@ -161,6 +161,18 @@ export interface DispatchCtx {
    */
   requestId?: string;
   /**
+   * Id заявки, по решению которой это действие исполняется.
+   *
+   * Аудит 2026-09-10. Ставит его ровно один вызывающий — `executeApproved`
+   * (commands.ts), общий для Telegram-команды и Mini App; у обычного хода
+   * агента его нет и быть не должно. Нужен там, где одобренное действие
+   * обязано найти СВОЮ строку, заведённую при постановке в очередь:
+   * `agent_prompts.approval_id` (см. `handleUpdateAgentPromptApproved`).
+   * Раньше связь восстанавливали по содержимому — единственное, что сюда
+   * доезжало, — а два одинаковых текста по содержимому неразличимы.
+   */
+  approvalId?: string;
+  /**
    * C10: resolver from agent key → RunningBot. Required for DELEGATE_TO_ROLE.
    * Injected by orchestrator-team.ts at runWithTools-call time.
    */
@@ -969,6 +981,7 @@ export async function dispatchAction<T extends ActionType>(
         const res = handleUpdateAgentPromptApproved(p, {
           agentKey: ctx.agentKey,
           chatId: ctx.chatId,
+          approvalId: ctx.approvalId,
         });
         if (!res.ok) return { ok: false, error: res.error };
         return { ok: true, result: res.result };
