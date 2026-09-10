@@ -24,16 +24,38 @@
 // Аудит 2026-08-28: раньше здесь стоял GET_METRICS. Инструмент сузили до
 // aieng/orchestrator (телеметрия прода — см. ROLE_EXPOSED_TOOLS), а этому
 // файлу нужна просто инлайновая read-only тулза, доступная роли ниже.
-import { describe, test, expect, afterEach } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import type Anthropic from "@anthropic-ai/sdk";
 import { runWithTools } from "../lib/tool-loop.ts";
 import { BudgetExceededError } from "../lib/token-budget.ts";
+import { db } from "../lib/db.ts";
 import { cleanupChat } from "./_helpers.ts";
 
 const TEST_CHAT = -1_000_828;
 const TEST_AGENT = "qa";
 
-afterEach(() => cleanupChat(TEST_CHAT));
+/**
+ * P2bis (nightly, 2026-09-10): потолок очереди одобрений считается ПО АГЕНТУ и
+ * по всем чатам сразу — `SELECT COUNT(*) FROM approvals WHERE status='pending'
+ * AND requested_by=?` (action-dispatch.ts). `cleanupChat` же скоупится по
+ * chat_id, поэтому заявки роли `qa`, оставленные другими файлами в СВОИХ чатах,
+ * досчитывались сюда. Под `--rerun-each=5` каждый такой файл отрабатывал пять
+ * раз, лимит в 10 выбирался ещё до этого файла, и вместо ожидаемого
+ * `pending_approval` тест получал «очередь одобрений переполнена». Обычный
+ * гейт это не ловил: одного прохода на переполнение не хватало.
+ *
+ * `qa` — общий ключ роли, а не частный ключ файла, так что предусловие
+ * «очередь не переполнена» файл обязан обеспечивать сам.
+ */
+function clearPendingApprovalsForAgent(): void {
+  db.prepare(`DELETE FROM approvals WHERE requested_by = ?`).run(TEST_AGENT);
+}
+
+beforeEach(() => clearPendingApprovalsForAgent());
+afterEach(() => {
+  cleanupChat(TEST_CHAT);
+  clearPendingApprovalsForAgent();
+});
 
 const base = {
   model: "t",

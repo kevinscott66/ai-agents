@@ -38,6 +38,21 @@ import { cleanupChat } from "./_helpers.ts";
 
 const TEST_CHAT = 999_314_028;
 const ORCH = CHARACTERS.find((c) => c.key === "orchestrator")!;
+
+/**
+ * P2bis (nightly, 2026-09-10): `cleanupChat` историю НЕ чистит, а у `messages`
+ * есть частичный UNIQUE по (chat_id, tg_message_id) — idx_messages_dedup,
+ * миграция 030. Под `--rerun-each=5` второй повтор писал `[Voice]` тем же
+ * message_id, что и первый, попадал в ON CONFLICT, а его `DO UPDATE` стоит под
+ * `WHERE messages.text = ''` и потому не срабатывал: строк ноль, дельта ноль,
+ * `expect(1)` красный. Дедуп при этом работал верно — в логе видно, что первый
+ * вызов расшифрован, второй пропущен.
+ *
+ * Чат принадлежит только этому файлу, так что чистка ничего чужого не заденет.
+ */
+function cleanupVoiceHistory(): void {
+  db.prepare(`DELETE FROM messages WHERE chat_id = ?`).run(String(TEST_CHAT));
+}
 const ALLOWED = [String(TEST_CHAT)];
 const USER = 778;
 
@@ -103,6 +118,7 @@ beforeEach(() => {
     });
   }) as unknown as typeof fetch);
   cleanupChat(TEST_CHAT);
+  cleanupVoiceHistory();
 });
 
 afterEach(() => {
@@ -113,6 +129,7 @@ afterEach(() => {
   else process.env.OPENAI_API_KEY = savedOpenai;
   _resetRateLimits();
   cleanupChat(TEST_CHAT);
+  cleanupVoiceHistory();
 });
 
 afterAll(() => {

@@ -11,6 +11,8 @@
  *  2. Reset volatile cross-test state before every test. Even with a fresh DB
  *     per run, state leaks BETWEEN test files within a single run:
  *       - the in-memory rate-limit buckets (lib/rate-limits.ts)
+ *       - the Mini App HTTP token buckets (lib/http-utils.ts) — см. P2bis ниже
+ *       - the alert cooldown map (lib/alerting.ts) — см. P2bis ниже
  *       - leftover `autonomy_modes` overrides at scope 'agent'/'chat' that a
  *         prior test set and never cleaned up — these silently flip gate
  *         decisions in later, unrelated tests (e.g. an agent:pm:locked row
@@ -19,6 +21,28 @@
  *     Resetting before each test gives every test a clean slate while leaving
  *     the global autonomy default intact (tests set their own overrides in the
  *     test body, which runs after this hook).
+ *
+ * P2bis (nightly, 2026-09-10). Оба верхних пункта добавлены сюда потому, что
+ * `bun test tests --rerun-each=5` в nightly был красным четыре ночи подряд, а
+ * обычный гейт на том же коде — зелёным. Разница ровно в накоплении:
+ *
+ *   - `lib/http-utils.ts` держит вёдра Mini App (POST: ёмкость 20, +1/с;
+ *     GET: 120, +4/с). Одного прохода тесту хватает, пяти подряд — нет: со
+ *     второго-третьего повтора API отдаёт 429, и `expect(200)` падает. Это
+ *     давали ~118 из 162 падений прогона 34334251616. Двадцать файлов уже
+ *     звали `_resetRateLimiter()` у себя в `beforeEach` — здесь ровно тот же
+ *     вызов, но для всех, а не для тех, кто вспомнил.
+ *   - `lib/alerting.ts` держит карту кулдаунов: сработавший алерт молчит
+ *     заданное число минут. На повторе `checkApprovalBacklog`/
+ *     `checkRateLimitStorm` возвращали false — не потому, что порог не
+ *     превышен, а потому, что кулдаун с прошлого повтора ещё не истёк.
+ *
+ * Сбрасывать глобально безопасно: ни один тест не строит состояние ЧЕРЕЗ
+ * границу `test()` — те, что проверяют сам лимитер и сами кулдауны
+ * (`miniapp-anon-rate-limit`, `rate-limiter-hard-cap`,
+ * `miniapp-unauth-api-rate-limit`, `alerting-storm-sampling`,
+ * `audit-2026-08-09-small-holes`, `audit-2026-08-29-db-maint-hourly-tick`),
+ * набирают его внутри одного теста и уже сбрасывают его сами.
  */
 import "./_db-path.ts"; // MUST be first — sets MEMORY_DB_PATH before db opens.
 
@@ -66,6 +90,8 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 import { beforeEach } from "bun:test";
 import { db } from "../lib/db.ts";
 import { _resetRateLimits } from "../lib/rate-limits.ts";
+import { _resetRateLimiter } from "../lib/http-utils.ts";
+import { _resetAlertCooldowns } from "../lib/alerting.ts";
 
 /**
  * T-812: таблица `permissions` (293 строки после миграций) живёт на одной
@@ -124,6 +150,8 @@ function restorePermissions(): void {
 
 beforeEach(() => {
   _resetRateLimits();
+  _resetRateLimiter();
+  _resetAlertCooldowns();
   db.prepare(
     `DELETE FROM autonomy_modes WHERE scope IN ('agent', 'chat')`,
   ).run();
