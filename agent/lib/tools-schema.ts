@@ -1062,7 +1062,8 @@ export async function executeTool(
       const limit = Math.max(1, Math.min(50, Math.floor(rawLimit)));
       const rows = db
         .prepare(
-          `SELECT version, edited_by, edited_at, applied_at, rejected_at, reason, prompt
+          `SELECT version, edited_by, edited_at, applied_at, rejected_at, closed_at,
+                  reason, prompt
            FROM agent_prompts WHERE agent_key = ?
            ORDER BY version DESC LIMIT ?`,
         )
@@ -1072,6 +1073,7 @@ export async function executeTool(
         edited_at: number;
         applied_at: number | null;
         rejected_at: number | null;
+        closed_at: number | null;
         reason: string;
         prompt: string;
       }>;
@@ -1087,12 +1089,21 @@ export async function executeTool(
         // которую владелец ЗАРУБИЛ, от той, что просто ждёт очереди, — то есть
         // могла переспросить ровно то, в чём ей уже отказали.
         rejected: r.rejected_at != null,
+        // Аудит 2026-09-10: четвёртого исхода не было, а он есть — заявка может
+        // кончиться ничем (протухла по TTL либо исполнение упало уже после
+        // одобрения). Складывать его в «rejected» нельзя по той же причине, по
+        // которой заведена сама колонка: роль прочтёт это как решение владельца
+        // и не переспросит, хотя владелец не сказал ничего. Складывать в
+        // «pending» — врать, что решение ещё впереди: заявки уже нет.
+        closed: r.closed_at != null,
         status:
           r.applied_at != null
             ? "applied"
             : r.rejected_at != null
               ? "rejected"
-              : "pending",
+              : r.closed_at != null
+                ? "closed"
+                : "pending",
         reason: r.reason,
         preview: r.prompt.slice(0, 200) + (r.prompt.length > 200 ? "…" : ""),
         length: r.prompt.length,

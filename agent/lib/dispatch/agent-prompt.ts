@@ -146,9 +146,13 @@ export function insertPendingAgentPrompt(
  * миграции 050 approval_id пуст, их этот проход просто не трогает: они и так
  * относятся к заявкам, решённым до появления колонки.
  *
- * `rejected_at`, а не отдельная колонка: колонка значит «версия закрыта, не
- * применена» — и для отказа человека, и для протухшей заявки; чем именно
- * закрыта, видно в самой строке approvals (status + reason).
+ * Отдельная колонка `closed_at`, а НЕ `rejected_at` (миграция 051): протухшая
+ * заявка — не отказ. Докстрока `ApprovalStatus` (approvals.ts) говорит это
+ * прямым текстом про `expired`, и цена подделки не косметическая: `rejected_at`
+ * заведена затем, чтобы роль, читающая `GET_PROMPT_HISTORY`, не переспрашивала
+ * то, в чём ей уже отказали. Протухшую заявку, показанную как «rejected», роль
+ * прочтёт как решение владельца и НЕ переспросит — хотя владелец не сказал
+ * ничего и переспросить как раз нужно.
  */
 export function closeAgentPromptProposals(
   approvalIds: string[],
@@ -157,8 +161,9 @@ export function closeAgentPromptProposals(
 ): number {
   if (approvalIds.length === 0) return 0;
   const upd = database.prepare(
-    `UPDATE agent_prompts SET rejected_at = ?
-     WHERE approval_id = ? AND applied_at IS NULL AND rejected_at IS NULL`,
+    `UPDATE agent_prompts SET closed_at = ?
+     WHERE approval_id = ? AND applied_at IS NULL AND rejected_at IS NULL
+       AND closed_at IS NULL`,
   );
   let closed = 0;
   const tx = database.transaction(() => {
@@ -211,6 +216,7 @@ export function handleUpdateAgentPromptApproved(
     .prepare(
       `SELECT id, version FROM agent_prompts
        WHERE agent_key = ? AND applied_at IS NULL AND rejected_at IS NULL
+         AND closed_at IS NULL
          AND prompt = ? AND reason = ?
        ORDER BY version ASC LIMIT 1`,
     )
@@ -243,7 +249,8 @@ export function handleUpdateAgentPromptApproved(
       const upd = db
         .prepare(
           `UPDATE agent_prompts SET applied_at = ?
-           WHERE id = ? AND applied_at IS NULL AND rejected_at IS NULL`,
+           WHERE id = ? AND applied_at IS NULL AND rejected_at IS NULL
+             AND closed_at IS NULL`,
         )
         .run(now, rowId);
       if (Number(upd.changes) === 0) {
@@ -347,6 +354,7 @@ export function handleUpdateAgentPromptRejected(args: {
     .prepare(
       `SELECT id, version FROM agent_prompts
        WHERE agent_key = ? AND applied_at IS NULL AND rejected_at IS NULL
+         AND closed_at IS NULL
          AND prompt = ? AND reason = ?
        ORDER BY version ASC LIMIT 1`,
     )
@@ -365,7 +373,8 @@ export function handleUpdateAgentPromptRejected(args: {
     if (pending) {
       db.prepare(
         `UPDATE agent_prompts SET rejected_at = ?
-         WHERE id = ? AND applied_at IS NULL AND rejected_at IS NULL`,
+         WHERE id = ? AND applied_at IS NULL AND rejected_at IS NULL
+           AND closed_at IS NULL`,
       ).run(now, pending.id);
     } else {
       // Не молчим: строку версии кладут ДО создания approval'а

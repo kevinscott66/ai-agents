@@ -14,9 +14,16 @@
  * таблице approvals, а две одинаковые версии по тексту неразличимы. Поэтому
  * миграция 050 даёт `agent_prompts.approval_id`, и закрытие идёт строго по
  * нему.
+ *
+ * Закрывающий маркер — отдельная колонка `closed_at` (миграция 051), а не
+ * `rejected_at`: протухшая заявка не отказ. `rejected_at` заведена аудитом
+ * 2026-08-27 затем, чтобы роль не переспрашивала то, в чём ей уже отказали, —
+ * и протухшая заявка, показанная как «rejected», отбила бы ровно тот
+ * переспрос, который здесь нужен.
  */
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { db } from "../lib/db.ts";
+import { executeTool } from "../lib/tools-schema.ts";
 import {
   insertPendingAgentPrompt,
   handleUpdateAgentPromptApproved,
@@ -57,13 +64,14 @@ function propose(createdAt?: number): { approvalId: string; version: number } {
 function rows() {
   return db
     .prepare(
-      `SELECT version, applied_at, rejected_at, approval_id FROM agent_prompts
-       WHERE agent_key = ? ORDER BY version`,
+      `SELECT version, applied_at, rejected_at, closed_at, approval_id
+       FROM agent_prompts WHERE agent_key = ? ORDER BY version`,
     )
     .all(TARGET) as Array<{
     version: number;
     applied_at: number | null;
     rejected_at: number | null;
+    closed_at: number | null;
     approval_id: string | null;
   }>;
 }
@@ -84,6 +92,7 @@ describe("строка версии закрывается вместе с за�
       db.prepare("PRAGMA table_info(agent_prompts)").all() as Array<{ name: string }>
     ).map((c) => c.name);
     expect(cols).toContain("approval_id");
+    expect(cols).toContain("closed_at");
   });
 
   test("истёкшая заявка помечает свою версию, а не оставляет её кандидатом", () => {
@@ -92,8 +101,10 @@ describe("строка версии закрывается вместе с за�
 
     const [v1] = rows();
     expect(v1!.approval_id).toBe(approvalId);
-    expect(v1!.rejected_at).not.toBeNull();
+    expect(v1!.closed_at).not.toBeNull();
     expect(v1!.applied_at).toBeNull();
+    // Протухло — не «владелец отказал». Подделка отказа отбила бы переспрос.
+    expect(v1!.rejected_at).toBeNull();
   });
 
   test("после истечения одобрение того же текста стамповывает НОВУЮ версию", () => {
@@ -118,7 +129,8 @@ describe("строка версии закрывается вместе с за�
     markApprovalFailed(approvalId, "boom");
 
     const [v1] = rows();
-    expect(v1!.rejected_at).not.toBeNull();
+    expect(v1!.closed_at).not.toBeNull();
+    expect(v1!.rejected_at).toBeNull();
     expect(v1!.applied_at).toBeNull();
   });
 
@@ -135,6 +147,7 @@ describe("строка версии закрывается вместе с за�
     const [v1] = rows();
     expect(v1!.applied_at).toBe(appliedAt);
     expect(v1!.rejected_at).toBeNull();
+    expect(v1!.closed_at).toBeNull();
   });
 
   test("закрытие идёт строго по approval_id — чужую живую версию не трогает", () => {
@@ -143,8 +156,8 @@ describe("строка версии закрывается вместе с за�
     expect(closeAgentPromptProposals([a.approvalId])).toBe(1);
 
     const [v1, v2] = rows();
-    expect(v1!.rejected_at).not.toBeNull();
-    expect(v2!.rejected_at).toBeNull();
+    expect(v1!.closed_at).not.toBeNull();
+    expect(v2!.closed_at).toBeNull();
     expect(v2!.approval_id).toBe(b.approvalId);
   });
 
@@ -155,11 +168,38 @@ describe("строка версии закрывается вместе с за�
 
     const [legacy, linked] = rows();
     expect(legacy!.approval_id).toBeNull();
-    expect(legacy!.rejected_at).toBeNull();
-    expect(linked!.rejected_at).not.toBeNull();
+    expect(legacy!.closed_at).toBeNull();
+    expect(linked!.closed_at).not.toBeNull();
   });
 
   test("пустой список — не запрос в базу и не ошибка", () => {
     expect(closeAgentPromptProposals([])).toBe(0);
+  });
+
+  test("GET_PROMPT_HISTORY зовёт протухшее «closed», а не «rejected»", async () => {
+    // v1 протухла, v2 ждёт решения, v3 применена — четыре исхода должны
+    // называться четырьмя разными словами, иначе роль читает историю неверно.
+    propose(Date.now() - 48 * 3_600_000);
+    expireStaleApprovals({ ttlMs: 3_600_000 });
+    propose();
+    propose();
+    handleUpdateAgentPromptApproved(payload(), { agentKey: AGENT, chatId: CHAT });
+
+    const out = JSON.parse(
+      await executeTool(
+        "GET_PROMPT_HISTORY",
+        { agentKey: TARGET },
+        { agentKey: "aieng", chatId: CHAT },
+      ),
+    ) as {
+      ok: boolean;
+      history: Array<{ version: number; status: string; closed: boolean; rejected: boolean }>;
+    };
+    expect(out.ok).toBe(true);
+    const byVersion = new Map(out.history.map((h) => [h.version, h]));
+    expect(byVersion.get(1)!.status).toBe("closed");
+    expect(byVersion.get(1)!.rejected).toBe(false);
+    expect(byVersion.get(2)!.status).toBe("applied");
+    expect(byVersion.get(3)!.status).toBe("pending");
   });
 });
