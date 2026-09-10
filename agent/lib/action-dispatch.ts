@@ -93,6 +93,7 @@ import {
 } from "./dispatch/diagnostic-action.ts";
 import {
   maxPendingApprovals,
+  countPendingApprovals,
   emitApprovalCreated,
   insertApprovalRow,
   getApproval,
@@ -1684,10 +1685,13 @@ export async function gateOrDispatch<T extends ActionType>(
       | { kind: "queued"; action: ReturnType<typeof insertActionRow>; approvalId: string };
     try {
       txResult = withApprovalTransaction((database) => {
-        const pending = database
-          .prepare(`SELECT COUNT(*) AS n FROM approvals WHERE status='pending' AND requested_by=?`)
-          .get(ctx.agentKey) as { n: number };
-        if (pending.n >= cap) return { kind: "full" as const, pending: pending.n, cap };
+        // Аудит 2026-09-10: счёт идёт по чату — предел защищает выдачу
+        // `/approvals` этого чата, и складывать в него доски, которых человек
+        // здесь не видит, значит отбивать работу без причины (докблок
+        // `maxPendingApprovals`). Запрос тот же самый, что у счётчика в
+        // approvals.ts, — одна форма на оба места.
+        const pending = countPendingApprovals(ctx.agentKey, ctx.chatId, database);
+        if (pending >= cap) return { kind: "full" as const, pending, cap };
 
         const action = insertActionRow(actionType, {
           agentKey: ctx.agentKey,
@@ -1728,8 +1732,9 @@ export async function gateOrDispatch<T extends ActionType>(
     }
     if (txResult.kind === "full") {
       const err =
-        `очередь одобрений переполнена: у ${ctx.agentKey} уже ${txResult.pending} ` +
-        `нерешённых заявок при пределе ${txResult.cap} — дождись решения человека`;
+        `очередь одобрений переполнена: у ${ctx.agentKey} в этом чате уже ` +
+        `${txResult.pending} нерешённых заявок при пределе ${txResult.cap} — ` +
+        `дождись решения человека`;
       log.warn("approval queue full", {
         requestId,
         agentKey: ctx.agentKey,

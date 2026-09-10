@@ -20,6 +20,7 @@ import { StringSession } from "telegram/sessions/index.js";
 import { Logger, LogLevel } from "telegram/extensions/Logger.js";
 import * as readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
+import { Writable } from "node:stream";
 import {
   createCipheriv,
   createDecipheriv,
@@ -130,6 +131,70 @@ export function decryptEncryptedSession(blob: string, passphrase: string | undef
   return decryptSession(blob, passphrase);
 }
 
+/**
+ * Вопрос в терминал. Интерфейс создаётся на один вопрос и сразу закрывается:
+ * `readline.close()` входной поток не закрывает, а держать общий интерфейс
+ * нельзя — два интерфейса на одном stdin делили бы ввод с `askHidden`.
+ */
+async function ask(promptText: string): Promise<string> {
+  const rl = readline.createInterface({ input, output });
+  try {
+    return (await rl.question(promptText)).trim();
+  } finally {
+    rl.close();
+  }
+}
+
+/**
+ * То же, но без эха.
+ *
+ * Аудит 2026-09-10: приглашение обещало «не покажется», а `rl.question` с
+ * обычным output печатает каждый символ — облачный пароль 2FA целиком
+ * оставался на экране и в скроллбэке терминала. Это единственный секрет,
+ * который здесь вводит человек, и единственный, которого нет ни в `.env`, ни в
+ * `agent/data`: он открывает аккаунт Telegram владельца, а не сессию userbot'а.
+ * Обещание в тексте приглашения делало проверку ненужной — человек не смотрит
+ * на экран, набирая то, что ему пообещали скрыть, и узнаёт о следе постфактум.
+ *
+ * Эхо печатает сам readline (в TTY он выключает echo драйвера и рисует строку
+ * сам), поэтому глушим не терминал, а `output` интерфейса: приглашение пишем
+ * напрямую в stdout, а весь вывод readline уходит в /dev/null. Редактирование
+ * строки (backspace, Ctrl-U) при этом продолжает работать — меняется только
+ * то, куда идёт отрисовка. Приватных полей readline (`_writeToOutput`) не
+ * трогаем: между версиями Bun они не гарантированы.
+ *
+ * `io` — шов для теста: подменить `process.stdin` глобально нельзя, а без
+ * подмены проверить «не печатается» нечем. В обоих боевых вызовах он опущен.
+ */
+export async function askHidden(
+  promptText: string,
+  io: { input: NodeJS.ReadableStream; output: NodeJS.WritableStream } = {
+    input,
+    output,
+  },
+): Promise<string> {
+  const devNull = new Writable({
+    write(_chunk, _enc, cb) {
+      cb();
+    },
+  });
+  const rl = readline.createInterface({
+    input: io.input,
+    output: devNull,
+    // Без TTY на входе эха нет и так, а `terminal: true` на трубе включил бы
+    // ненужный редактор строки.
+    terminal: (io.input as { isTTY?: boolean }).isTTY === true,
+  });
+  io.output.write(promptText);
+  try {
+    return (await rl.question("")).trim();
+  } finally {
+    rl.close();
+    // Перевод строки печатал бы readline — тот самый вывод, который заглушен.
+    io.output.write("\n");
+  }
+}
+
 async function main(): Promise<void> {
   const apiIdRaw = process.env.TELEGRAM_API_ID;
   const apiHash = process.env.TELEGRAM_API_HASH;
@@ -154,8 +219,6 @@ async function main(): Promise<void> {
 
   console.log(`[userbot-login] логиним ${maskPhone(phone)} (apiId=${apiId})`);
 
-  const rl = readline.createInterface({ input, output });
-
   const stringSession = new StringSession("");
   const client = new TelegramClient(stringSession, apiId, apiHash, {
     connectionRetries: 5,
@@ -164,22 +227,13 @@ async function main(): Promise<void> {
 
   await client.start({
     phoneNumber: async () => phone,
-    phoneCode: async () => {
-      const code = await rl.question("[userbot-login] SMS-код от Telegram: ");
-      return code.trim();
-    },
-    password: async () => {
-      const pwd = await rl.question(
-        "[userbot-login] облачный пароль (2FA, не покажется): ",
-      );
-      return pwd.trim();
-    },
+    phoneCode: async () => ask("[userbot-login] SMS-код от Telegram: "),
+    password: async () =>
+      askHidden("[userbot-login] облачный пароль (2FA, не покажется): "),
     onError: (err) => {
       console.error("[userbot-login] error:", err.message);
     },
   });
-
-  rl.close();
 
   const session = (client.session as StringSession).save();
   if (!session) {

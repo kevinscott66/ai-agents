@@ -49,7 +49,9 @@ import {
 import { wikiList, wikiRead, wikiScopes, WIKI_LIST_MAX, type Scope } from "./memory.ts";
 import {
   ACTION_LIST_COLUMNS,
+  ACTION_STATUSES,
   getAction,
+  isActionStatus,
   listActions,
   rowToAction,
   type AgentActionListRow,
@@ -1547,6 +1549,9 @@ export function startMiniappServer(
       const where: string[] = [];
       const args: unknown[] = [];
       if (agent) {
+        // `agent_key` тоже без словаря — и тоже намеренно: ключ бывает
+        // составным (`design:svg-fallback`, см. `budgetOwner`), в CHARACTERS
+        // такой строки нет, а строки в таблице есть.
         where.push("agent_key = ?");
         args.push(agent);
       }
@@ -1555,10 +1560,27 @@ export function startMiniappServer(
         args.push(chatId);
       }
       if (status) {
+        // Аудит 2026-09-10: `status` — закрытое множество (ACTION_STATUSES), а
+        // неизвестное значение уходило в WHERE как есть и давало `200
+        // {"actions":[]}`. Тот же класс, что чинили в GET_LOGS
+        // (tools-schema.ts): «модель по здравому смыслу пишет `failed` — и
+        // получает count: 0, из которого докладывает „ошибок нет"». Через тул
+        // тот же фильтр отвечает списком допустимых, через HTTP-ручку — пустым
+        // списком; соседи по файлу (/api/tasks, /api/approvals) отвечают 400.
+        if (!isActionStatus(status)) {
+          return json(
+            { error: `unknown status: ${status}`, allowed: ACTION_STATUSES },
+            400,
+          );
+        }
         where.push("status = ?");
         args.push(status);
       }
       if (type) {
+        // `action_type` словарём НЕ проверяется, и это не недосмотр: колонка —
+        // открытый TEXT, `logToolCall` (lib/audit.ts:172) пишет туда имя любой
+        // тулзы, а докблок там прямо объясняет, почему тулзы не заводят в
+        // ACTION_TYPES. Закрытый словарь здесь отсекал бы существующие строки.
         where.push("action_type = ?");
         args.push(type);
       }
@@ -1655,6 +1677,21 @@ export function startMiniappServer(
       if (chatId !== undefined) {
         where.push("chat_id = ?");
         args.push(chatId);
+      }
+      // Аудит 2026-09-10: нечисловой `before` условие пагинации просто не
+      // добавлял — вместе с ним пропадал и `beforeId`, который живёт только
+      // внутри этого блока. Ответ 200 с самой свежей страницей; клиент
+      // (Logs.tsx) дописывает её к списку и снова берёт курсором последний
+      // показанный элемент — дубликаты и «Загрузить ещё», которая не
+      // кончается. Соседняя /api/actions этот же класс закрыла явно
+      // («неизвестный id — это 400, а не „покажу с начала"»), здесь осталась
+      // молчаливая потеря фильтра. `before_id` без `before` бесполезен по той
+      // же причине: тай-брейк без границы страницы не применяется.
+      if (before !== null && !Number.isFinite(Number(before))) {
+        return json({ error: `invalid before cursor: ${before}` }, 400);
+      }
+      if (beforeId && before === null) {
+        return json({ error: "before_id requires before" }, 400);
       }
       if (before && Number.isFinite(Number(before))) {
         if (beforeId) {
@@ -1788,6 +1825,21 @@ export function startMiniappServer(
       const agentParam = url.searchParams.get("agent");
       const chatId = chatIdParam(url);
       if (chatId instanceof Response) return chatId;
+      // Аудит 2026-09-10: `badAgentKey` стоял на всех трёх ПИШУЩИХ ветках, а
+      // на читающей — нет, хотя её докблок ниже как раз про «переопределение
+      // роли осталось невидимым». `getAutonomy` по неизвестному ключу молча
+      // спускается на чатовый и глобальный уровень, и ответ 200 показывал
+      // ЧУЖОЙ режим рядом с эхом опечатки: `?agent=Backend` (ключ — `backend`)
+      // отдавал `{"mode":"semi_auto","agent":"Backend"}`, пока у роли стоял
+      // `full_auto`. Ровно то введение админа в заблуждение, которое чинили на
+      // POST-ветках.
+      // Пустая строка (`?agent=`) — это «без роли», ровно как её трактует сам
+      // `getAutonomy` (`if (agentKey)`, permissions.ts:585); опечаткой она быть
+      // не может, поэтому в словарь не идёт.
+      if (agentParam) {
+        const bad = badAgentKey(agentParam);
+        if (bad) return bad;
+      }
       const mode = getAutonomy(chatId, agentParam ?? undefined);
       return json({
         mode,

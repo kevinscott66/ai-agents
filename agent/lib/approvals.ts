@@ -86,6 +86,19 @@ export const APPROVAL_TTL_MS = 24 * HOUR_MS;
  *
  * Предел на роль, а не на всю таблицу: одна зациклившаяся роль не должна
  * закрывать очередь одиннадцати другим.
+ *
+ * Аудит 2026-09-10: предел на роль считался по ВСЕЙ таблице, без чата, — хотя
+ * вред, которым он обоснован абзацем выше, чат-локальный: `/approvals`
+ * показывает `listPendingApprovals(chatId, 20, …)`, то есть очередь одного
+ * чата. Заявки роли `smm` в чате A не вытесняют из выдачи никого в чате B, но
+ * счётчик их складывал: набрав десять неразобранных заявок на одной доске,
+ * роль получала отказ на всех остальных. Отказ этот — не «встань в очередь», а
+ * `kind: "error"`: работа теряется, а причина указывает на очередь, которой в
+ * этом чате нет и которую отсюда не видно. Чат в счёте — `chat_id` заявки, тот
+ * же ключ, по которому её потом покажут человеку.
+ *
+ * Глобальный рост таблицы это не оголяет: за ним следит отдельная проверка
+ * `checkApprovalBacklog` (alerting.ts), считающая pending по всем чатам.
  */
 export function maxPendingApprovals(): number {
   const raw = Number(process.env.MAX_PENDING_APPROVALS);
@@ -95,13 +108,26 @@ export function maxPendingApprovals(): number {
 /** Значение по умолчанию — для тестов и вызывающих, которым нужен порядок. */
 export const MAX_PENDING_APPROVALS = 10;
 
-/** Сколько нерешённых заявок сейчас висит на агенте. */
-export function countPendingApprovals(agentKey: string, database: Database = db): number {
+/**
+ * Сколько нерешённых заявок сейчас висит на агенте.
+ *
+ * `chatId` не задан — считаем по всем чатам (так смотрят на роль целиком).
+ * Предел очереди зовёт с чатом: см. докблок `maxPendingApprovals`.
+ */
+export function countPendingApprovals(
+  agentKey: string,
+  chatId?: number,
+  database: Database = db,
+): number {
+  const conds = ["status = 'pending'", "requested_by = ?"];
+  const args: unknown[] = [agentKey];
+  if (chatId !== undefined && chatId !== null) {
+    conds.push("chat_id = ?");
+    args.push(chatId);
+  }
   const row = database
-    .prepare(
-      `SELECT COUNT(*) AS n FROM approvals WHERE status = 'pending' AND requested_by = ?`,
-    )
-    .get(agentKey) as { n: number };
+    .prepare(`SELECT COUNT(*) AS n FROM approvals WHERE ${conds.join(" AND ")}`)
+    .get(...args as never[]) as { n: number };
   return row.n;
 }
 

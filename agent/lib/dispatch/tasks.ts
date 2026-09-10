@@ -12,6 +12,9 @@ import {
   assignTask,
   updateTaskStatus,
   getTask,
+  isDiagTaskInput,
+  DIAG_ASSIGNEE,
+  OPEN_TASK_STATUSES,
   type Task,
 } from "../tasks.ts";
 import type { PayloadByType } from "../action-payload.ts";
@@ -154,7 +157,8 @@ export function handleAssignTask(
   payload: PayloadByType["ASSIGN_TASK"],
   ctx: TaskHandlerContext,
 ): TaskHandlerResult {
-  if (!ownTask(payload.taskId, ctx, "ASSIGN_TASK")) {
+  const current = ownTask(payload.taskId, ctx, "ASSIGN_TASK");
+  if (!current) {
     return { ok: false, error: `task not found: ${payload.taskId}` };
   }
   // Худший исход здесь — «переназначили» и потеряли: прежний исполнитель уже
@@ -162,6 +166,34 @@ export function handleAssignTask(
   const assignedTo = canonicalAssignee(payload.assignedTo ?? "");
   if (!assignedTo) {
     return { ok: false, error: assigneeError(String(payload.assignedTo ?? "")) };
+  }
+  // Аудит 2026-09-10: сами инварианты стоят в `assignTask` (докблок там же) —
+  // это последний рубеж у самой записи. Но брошенное оттуда исключение
+  // приходит к модели как `dispatch/audit failed: …` и пишет ERROR-строку
+  // «dispatch threw», то есть отказ по правилу выглядит внутренней поломкой.
+  // Отказ по правилу — работа этого слоя, ровно как проверка авторства у
+  // отмены ниже: сюда его и выносим, с текстом, по которому видно, что делать.
+  if (isDiagTaskInput(current.input) && assignedTo !== DIAG_ASSIGNEE) {
+    log.warn("[security] ASSIGN_TASK: увод задачи самопочинки — отказ", {
+      task_id: current.id,
+      agent: ctx.agentKey,
+      requested: assignedTo,
+    });
+    return {
+      ok: false,
+      error:
+        `cannot reassign task ${current.id}: это задача самодиагностики, ` +
+        `её забирает по адресу ${DIAG_ASSIGNEE} (иначе ретрая упавшего действия ` +
+        `не будет). Нужна своя работа — заведи задачу через CREATE_TASK.`,
+    };
+  }
+  if (!OPEN_TASK_STATUSES.includes(current.status)) {
+    return {
+      ok: false,
+      error:
+        `cannot reassign task ${current.id}: статус ${current.status} терминальный, ` +
+        `работа закончена. Нужна новая работа по тому же поводу — CREATE_TASK.`,
+    };
   }
   const task = assignTask(payload.taskId, assignedTo);
   return {

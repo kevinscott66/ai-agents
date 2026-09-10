@@ -30,7 +30,7 @@ import {
 } from "node:fs";
 import { join, dirname, resolve, relative, sep } from "node:path";
 import { db, type ChatRow } from "./db.ts";
-import { log } from "./log.ts";
+import { log, scrubSecretString } from "./log.ts";
 import { resolveMemoryDir } from "./memory-dir.ts";
 
 const MEMORY_DIR = resolveMemoryDir(process.env.MEMORY_DIR);
@@ -141,9 +141,36 @@ const CODE_SPAN_RE = /(```[\s\S]*?(?:```|$)|`[^`\n]*`)/g;
  */
 const EMAIL_RE = /[\w.+-]+@[\w-]+(?:\.[\w-]+)*\.[A-Za-z]{2,}/g;
 
+/**
+ * Аудит 2026-09-10: вики — единственный постоянный текстовый сток проекта, у
+ * которого не было скруббера секретов. У логов он есть (`scrubSecretString`,
+ * lib/log.ts, «ALWAYS on — secrets must never log»), у `agent_actions.error` и
+ * у снапшота health — тот же самый; здесь фильтровались только персональные
+ * данные, да и те выключаются переменной `WIKI_PII_FILTER=0`.
+ *
+ * Разница в цене как раз обратная той, что была в защите. Строку лога
+ * перетирает ротация, а страницу вики не перетирает ничто: файл лежит в
+ * `agent/data/wiki/**` до конца жизни проекта, попадает в бэкап, в FTS-индекс
+ * и в контекст КАЖДОГО хода — `wikiSearch` подмешивает хиты в промпт, а
+ * `wikiLog` читается на каждом хендоффе. Пишут туда модели: `WRITE_WIKI` — их
+ * собственный аргумент, а компактор кладёт пересказ переписки, в которой
+ * владелец мог продиктовать ключ. Одного `TELEGRAM_SESSION=1BQ…`, попавшего в
+ * заметку «как мы чинили юзербота», хватает, чтобы секрет пережил и ротацию,
+ * и переустановку.
+ *
+ * Идёт ДО фильтра PII и до его выключателя: `WIKI_PII_FILTER=0` — про имена и
+ * телефоны в примерах конфига, а не разрешение писать на диск ключи. Ровно
+ * поэтому у скруббера секретов выключателя нет нигде в проекте.
+ *
+ * Цена ложного срабатывания — три звёздочки вместо плейсхолдера в примере
+ * (`Authorization: Bearer <token>` → `Bearer ***`). Обратная цена — ключ,
+ * который никто уже не найдёт.
+ */
 export function sanitizeWikiContent(input: string): string {
-  if (WIKI_PII_FILTER_DISABLED || !input) return input;
-  const base = input
+  if (!input) return input;
+  const scrubbed = scrubSecretString(input);
+  if (WIKI_PII_FILTER_DISABLED) return scrubbed;
+  const base = scrubbed
     .replace(EMAIL_RE, "<email-redacted>")
     .replace(/\+\d[\d\s\-()]{8,}\d/g, "<phone-redacted>");
   // Чётные индексы — текст вне кода, нечётные — сам код (группа в регулярке).

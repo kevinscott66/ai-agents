@@ -328,16 +328,84 @@ export function getTask(id: string): Task | null {
   return row ? rowToTask(row) : null;
 }
 
+/**
+ * Сменить исполнителя задачи.
+ *
+ * Аудит 2026-09-10: единственная пишущая функция этого файла без единой
+ * проверки — голый UPDATE по id, без FSM, без CAS и без докблока, тогда как у
+ * соседнего `updateTaskStatus` есть и таблица переходов, и CAS по статусу
+ * (аудит 2026-08-29), а у отмены — ещё и проверка авторства (аудит
+ * 2026-08-28). Действие при этом засеяно ВСЕМ 12 ролям как `allowed=1,
+ * requires_approval=0` (migrations.ts), в `CALLER_RESTRICTED` его нет, и
+ * единственный барьер в хендлере — граница чата и каноничность ключа роли.
+ *
+ * Закрываются две дыры, обе — «переназначили, и работа исчезла молча»:
+ *
+ * 1. `assigned_to` у диагностической задачи — это не подпись, а АДРЕС
+ *    ИСПОЛНЕНИЯ. Петля самопочинки C15 (action-dispatch.ts) создаёт задачу
+ *    строго с `assignedTo: "aieng"` и `_diag: true`, а поллер выбирает работу
+ *    запросом `WHERE assigned_to = 'aieng' AND status = 'pending' AND input
+ *    LIKE '%"_diag":true%'` (self-diag.ts). Любая роль, дёрнув `ASSIGN_TASK
+ *    {taskId, assignedTo: "smm"}`, получала `ok: true` — и задача навсегда
+ *    выпадала из выборки поллера: ретрая упавшего действия не будет никогда, а
+ *    в очереди smm окажется задача, чей `input` — машинный payload чужого
+ *    вызова. Ошибку не увидит никто: наверху ok, в логах ничего.
+ * 2. Терминальные статусы. `done`/`failed`/`cancelled` переписывались на
+ *    другого исполнителя задним числом — история задачи становилась чужой.
+ *    В очередь такая задача не вернётся (`listTasksByAssignee` зовут с
+ *    открытыми статусами), то есть это порча атрибуции, а не воскрешение
+ *    работы, — но именно её и читают в разборе «кто это сделал».
+ *
+ * CAS по статусу — из тех же соображений, что и в `updateTaskStatus`: между
+ * чтением и записью статус успевает сменить кто угодно из пишущих в ту же БД,
+ * и проигравший обязан узнать об этом, а не записать поверх.
+ */
 export function assignTask(id: string, assignedTo: string): Task {
   const t = getTask(id);
   if (!t) throw new Error(`task not found: ${id}`);
+  if (!OPEN_TASK_STATUSES.includes(t.status)) {
+    throw new Error(
+      `cannot reassign task in terminal status: ${t.status} (task ${id})`,
+    );
+  }
+  if (isDiagTaskInput(t.input) && assignedTo !== DIAG_ASSIGNEE) {
+    throw new Error(
+      `diagnostic task is addressed to ${DIAG_ASSIGNEE} and cannot be reassigned (task ${id})`,
+    );
+  }
   const now = Date.now();
-  db.prepare(
-    `UPDATE tasks SET assigned_to = ?, updated_at = ? WHERE id = ?`,
-  ).run(assignedTo, now, id);
+  const res = db
+    .prepare(
+      `UPDATE tasks SET assigned_to = ?, updated_at = ? WHERE id = ? AND status = ?`,
+    )
+    .run(assignedTo, now, id, t.status);
+  if (res.changes !== 1) {
+    const actual = getTask(id);
+    throw new Error(
+      `task status changed under assignment: ${actual?.status ?? "<задача исчезла>"} (task ${id})`,
+    );
+  }
   const updated = getTask(id);
   if (!updated) throw new Error("failed to assign task");
   return updated;
+}
+
+/**
+ * Кому адресована задача самопочинки. Строка одна и та же в трёх местах —
+ * здесь, в C15-петле (`action-dispatch.ts`) и в запросе поллера
+ * (`self-diag.ts`); импортировать её оттуда нельзя, не заводя цикл, поэтому
+ * связь держится этим комментарием и тестом
+ * `tests/audit-2026-09-10-assign-task-guards.test.ts`.
+ */
+export const DIAG_ASSIGNEE = "aieng";
+
+/** Тот же признак, по которому поллер самодиагностики выбирает работу. */
+export function isDiagTaskInput(input: unknown): boolean {
+  return (
+    !!input &&
+    typeof input === "object" &&
+    (input as { _diag?: unknown })._diag === true
+  );
 }
 
 export interface UpdateStatusPatch {

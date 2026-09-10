@@ -1,27 +1,71 @@
+/**
+ * Контракт доверия к заголовкам с адресом клиента.
+ *
+ * Аудит 2026-09-10: первый тест этого файла читал `deploy/Caddyfile` и
+ * утверждал «прокси перезаписывает forwarded-идентичность». К сайту это
+ * отношения не имеет ни одной стороной, а имя файла и заголовок describe
+ * обещали ровно обратное — единственная в репозитории проверка «доверенного
+ * прокси» для сайта закрывала чужой конфиг:
+ *
+ *  - `deploy/Caddyfile` описывает `agents.example.com → localhost:8787` —
+ *    это Mini App агентской команды, другой сервис и другой порт;
+ *  - сайт слушает :8790 и стоит за nginx, конфига которого в репозитории нет
+ *    (об этом прямо сказано в докблоке `trustedProxyHops`, index.ts);
+ *  - сам Caddy на этом хосте ни разу не поднимался — шапка Caddyfile
+ *    объясняет, почему (`:443` занят сторонним xray, прод ходит через nginx).
+ *
+ * Проверять чужой конфиг не вредно, вредно считать это покрытием своего.
+ * Поэтому здесь остаётся то, что действительно проверяемо из кода: поведение
+ * `clientIpKey` на границе доверия. Недостающее — форма vhost'а сайта —
+ * зафиксировано ниже как признанный пробел, вместе с тем свойством, которое
+ * делает его неопасным: без петлевого пира заголовки не читаются вообще.
+ */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { clientIpKey } from "./index.ts";
 
-const CADDYFILE = readFileSync(
-  join(import.meta.dir, "..", "..", "deploy", "Caddyfile"),
-  "utf8",
-);
-
-describe("trusted proxy client IP contract", () => {
-  test("Caddy overwrites forwarded identity instead of appending client input", () => {
-    expect(CADDYFILE).toContain("header_up X-Real-IP {remote_host}");
-    expect(CADDYFILE).toContain("header_up X-Forwarded-For {remote_host}");
-    expect(CADDYFILE).not.toContain("{http.request.header.X-Forwarded-For}");
+describe("clientIpKey: граница доверия", () => {
+  test("от постороннего пира forwarded-заголовки игнорируются", () => {
+    expect(clientIpKey("198.51.100.7", "203.0.113.9")).toBe("ip:203.0.113.9");
   });
 
-  test("the application ignores forwarded headers from an untrusted peer", () => {
-    expect(clientIpKey("198.51.100.7", "203.0.113.9")).toBe(
-      "ip:203.0.113.9",
+  test("с петли берётся правый (ближайший) элемент XFF", () => {
+    expect(clientIpKey("198.51.100.7", "127.0.0.1")).toBe("ip:198.51.100.7");
+  });
+
+  test("левые элементы XFF прислал клиент — они не берутся", () => {
+    // `proxy_add_x_forwarded_for` ДОПИСЫВАЕТ remote_addr к присланному
+    // клиентом списку: начало списка подконтрольно атакующему целиком.
+    expect(clientIpKey("1.1.1.1, 2.2.2.2, 198.51.100.7", "127.0.0.1")).toBe(
+      "ip:198.51.100.7",
     );
   });
 
-  test("the loopback proxy path uses the overwritten rightmost client value", () => {
-    expect(clientIpKey("198.51.100.7", "127.0.0.1")).toBe("ip:198.51.100.7");
+  test("пир неизвестен — это не «свой»", () => {
+    expect(clientIpKey("198.51.100.7", null)).toBe("ip:unknown");
+  });
+});
+
+describe("пробел: конфига vhost'а сайта в репозитории нет", () => {
+  test("`deploy/Caddyfile` — соседний сервис, не сайт", () => {
+    // Тест намеренно утверждает НЕ покрытие, а его отсутствие: пока в
+    // Caddyfile нет апстрима сайта, любые выводы из него о сайте неверны.
+    // Появится — этот тест упадёт, и контракт придётся описать по-настоящему.
+    const caddyfile = readFileSync(
+      join(import.meta.dir, "..", "..", "deploy", "Caddyfile"),
+      "utf8",
+    );
+    expect(caddyfile).toContain("reverse_proxy localhost:8787");
+    expect(caddyfile).not.toContain("8790");
+  });
+
+  test("неизвестный vhost не опасен: без петлевого пира заголовков нет", () => {
+    // Единственное свойство, которое держит эту неизвестность в рамках:
+    // заголовок читается ТОЛЬКО когда сокет пришёл с петли. Ошибись владелец в
+    // nginx — обходить будет нечего, пока запрос идёт напрямую снаружи.
+    expect(clientIpKey("10.0.0.1", "203.0.113.9", "10.0.0.2")).toBe(
+      "ip:203.0.113.9",
+    );
   });
 });

@@ -88,7 +88,18 @@ const DEFAULT_WEB_DIST = join(import.meta.dir, "..", "web", "dist");
  */
 export function webDist(): string {
   const v = process.env.SITE_WEB_DIST?.trim();
-  return v ? v : DEFAULT_WEB_DIST;
+  if (!v) return DEFAULT_WEB_DIST;
+  // Аудит 2026-09-10: хвостовой разделитель ломал ВСЮ статику. Гейт обхода
+  // путей в `serveStatic` сверяет `filePath.startsWith(dist + sep)`, а `join`
+  // хвостовой слэш схлопывает: при `SITE_WEB_DIST=/opt/web/dist/` сравнение
+  // шло с `/opt/web/dist//`, чему не соответствует ни один реальный путь.
+  // Каждый бандл, шрифт и картинка сбрасывались на `dist`, который не файл, и
+  // уходили в 404; `/` при этом продолжал отдавать index.html (там `join`
+  // даёт ровно `dist`). Снаружи — пустая оболочка сайта без единой строки в
+  // логе сервера. Значение переменной задаёт оператор, а хвостовой слэш в
+  // пути к каталогу — не опечатка, а обычная форма записи.
+  const stripped = v.replace(/[/\\]+$/, "");
+  return stripped || sep;
 }
 
 // ---- helpers ------------------------------------------------------------
