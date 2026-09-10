@@ -33,7 +33,7 @@
  * синхронная запись в fd 2 ниже, — а не патч чужого модуля.
  */
 
-import { log, scrubSecretString } from "./log.ts";
+import { log, scrubSecretString, scrubbedHead } from "./log.ts";
 
 /** Кадры, по которым узнаётся стек сетевого клиента telegraf. */
 const TELEGRAF_FRAMES = [
@@ -93,7 +93,12 @@ process.on("uncaughtException", (err: any) => {
   const msg = err?.message ?? String(err);
   const stack = err?.stack ?? "";
   if (isTelegrafNoise(msg, stack)) {
-    log.warn("[telegram] swallowed", { msg: msg.slice(0, 200) });
+    // Скраб до обрезки, а не после: `log.warn` чистит `data`, но к тому
+    // времени `slice` уже отрезал бы хвост токена, и правило перестало бы
+    // совпадать. Форма ровно та: node-fetch кладёт в сообщение URL Bot API
+    // вместе с токеном (см. `TELEGRAM_TOKEN` в lib/log.ts), а сюда попадают
+    // как раз сетевые отказы.
+    log.warn("[telegram] swallowed", { msg: scrubbedHead(msg, 200) });
     return;
   }
 

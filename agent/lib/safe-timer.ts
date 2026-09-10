@@ -25,7 +25,7 @@
  * не туда, поэтому ссылаемся на текст, а не на позицию.
  */
 import { getErrorMessage } from "./errors.ts";
-import { log, scrubSecretString } from "./log.ts";
+import { log, scrubbedHead } from "./log.ts";
 
 /** Потолок на стек в логе — как у соседей (telegraf-patch, role-runtime-worker). */
 const MAX_STACK = 1000;
@@ -45,7 +45,7 @@ const MAX_STACK = 1000;
  */
 function stackOf(e: unknown): string | undefined {
   if (!(e instanceof Error) || typeof e.stack !== "string") return undefined;
-  return scrubSecretString(e.stack).slice(0, MAX_STACK);
+  return scrubbedHead(e.stack, MAX_STACK);
 }
 
 /**

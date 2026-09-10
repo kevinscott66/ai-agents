@@ -36,6 +36,7 @@ import {
 import { splitForTelegram } from "../lib/telegram-chunking.ts";
 import { userbotFloodCapacity, _resetRateLimits } from "../lib/rate-limits.ts";
 import { _resetFloodCooldowns } from "../lib/userbot-flood.ts";
+import { stripComments } from "./helpers/strip-comments.ts";
 
 const MAX_KEY = "USERBOT_FLOOD_MAX_PER_WINDOW";
 let prevMax: string | undefined;
@@ -142,9 +143,7 @@ describe("ведро юзербота: возвращаем только нет�
       "utf8",
     );
     // Комментарии цитируют старое имя, поэтому смотрим на КОД.
-    const code = src
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/^[ \t]*\/\/.*$/gm, "");
+    const code = stripComments(src);
     expect(code).not.toContain("sentParts");
     // Инкремент обязан стоять ПЕРЕД обращением к гварду, иначе упавшая
     // попытка снова окажется «неотправленной».

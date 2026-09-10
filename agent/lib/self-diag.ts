@@ -43,7 +43,7 @@ import { callAnthropic } from "./anthropic-client.ts";
 import type { DispatchCtx } from "./action-dispatch.ts";
 import type { PayloadFor } from "./action-payload.ts";
 import { getFixChain, appendFixChain } from "./fix-chain.ts";
-import { log } from "./log.ts";
+import { log, scrubbedHead } from "./log.ts";
 
 /**
  * Потолок ожидания одного ответа aieng.
@@ -686,7 +686,11 @@ Return JSON only.`;
   const parsed = parseAiengResponse(respText);
   if (!parsed) {
     updateTaskStatus(task.id, "failed", {
-      error: `aieng response not parseable as JSON: ${respText.slice(0, 200)}`,
+      // Ответ модели кладётся в `tasks.error` — на диск и в Mini App, — а
+      // скраббера на этой колонке нет (в отличие от `agent_actions.error`).
+      // Промпт выше несёт `failedError` и ПОЛНЫЙ payload упавшего действия, и
+      // непарсящийся ответ — это обычно пересказ входа. Аудит 2026-09-11.
+      error: `aieng response not parseable as JSON: ${scrubbedHead(respText, 200)}`,
     });
     return;
   }

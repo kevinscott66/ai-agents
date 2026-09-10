@@ -103,6 +103,14 @@ describe("применение", () => {
   });
 
   test("скраббер берётся из log.ts, а не переписан рядом", () => {
-    expect(CODE).toContain('import { log, scrubSecretString } from "./log.ts";');
+    // Раньше здесь стояла точная строка импорта — и она сломалась, когда в тот
+    // же импорт добавили `scrubbedHead` (аудит 2026-09-11). Утверждение не про
+    // состав списка, а про то, что `scrubSecretString` приходит ИЗ log.ts и
+    // рядом не переписан: точную строку заменяем на два независимых признака.
+    const imp = CODE.match(/import \{([^}]*)\} from "\.\/log\.ts";/);
+    expect(imp).not.toBeNull();
+    expect(imp![1]).toContain("scrubSecretString");
+    // Локальной копии регэкспов быть не должно — иначе они разойдутся.
+    expect(CODE).not.toContain("function scrubSecretString");
   });
 });

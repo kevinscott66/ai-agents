@@ -7,7 +7,7 @@
  * App-level errors (e.g. TGStat's 200 + {status:"error"}) stay with the caller.
  */
 import { getErrorMessage } from "./errors.ts";
-import { scrubSecretString } from "./log.ts";
+import { scrubbedHead } from "./log.ts";
 
 export interface FetchJsonOpts {
   /** Label for error messages, e.g. "figma" / "tgstat". */
@@ -119,9 +119,11 @@ export async function fetchJson<T = unknown>(
     // отдал бы его первыми же 160 символами. Строка отсюда уезжает в
     // `agent_actions.error` (в SQLite на диск, без обрезки при вставке),
     // админам через /api/actions и в контекст модели.
-    throw new Error(
-      scrubSecretString(`${label} ${res.status}: ${body.slice(0, 160)}`),
-    );
+    // Аудит 2026-09-11: скраббер стоял снаружи, а `slice` — внутри, то есть
+    // отрабатывал ПЕРВЫМ. Тело, где секрет пересекает 160-й символ, теряло
+    // хвост, правило (у префиксных форм это 20 символов payload'а) уже не
+    // набиралось, и начало ключа уходило в `agent_actions.error` открытым.
+    throw new Error(`${label} ${res.status}: ${scrubbedHead(body, 160)}`);
   }
   // Заявленный размер отсекает заведомо большие ответы до чтения; отсутствие
   // заголовка больше не означает «лимита нет» — дальше считаем байты сами.

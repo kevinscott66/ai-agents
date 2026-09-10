@@ -9,7 +9,7 @@
  */
 import { getErrorMessage } from "./errors.ts";
 import type { RunningBot } from "./types.ts";
-import { log, scrubSecretString } from "./log.ts";
+import { log, scrubbedHead } from "./log.ts";
 
 export interface HealthDeps {
   bots: RunningBot[];
@@ -154,7 +154,7 @@ export function startHealthMonitor(deps: HealthDeps): HealthMonitorHandle {
       // токен стоит в первых же символах и никакой slice его не срежет. Отсюда
       // он уезжал в SSE (см. publicHealth ниже) — то есть всем пользователям
       // Mini App, при первом же ECONNREFUSED до Telegram.
-      const msg = scrubSecretString(e?.message ?? String(e)).slice(0, 200);
+      const msg = scrubbedHead(e?.message ?? String(e), 200);
       state.set(key, {
         ...prev,
         username: b.username,
