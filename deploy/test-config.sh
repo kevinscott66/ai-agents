@@ -4,6 +4,17 @@
 
 set -euo pipefail
 
+# Все пути ниже — относительные (`Caddyfile`, `caddy.service`,
+# `setup-caddy.sh`), то есть скрипт работал только из самого `deploy/`. Из корня
+# репозитория — то есть ровно оттуда, откуда запускают всё остальное, и как
+# написано в его же собственной шапке «run locally before deployment», — он
+# падал на первой же проверке: «❌ Caddyfile missing», exit 1. Отличить это от
+# настоящей поломки конфигурации по выводу нельзя.
+#
+# Идиома та же, что в deploy/deploy.sh:31.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
 echo "=== Agent Team Deploy Config Test ==="
 
 # Check required files exist

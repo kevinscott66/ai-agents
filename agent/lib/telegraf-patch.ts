@@ -1,72 +1,39 @@
 /**
- * Bun + telegraf совместимость.
+ * Bun + telegraf: обработчики верхнего уровня.
  *
- * `redactToken` в telegraf делает `error.message = ...`, а у Bun .message часто
- * readonly — это валит процесс на любой сетевой ошибке. Здесь мы:
- *  1) Патчим redactToken: оборачиваем присваивание в try/catch + defineProperty.
- *  2) Глушим uncaughtException, если он пришёл изнутри telegraf-стека, —
- *     и ТОЛЬКО его. Любое другое необработанное исключение означает
- *     неизвестное состояние процесса: логируем, пишем alert и выходим,
- *     systemd поднимет чистый (см. комментарий у обработчика ниже).
+ * Здесь остался ровно один сайд-эффект на импорт — `uncaughtException` и
+ * `unhandledRejection`. Первый глушит шум сетевого клиента telegraf и ТОЛЬКО
+ * его; любое другое необработанное исключение означает неизвестное состояние
+ * процесса — логируем, пишем alert и выходим, systemd поднимет чистый (см.
+ * комментарий у обработчика ниже).
  *
- * Сайд-эффект на импорт. Если уже пропатчено — повторно не патчим.
+ * Аудит 2026-09-10: отсюда удалён monkey-patch `redactToken`, который занимал
+ * половину файла и не выполнялся НИ РАЗУ. Две независимые причины, обе
+ * проверяемые и закреплённые тестом
+ * `tests/audit-2026-09-10-telegraf-patch-dead.test.ts`:
+ *
+ *  1. Патчить было нечего. `telegraf/lib/core/network/client.js` (4.16.3)
+ *     объявляет `redactToken` как локальную функцию модуля и экспортирует
+ *     только `exports.default = ApiClient`. `client.redactToken` — undefined,
+ *     то есть условие `if (orig && …)` не выполнялось никогда, и патч молча
+ *     не делал ничего. Судить о том, работает ли он, было не по чему: и успех
+ *     (`[patch] telegraf redactToken wrapped`), и провал (`[patch] could not
+ *     patch redactToken`) писали строку в лог, а «нашли модуль, но метода в нём
+ *     нет» — самый вероятный исход — не писал ничего.
+ *
+ *  2. Патчить было не нужно. Посылка из старой шапки — «у Bun .message часто
+ *     readonly» — на текущем Bun (1.3.14) не воспроизводится: у обычного
+ *     `Error`, у `SyntaxError` из `JSON.parse` и у ошибки fetch дескриптор
+ *     `message` — `writable: true, configurable: true`, присваивание проходит.
+ *     Формулировка «часто» и отсутствие ссылки на версию говорят, что причину
+ *     не локализовали, а обошли.
+ *
+ * Сеть под этим не оголяется: скрытие токена в тексте ошибки на боевом пути
+ * делает `scrubSecretString` (lib/log.ts), через который проходят и `log.*`, и
+ * синхронная запись в fd 2 ниже, — а не патч чужого модуля.
  */
 
 import { log, scrubSecretString } from "./log.ts";
-
-try {
-  // @ts-ignore — грузим напрямую по абсолютному пути в node_modules
-  const path = require("node:path");
-  const clientAbs = path.join(
-    process.cwd(),
-    "node_modules/telegraf/lib/core/network/client.js",
-  );
-  const client = require(clientAbs);
-  const orig = client.redactToken;
-  if (orig && !(orig as any).__patched) {
-    const safe = function safeRedactToken(error: any) {
-      try {
-        if (error && typeof error.message === "string") {
-          const newMsg = error.message.replace(
-            /\/(bot|user)(\d+):[^/]+\//,
-            "/$1$2:[REDACTED]/",
-          );
-          try {
-            error.message = newMsg;
-          } catch (e1) {
-            console.debug(
-              "[patch] error.message assignment failed, falling back to defineProperty:",
-              (e1 as any)?.message ?? String(e1),
-            );
-            try {
-              Object.defineProperty(error, "message", {
-                value: newMsg,
-                configurable: true,
-                writable: true,
-              });
-            } catch (e2) {
-              console.debug(
-                "[patch] defineProperty for error.message also failed (non-fatal):",
-                (e2 as any)?.message ?? String(e2),
-              );
-            }
-          }
-        }
-      } catch (e) {
-        console.debug(
-          "[patch] safeRedactToken outer guard caught (non-fatal):",
-          (e as any)?.message ?? String(e),
-        );
-      }
-      throw error;
-    };
-    (safe as any).__patched = true;
-    client.redactToken = safe;
-    log.info("[patch] telegraf redactToken wrapped");
-  }
-} catch (e) {
-  log.warn("[patch] could not patch redactToken", { error: (e as any)?.message });
-}
 
 /** Кадры, по которым узнаётся стек сетевого клиента telegraf. */
 const TELEGRAF_FRAMES = [
@@ -76,9 +43,12 @@ const TELEGRAF_FRAMES = [
 ];
 
 /**
- * Шум telegraf/Bun, ради которого этот обработчик и заведён: присваивание в
- * readonly `.message` внутри redactToken. Он безвреден — состояние процесса
- * от него не портится, продолжать работу можно.
+ * Шум сетевого клиента telegraf, ради которого этот обработчик и заведён.
+ * Исторический повод — присваивание в `.message` внутри `redactToken`; сам
+ * повод на текущем Bun не воспроизводится (см. шапку файла), но признак
+ * остаётся верным для любого исключения, вылетевшего из клиента мимо его
+ * собственных обработчиков. Такое исключение безвредно — состояние процесса от
+ * него не портится, продолжать работу можно.
  *
  * Аудит 2026-08-28: текст сообщения был ТРЕТЬЕЙ равноправной альтернативой, а
  * не признаком в паре со стеком, — и `msg.includes("readonly property")`
@@ -88,9 +58,9 @@ const TELEGRAF_FRAMES = [
  * «безвредно»: одна warn-строка и работа дальше в неизвестном состоянии —
  * ровно то, что аудит 2026-08-20 закрывал на уровень выше.
  *
- * Ветка ничего не теряет: свой redactToken мы уже обернули в try/catch, так
- * что readonly может бросить только неперехваченный telegraf'овский — а его
- * стек содержит и `redactToken`, и путь клиента.
+ * Ветка ничего не теряет: стек любой ошибки из сетевого клиента telegraf
+ * содержит либо кадр `redactToken`, либо путь самого клиента — этого признака
+ * достаточно, и он не зависит от текста.
  */
 export function isTelegrafNoise(msg: string, stack: string): boolean {
   void msg;

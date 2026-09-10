@@ -53,7 +53,7 @@ export const SVG_TEMPLATES: readonly SvgTemplate[] = [
     id: "infographic",
     name: "Data Infographic",
     description: "Statistics and data presentation with charts, metrics and content blocks",
-    keywords: ["infographic", "statistics", "data", "metrics", "stats", "numbers", "analytics", "report", "dashboard"],
+    keywords: ["infographic", "statistics", "data", "metrics", "stats", "numbers", "analytics", "report"],
     filePath: join(TEMPLATES_DIR, "infographic.svg"),
     placeholders: ["TITLE", "SUBTITLE", "STAT_1", "LABEL_1", "STAT_2", "LABEL_2", "STAT_3", "LABEL_3", "CHART_TITLE", "CONTENT_TITLE", "CONTENT_LINE_1", "CONTENT_LINE_2", "CONTENT_LINE_3", "CONTENT_LINE_4", "CONTENT_LINE_5"]
   },
@@ -69,7 +69,7 @@ export const SVG_TEMPLATES: readonly SvgTemplate[] = [
     id: "status-dashboard",
     name: "Status Dashboard",
     description: "System status and monitoring dashboard with service indicators and metrics",
-    keywords: ["status", "dashboard", "monitoring", "system", "health", "uptime", "services", "metrics", "ops", "devops"],
+    keywords: ["status", "dashboard", "monitoring", "system", "health", "uptime", "services", "ops", "devops"],
     filePath: join(TEMPLATES_DIR, "status-dashboard.svg"),
     placeholders: ["TITLE", "TIMESTAMP", "SERVICE_1", "STATUS_1_COLOR", "STATUS_1_TEXT", "METRIC_1", "VALUE_1", "SERVICE_2", "STATUS_2_COLOR", "STATUS_2_TEXT", "METRIC_2", "VALUE_2", "SERVICE_3", "STATUS_3_COLOR", "STATUS_3_TEXT", "METRIC_3", "VALUE_3", "METRICS_TITLE", "LEGEND_ITEM_1", "LEGEND_ITEM_2", "LEGEND_ITEM_3"]
   },
@@ -109,27 +109,66 @@ export const SVG_TEMPLATES: readonly SvgTemplate[] = [
     id: "simple-chart",
     name: "Simple Chart",
     description: "Basic bar chart with data visualization, labels and legend",
-    keywords: ["chart", "graph", "bar chart", "data", "visualization", "analytics", "comparison", "statistics"],
+    keywords: ["chart", "graph", "bar chart", "visualization", "comparison"],
     filePath: join(TEMPLATES_DIR, "simple-chart.svg"),
     placeholders: ["CHART_TITLE", "CHART_SUBTITLE", "Y_LABEL_1", "Y_LABEL_2", "Y_LABEL_3", "Y_LABEL_4", "X_LABEL_1", "X_LABEL_2", "X_LABEL_3", "X_LABEL_4", "X_LABEL_5", "X_LABEL_6", "VALUE_1", "VALUE_2", "VALUE_3", "VALUE_4", "VALUE_5", "VALUE_6", "LEGEND_TITLE", "SERIES_1", "SERIES_2"]
   }
 ];
 
 /**
- * Выбрать подходящий шаблон по семантике запроса
+ * Ключевое слово как регулярка: по границе слова и с необязательным
+ * множественным числом.
+ *
+ * Аудит 2026-09-10: сравнение было `request.toLowerCase().includes(keyword)`,
+ * то есть подстрокой в любом месте любого слова. Ключ `app` (ui-mockup) сидит
+ * внутри `happy`, `apple` и `approve`, `ops` — внутри `develops`, `post` —
+ * внутри `postpone`. Запрос «happy new year post» выбирал ui-mockup: `app`
+ * нашёлся в `happy`, а ui-mockup стоит в списке раньше social-post. Граница
+ * слова это убирает, `(?:e?s)?` сохраняет прежнее попадание во множественное
+ * число («charts», «services»), ради которого подстрока и годилась.
+ *
+ * Границы описаны через `\p{L}\p{N}`, а не `\b`: `\b` определён по `\w`
+ * (латиница), и рядом с кириллицей вёл бы себя не так, как здесь нужно.
+ */
+function keywordPattern(keyword: string): RegExp {
+  const body = keyword.trim().split(/\s+/).map(escapeRegExp).join("\\s+");
+  return new RegExp(
+    `(?<![\\p{L}\\p{N}])${body}(?:e?s)?(?![\\p{L}\\p{N}])`,
+    "iu",
+  );
+}
+
+/** Регулярки собираются один раз: их под семьдесят, а `selectTemplate` зовут на каждый запрос. */
+const TEMPLATE_MATCHERS: ReadonlyArray<{
+  template: SvgTemplate;
+  patterns: readonly RegExp[];
+}> = SVG_TEMPLATES.map((template) => ({
+  template,
+  patterns: template.keywords.map(keywordPattern),
+}));
+
+/**
+ * Выбрать подходящий шаблон по семантике запроса.
+ *
+ * Первое совпадение выигрывает, поэтому порядок `SVG_TEMPLATES` — это правило,
+ * а не оформление. Аудит 2026-09-10: пять ключей были записаны сразу двум
+ * шаблонам, и второй из пары не выбирался НИКОГДА:
+ *
+ *   dashboard, metrics  — infographic перекрывал status-dashboard
+ *   data, analytics, statistics — infographic перекрывал simple-chart
+ *
+ * То есть запрос «нарисуй dashboard» приносил инфографику, а не дашборд, при
+ * живом шаблоне `status-dashboard.svg`. Ключи разведены по одному владельцу:
+ * `dashboard` ушёл к status-dashboard (там он в самом имени), остальные
+ * четыре закреплены за infographic — за тем, кто их и так выигрывал, так что
+ * поведение по ним не изменилось. Непересечение держит тест
+ * `audit-2026-09-10-svg-template-keywords`.
  */
 export function selectTemplate(request: string): SvgTemplate {
-  const normalizedRequest = request.toLowerCase();
-  
-  // Ищем точные совпадения ключевых слов
-  for (const template of SVG_TEMPLATES) {
-    for (const keyword of template.keywords) {
-      if (normalizedRequest.includes(keyword)) {
-        return template;
-      }
-    }
+  for (const { template, patterns } of TEMPLATE_MATCHERS) {
+    if (patterns.some((re) => re.test(request))) return template;
   }
-  
+
   // Fallback: если ничего не нашли, возвращаем первый шаблон (announcement)
   return SVG_TEMPLATES[0]!;
 }
