@@ -58,6 +58,31 @@ function seedArchived(id: string) {
   ).run(id, taskId, BIG, CHAT_ID, 1_700_000_000_000, 1_700_000_100_000);
 }
 
+/**
+ * Суммарный вес страниц по `dbstat` — или null, если vtable нет.
+ *
+ * P2bis (nightly, 2026-09-10): `dbstat` — необязательная опция сборки
+ * (SQLITE_ENABLE_DBSTAT_VTAB), и в bun на ubuntu-runner'е её нет: два теста
+ * ниже падали на `SQLiteError: no such table: dbstat` и на отсутствующей
+ * строке `__other__`. Сама библиотека это уже допускает — `dbstatByOwner()` в
+ * `db-maint.ts` ловит ошибку и отдаёт null, а `dbStats()` тогда честно
+ * проставляет нулевые размеры и `__other__` не выдаёт вовсе. Тест обязан
+ * договариваться с тем же контрактом, а не требовать опциональную фичу:
+ * проверка про СТРОКИ (ради которой аудит 2026-08-27 и заводился) от
+ * доступности `dbstat` не зависит и гоняется везде.
+ */
+function dbstatTotal(): number | null {
+  try {
+    return (
+      (db.prepare(`SELECT SUM(pgsize) AS s FROM dbstat`).get() as {
+        s: number | null;
+      }).s ?? 0
+    );
+  } catch {
+    return null;
+  }
+}
+
 function statOf(rows: ReturnType<typeof dbStats>, table: string) {
   const hit = rows.filter((r) => r.table === table);
   expect(hit.length, `${table}: ожидали ровно одну строку, получили ${hit.length}`).toBe(1);
@@ -98,20 +123,28 @@ describe("вкладка «БД» видит очередь ролей (ауди
     seedLive("q-sum");
     seedArchived("q-sum-cold");
     const rows = dbStats();
-    const total = (
-      db.prepare(`SELECT SUM(pgsize) AS s FROM dbstat`).get() as {
-        s: number | null;
-      }
-    ).s;
+    const total = dbstatTotal();
     const sum = rows
       .filter((r) => r.table !== "__db_file__")
       .reduce((a, r) => a + r.size_bytes, 0);
     // Контроль на регрессию 2026-08-12: добавление таблиц в STAT_TABLES не
-    // должно приписать одни и те же страницы дважды.
+    // должно приписать одни и те же страницы дважды. Без `dbstat` обе стороны
+    // равны нулю — сходимость сохраняется, приписывать нечего.
     expect(sum).toBe(total ?? 0);
   });
 
   test("вес очереди приписан ей, а не растворён в __other__", () => {
+    if (dbstatTotal() === null) {
+      // Без `dbstat` весов нет ни у кого: `dbStats()` не выдаёт и самой строки
+      // `__other__`. Проверяем то, что в этом режиме вообще проверяемо, —
+      // строка таблицы на месте, а её размер честно нулевой, а не выдуманный.
+      const rowsBefore = statOf(dbStats(), "role_runtime_queue").rows;
+      for (let i = 0; i < 12; i++) seedLive(`q-w-${i}`);
+      const only = statOf(dbStats(), "role_runtime_queue");
+      expect(only.rows - rowsBefore).toBe(12);
+      expect(only.size_bytes).toBe(0);
+      return;
+    }
     const otherBefore = statOf(dbStats(), "__other__").size_bytes;
     for (let i = 0; i < 12; i++) seedLive(`q-w-${i}`);
     const rows = dbStats();

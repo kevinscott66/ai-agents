@@ -16,7 +16,32 @@ import { cleanupChat, saveAutonomy, restoreAutonomy } from "./_helpers.ts";
 
 const TEST_CHAT = -1_000_715;
 
+/**
+ * Чужие diag-задачи из очереди поллера.
+ *
+ * P2bis (nightly, 2026-09-10): `listPendingDiagTasks` берёт `LIMIT 5` по всей
+ * таблице — `assigned_to='aieng' AND status='pending' AND input LIKE
+ * '%"_diag":true%'`, без чата, — и `tick()` обрабатывает ровно эту пятёрку.
+ * `cleanupChat` скоупится по chat_id, поэтому diag-задачи, оставленные
+ * соседними файлами в СВОИХ чатах, копились в общей `data/memory.db` и
+ * вытесняли задачу этого теста из выборки: `tick()` до неё не доходил, и она
+ * оставалась `pending` вместо `done`. В nightly это падало на первом же
+ * повторе файла и «чинилось» вторым — тот же tick чужую пятёрку и разгребал,
+ * из-за чего дефект выглядел флейком, а не протечкой.
+ *
+ * Файл обязан обеспечивать себе пустую очередь сам: ключ `aieng` общий.
+ */
+function clearForeignDiagQueue(): void {
+  db.prepare(
+    `DELETE FROM tasks
+      WHERE assigned_to = 'aieng' AND status = 'pending'
+        AND input LIKE '%"_diag":true%'
+        AND chat_id <> ?`,
+  ).run(TEST_CHAT);
+}
+
 let savedAutonomy = saveAutonomy();
+beforeEach(clearForeignDiagQueue);
 afterEach(() => {
   restoreAutonomy(savedAutonomy);
   cleanupChat(TEST_CHAT, "orchestrator");

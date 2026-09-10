@@ -59,6 +59,24 @@ function dumpIds(file: string): number[] {
     .sort((a, b) => a - b);
 }
 
+/**
+ * Файлы выгрузки ИМЕННО `messages_archive`.
+ *
+ * P2bis (nightly, 2026-09-10): `exportColdStorage` выгружает все архивные
+ * таблицы разом, и в общей `data/memory.db` соседние файлы оставляют строки в
+ * `agent_actions_archive` / `audit_logs_archive` / `approvals_archive`. Каждая
+ * непустая таблица добавляет в каталог свой файл, и подсчёт «всего файлов» на
+ * чистой локальной БД давал 2, а в CI — 5. Проверяется здесь не число таблиц,
+ * а то, что второй прогон завёл ВТОРОЙ файл своей таблицы, а не переписал
+ * первый, — поэтому и считаем по своей таблице, ровно как соседние счётчики
+ * уже считают по своему диапазону id (T-751).
+ */
+function ownDumps(): string[] {
+  return readdirSync(join(TMP, "cold-storage")).filter((f) =>
+    f.startsWith("messages_archive-"),
+  );
+}
+
 /** Сколько ЧУЖИХ строк уедет в тот же проход — их вычитаем из счётчиков. */
 function foreignOlderThan(cutoff: number): number {
   return (
@@ -106,7 +124,7 @@ describe("cold-storage: два экспорта в один день", () => {
     expect(m1.file).not.toBe(m2.file);
     expect(dumpIds(m1.file!)).toEqual([BASE, BASE + 1]);
     expect(dumpIds(m2.file!)).toEqual([BASE + 100, BASE + 101]);
-    expect(readdirSync(join(TMP, "cold-storage")).length).toBe(2);
+    expect(ownDumps().length).toBe(2);
   });
 
   test("совпадение имени — это отказ, а не потеря", () => {

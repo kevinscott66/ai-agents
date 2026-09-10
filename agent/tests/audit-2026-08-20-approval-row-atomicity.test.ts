@@ -33,9 +33,21 @@ import { db } from "../lib/db.ts";
 const TEST_CHAT = 999_806_220;
 const AGENT = "qa";
 
+/**
+ * P2bis (nightly, 2026-09-10): вторая строка чистит заявки ПО АГЕНТУ, а не
+ * только по своему чату. Потолок очереди одобрений в `action-dispatch.ts`
+ * считается `SELECT COUNT(*) FROM approvals WHERE status='pending' AND
+ * requested_by=?` — по агенту и сразу по всем чатам. `qa` — общий ключ роли,
+ * заявки под ним копят и другие файлы в СВОИХ чатах; чистка по `chat_id` их не
+ * видела, и на пятом повторе `--rerun-each=5` лимит в 10 выбирался ещё до
+ * входа сюда: `gateOrDispatch` возвращал `error` («очередь одобрений
+ * переполнена») вместо `pending_approval`. Один проход обычного гейта до
+ * потолка не доходил, поэтому краснел только nightly.
+ */
 function cleanup(): void {
   db.prepare(`DELETE FROM agent_actions WHERE chat_id = ?`).run(TEST_CHAT);
   db.prepare(`DELETE FROM approvals WHERE chat_id = ?`).run(TEST_CHAT);
+  db.prepare(`DELETE FROM approvals WHERE requested_by = ?`).run(AGENT);
 }
 
 /** Действия «на одобрении», под которыми нет заявки. */
