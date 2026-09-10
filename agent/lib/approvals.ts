@@ -10,6 +10,7 @@ import { emit as busEmit } from "./events-bus.ts";
 import type { Database } from "bun:sqlite";
 import { closeAgentPromptProposals } from "./dispatch/agent-prompt.ts";
 import { crossChatRequested } from "./dispatch/helpers.ts";
+import { closeGatedActionRow } from "./audit.ts";
 
 /**
  * `failed` — человек одобрил, но исполнение упало (см. markApprovalFailed).
@@ -705,6 +706,16 @@ export function decideApproval(
   // владелец, нажав в ней Approve, получал «already approved». Место, где
   // строка меняет статус, ровно одно — здесь ему и место, как у
   // markApprovalFailed ниже.
+  // Аудит 2026-09-11: решение меняло ТОЛЬКО эту таблицу. Строка действия,
+  // заведённая гейтом в `pending_approval`, после отказа так и читалась «ждёт
+  // аппрув» — навсегда (докблок `closeGatedActionRow`). Одобрение сюда не
+  // входит: у него исход пишет своя строка через `dispatchAndAudit`.
+  if (updated.status === "rejected") {
+    closeGatedActionRow(
+      updated.action_id,
+      `отклонено: ${decidedBy}${reason ? ` — ${reason}` : ""}`,
+    );
+  }
   busEmit("approval.decided", { id: updated.id, status: updated.status });
   return updated;
 }

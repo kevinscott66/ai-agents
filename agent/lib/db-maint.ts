@@ -18,6 +18,7 @@ import { safeTick } from "./safe-timer.ts";
 import { rollupParent } from "./tasks.ts";
 import { approvalTtlMs } from "./approvals.ts";
 import { closeAgentPromptProposals } from "./dispatch/agent-prompt.ts";
+import { closeGatedActionRow } from "./audit.ts";
 import { emit as busEmit } from "./events-bus.ts";
 import { DAY_MS, HOUR_MS, MINUTE_MS } from "./time-constants.ts";
 import {
@@ -697,10 +698,11 @@ export function expireStaleApprovals(
        SET status='expired', decided_by='system:gc', decided_at=?,
            reason=?
        WHERE status='pending' AND created_at < ?
-       RETURNING id`,
+       RETURNING id, action_id`,
     )
     .all(now, `не решён за ${hours} ч — заявка просрочена`, cutoff) as Array<{
     id: string;
+    action_id: string;
   }>;
   const expired = rows.length;
   if (expired > 0) {
@@ -711,6 +713,14 @@ export function expireStaleApprovals(
     // Заявок не по промптам это не касается: у них в agent_prompts строки нет,
     // и UPDATE по approval_id ничего не находит.
     closeAgentPromptProposals(rows.map((r) => r.id), now);
+    // Аудит 2026-09-11: строка ДЕЙСТВИЯ оставалась в `pending_approval` и
+    // после протухания — санитайзера по этому статусу не было вовсе (докблок
+    // `closeGatedActionRow`). Здесь тот же случай, что при отказе: наружу
+    // ничего не ушло, а журнал сутками показывал ожидание решения, которого
+    // уже не будет.
+    for (const r of rows) {
+      closeGatedActionRow(r.action_id, `заявка просрочена: решения не было ${hours} ч`);
+    }
     log.info("[db-maint] approvals expired", { expired, ttl_hours: hours });
     // Аудит 2026-08-13: протухание было единственной сменой статуса апрува без
     // события — `decideApproval` и `markApprovalFailed` его шлют оба. Открытая

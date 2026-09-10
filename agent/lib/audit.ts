@@ -317,6 +317,53 @@ export function finalizeActionRow(
   };
 }
 
+/**
+ * Закрывает строку, заведённую в статусе `pending_approval`, когда решение по
+ * её заявке принято НЕ в пользу исполнения: отказ человека или истечение TTL.
+ *
+ * Аудит 2026-09-11. `agent_actions.status='pending_approval'` пишется ровно в
+ * одном месте (`action-dispatch.ts`, ветка `gate.decision === "approval"`), а
+ * снимался ниоткуда: два единственных UPDATE по этой таблице —
+ * `finalizeActionRow` выше и `expireStaleAttempts` в db-maint.ts — оба сужены
+ * до `attempted`. Отказ и протухание меняли только таблицу `approvals`. То
+ * есть после «Reject» строка ДЕЙСТВИЯ навсегда оставалась «ждёт аппрув»: и в
+ * `/audit`, и в ленте Mini App (`labels.ts:50`), и в GET_LOGS, который читает
+ * сама модель. Роль, переспросившая журнал «одобрили мою публикацию?», видела
+ * ожидание вместо состоявшегося отказа, а человек — очередь, которой в
+ * `/approvals` уже нет. Докблок `action-dispatch.ts:1717` описывает только
+ * вариант с крашем между двумя коммитами и прямо говорит, что санитайзера по
+ * `pending_approval` нет вовсе; отказ же — обычный будний день, без всякого
+ * краша.
+ *
+ * `forbidden` — не новое слово, а ровно то, что в этом вокабуляре значит
+ * «наружу не ушло, потому что не разрешили»: тем же статусом пишет свои отказы
+ * гейт. Отличает отказ от истечения текст в `error`. Заводить `rejected` и
+ * `expired` пришлось бы вместе с enum'ом в схеме инструментов, а он живёт под
+ * отдельным PR; ни один счётчик (`alerting.ts` — `rate_limited`, `digest.ts` —
+ * `error`) на `forbidden` не смотрит, так что метрики правка не двигает.
+ *
+ * Одобрение сюда не заходит: у него последствие уже записано СВОЕЙ строкой —
+ * `executeApproved` идёт через `dispatchAndAudit`, а тот заводит пару
+ * `attempted` → `ok`/`error` с тем же `request_id`. Перевести здесь и её
+ * значило бы посчитать одно действие дважды в том же статусе.
+ *
+ * Событие в шину не поднимаем: `forbidden` не терминален в смысле
+ * TERMINAL_STATUSES (гейт пишет свои отказы молча), а открытая вкладка про
+ * смену состояния и так узнаёт из `approval.decided` — его шлют оба
+ * вызывающих. `WHERE status='pending_approval'` — тот же приём, что у
+ * `finalizeActionRow`: уже закрытую строку не перепишет ни повторное решение,
+ * ни санитар.
+ */
+export function closeGatedActionRow(actionId: string, error: string): boolean {
+  const res = db
+    .prepare(
+      `UPDATE agent_actions SET status='forbidden', error=?
+       WHERE id=? AND status='pending_approval'`,
+    )
+    .run(error.slice(0, 2000), actionId);
+  return res.changes > 0;
+}
+
 /** Emit events only after the transaction containing insertActionRow committed. */
 export function emitActionEvents(inserted: InsertedAction): void {
   if (!inserted.event) return;
