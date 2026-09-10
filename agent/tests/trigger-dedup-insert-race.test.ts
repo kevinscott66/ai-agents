@@ -40,17 +40,17 @@ describe("вставка, а не исключение", () => {
     const msg = 4242;
     // processed_at == cutoff: переживает уборку и невидим для SELECT.
     db.prepare(
-      `INSERT INTO processed_triggers (chat_id, tg_message_id, processed_at)
-       VALUES (?, ?, ?)`,
+      `INSERT INTO processed_triggers (chat_id, tg_message_id, agent_key, processed_at)
+       VALUES (?, ?, 'orchestrator', ?)`,
     ).run(CHAT, msg, now - 60);
 
-    expect(shouldProcessTrigger(CHAT, msg)).toBe(false);
+    expect(shouldProcessTrigger(CHAT, msg, "orchestrator")).toBe(false);
   });
 
   test("непротиворечивое поведение не сломано", () => {
     // Контроль: обычный первый триггер по-прежнему обрабатывается ровно один раз.
-    expect(shouldProcessTrigger(CHAT, 7)).toBe(true);
-    expect(shouldProcessTrigger(CHAT, 7)).toBe(false);
+    expect(shouldProcessTrigger(CHAT, 7, "orchestrator")).toBe(true);
+    expect(shouldProcessTrigger(CHAT, 7, "orchestrator")).toBe(false);
   });
 });
 

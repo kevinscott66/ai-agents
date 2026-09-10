@@ -148,12 +148,14 @@ export function registerVoiceHandler(
       // вторая ПЛАТНАЯ расшифровка у Whisper, вторая строка `[Voice]` в
       // истории и второе «🎤 Распознано» в чат. Текстовый путь от этого
       // закрыт (message-handler.ts), голосовой — самый дорогой из двух —
-      // не был. Ключ тот же (chat_id, tg_message_id), пересечься с текстовым
-      // путём он не может: разным апдейтам разные message_id.
+      // не был. Ключ тот же (chat_id, tg_message_id, agent_key), пересечься с
+      // текстовым путём он не может: разным апдейтам разные message_id. Сюда
+      // доходит только оркестратор (выход выше), так что роль в ключе ничего
+      // здесь не меняет — она нужна текстовому пути (аудит 2026-09-11).
       //
       // Порядок как в тексте: пауза -> дедуп -> лимит. Повторный апдейт не
       // должен тратить чужой счётчик.
-      if (!shouldProcessTrigger(chatId, ctx.message?.message_id)) {
+      if (!shouldProcessTrigger(chatId, ctx.message?.message_id, def.key)) {
         log.info(
           `[anti-dup][${def.key}] повторный голосовой апдейт пропущен chat=${chatId} msg_id=${ctx.message?.message_id}`,
         );

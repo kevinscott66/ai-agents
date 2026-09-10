@@ -104,6 +104,12 @@ async function deliver(captured: any[]): Promise<void> {
 
 beforeEach(() => {
   db.prepare(`DELETE FROM messages WHERE chat_id = ?`).run(CHAT_S);
+  // Аудит 2026-09-11: дедуп триггеров стал считать роль, и роли, отличные
+  // от оркестратора, теперь тоже через него проходят. Сценарии ниже
+  // переиспользуют ОДИН message_id как разные входящие апдейты, поэтому
+  // второй и дальше отсекались бы как дубли. Чистим кэш дедупа, а не
+  // раздаём тестам разные id: id здесь часть фикстуры «пришло вот это».
+  db.prepare(`DELETE FROM processed_triggers WHERE chat_id = ?`).run(CHAT_S);
 });
 
 describe("упомянутая роль видит вопрос, на который её позвали", () => {

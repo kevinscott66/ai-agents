@@ -1,9 +1,10 @@
 /**
- * T-545: Anti-duplication for orchestrator trigger messages.
- * 
+ * T-545: Anti-duplication for trigger messages.
+ *
  * Prevents the same trigger message from being processed twice when delivered
- * by multiple transports (Bot API + MTProto userbot). Uses a time window
- * to deduplicate by (chat_id, tg_message_id).
+ * by multiple transports (Bot API + MTProto userbot) or redelivered by
+ * Telegram after a restart. Uses a time window to deduplicate by
+ * (chat_id, tg_message_id, agent_key).
  */
 
 import { getErrorMessage } from "./errors.ts";
@@ -16,12 +17,28 @@ const DEDUP_WINDOW_SECONDS = 60; // 1-minute window for deduplication
  * Checks if a trigger message has already been processed recently.
  * Returns true if this is the first time processing this message,
  * false if it's a duplicate within the dedup window.
- * 
+ *
+ * Аудит 2026-09-11: `agentKey` появился в ключе и в сигнатуре, потому что без
+ * него дедуп был пригоден только оркестратору. Строку занимал тот бот, кто
+ * успел первым, а «дубль» получали остальные одиннадцать — поэтому вызов в
+ * message-handler.ts и стоял под `isOrchestrator`, то есть у ролей повтора не
+ * ловил никто. А повтор у них тот же самый: Telegram передоставляет
+ * неподтверждённый апдейт после рестарта, и роль второй раз платит за ход LLM
+ * и второй раз исполняет инструменты с побочными эффектами.
+ *
+ * Параметр обязательный намеренно: значение по умолчанию вернуло бы ровно ту
+ * общую строку, из-за которой дедуп и был выключен.
+ *
  * @param chatId - The chat ID
  * @param tgMessageId - The Telegram message ID (from ctx.message.message_id)
+ * @param agentKey - роль, которая собирается отрабатывать этот апдейт
  * @returns true if should process, false if duplicate
  */
-export function shouldProcessTrigger(chatId: string, tgMessageId: number | undefined): boolean {
+export function shouldProcessTrigger(
+  chatId: string,
+  tgMessageId: number | undefined,
+  agentKey: string,
+): boolean {
   if (!tgMessageId) {
     // If no tgMessageId, we can't deduplicate, so process it
     return true;
@@ -64,8 +81,8 @@ export function shouldProcessTrigger(chatId: string, tgMessageId: number | undef
   try {
     existing = db.prepare(`
       SELECT 1 FROM processed_triggers
-      WHERE chat_id = ? AND tg_message_id = ? AND processed_at >= ?
-    `).get(chatId, tgMessageId, cutoff);
+      WHERE chat_id = ? AND tg_message_id = ? AND agent_key = ? AND processed_at >= ?
+    `).get(chatId, tgMessageId, agentKey, cutoff);
   } catch (error) {
     // Та же политика, что и у INSERT'а ниже: без ответа БД дедуп невозможен,
     // и выбор стоит между «лишний повтор, который виден и редок» и «молчание,
@@ -73,6 +90,7 @@ export function shouldProcessTrigger(chatId: string, tgMessageId: number | undef
     log.error("[trigger-anti-dup] не смог проверить дубль — обрабатываем", {
       chatId,
       tgMessageId,
+      agentKey,
       error: getErrorMessage(error),
     });
     return true;
@@ -86,20 +104,21 @@ export function shouldProcessTrigger(chatId: string, tgMessageId: number | undef
   // First time seeing this trigger, mark as processed.
   //
   // Гонку ловит именно результат вставки, а не исключение: `INSERT OR IGNORE`
-  // на конфликте UNIQUE(chat_id, tg_message_id) НЕ бросает — он молча ничего не
+  // на конфликте UNIQUE(chat_id, tg_message_id, agent_key) НЕ бросает — он молча ничего не
   // делает. Прежняя ветка catch была мертва, и вся защита держалась на
   // SELECT выше, который с INSERT'ом не атомарен. Внутри одного процесса это не
   // стреляло (между SELECT и INSERT нет await), но два процесса на одной БД —
   // ровно тот случай, ради которого дедуп и писался: Bot API и userbot.
   try {
     const res = db.prepare(`
-      INSERT OR IGNORE INTO processed_triggers (chat_id, tg_message_id, processed_at)
-      VALUES (?, ?, ?)
-    `).run(chatId, tgMessageId, now);
+      INSERT OR IGNORE INTO processed_triggers (chat_id, tg_message_id, agent_key, processed_at)
+      VALUES (?, ?, ?, ?)
+    `).run(chatId, tgMessageId, agentKey, now);
     if (Number(res.changes ?? 0) === 0) {
       log.debug("[trigger-anti-dup] строку уже вставил кто-то другой", {
         chatId,
         tgMessageId,
+        agentKey,
       });
       return false;
     }
@@ -110,6 +129,7 @@ export function shouldProcessTrigger(chatId: string, tgMessageId: number | undef
     log.error("[trigger-anti-dup] не смог отметить триггер — обрабатываем", {
       chatId,
       tgMessageId,
+      agentKey,
       error: getErrorMessage(error),
     });
   }

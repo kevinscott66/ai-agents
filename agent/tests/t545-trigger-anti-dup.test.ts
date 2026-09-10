@@ -17,7 +17,7 @@ describe("T-545: Trigger Anti-Duplication", () => {
     const chatId = "12345";
     const tgMessageId = 67890;
 
-    const result = shouldProcessTrigger(chatId, tgMessageId);
+    const result = shouldProcessTrigger(chatId, tgMessageId, "orchestrator");
     
     expect(result).toBe(true);
     
@@ -35,11 +35,11 @@ describe("T-545: Trigger Anti-Duplication", () => {
     const tgMessageId = 67890;
 
     // First processing should succeed
-    const first = shouldProcessTrigger(chatId, tgMessageId);
+    const first = shouldProcessTrigger(chatId, tgMessageId, "orchestrator");
     expect(first).toBe(true);
 
     // Second processing should be rejected as duplicate
-    const second = shouldProcessTrigger(chatId, tgMessageId);
+    const second = shouldProcessTrigger(chatId, tgMessageId, "orchestrator");
     expect(second).toBe(false);
   });
 
@@ -48,11 +48,11 @@ describe("T-545: Trigger Anti-Duplication", () => {
     const chatId2 = "67890";
     const tgMessageId = 999;
 
-    const result1 = shouldProcessTrigger(chatId1, tgMessageId);
+    const result1 = shouldProcessTrigger(chatId1, tgMessageId, "orchestrator");
     expect(result1).toBe(true);
 
     // Same message ID but different chat should be allowed
-    const result2 = shouldProcessTrigger(chatId2, tgMessageId);
+    const result2 = shouldProcessTrigger(chatId2, tgMessageId, "orchestrator");
     expect(result2).toBe(true);
   });
 
@@ -61,11 +61,11 @@ describe("T-545: Trigger Anti-Duplication", () => {
     const tgMessageId1 = 111;
     const tgMessageId2 = 222;
 
-    const result1 = shouldProcessTrigger(chatId, tgMessageId1);
+    const result1 = shouldProcessTrigger(chatId, tgMessageId1, "orchestrator");
     expect(result1).toBe(true);
 
     // Same chat but different message ID should be allowed
-    const result2 = shouldProcessTrigger(chatId, tgMessageId2);
+    const result2 = shouldProcessTrigger(chatId, tgMessageId2, "orchestrator");
     expect(result2).toBe(true);
   });
 
@@ -73,11 +73,11 @@ describe("T-545: Trigger Anti-Duplication", () => {
     const chatId = "12345";
 
     // Should process when no message ID
-    const result1 = shouldProcessTrigger(chatId, undefined);
+    const result1 = shouldProcessTrigger(chatId, undefined, "orchestrator");
     expect(result1).toBe(true);
 
     // Should process again even for same chat (no dedup without message ID)
-    const result2 = shouldProcessTrigger(chatId, undefined);
+    const result2 = shouldProcessTrigger(chatId, undefined, "orchestrator");
     expect(result2).toBe(true);
   });
 
@@ -89,12 +89,12 @@ describe("T-545: Trigger Anti-Duplication", () => {
     // Insert an old record manually (simulate past processing)
     const oldTimestamp = Math.floor(Date.now() / 1000) - 120; // 2 minutes ago
     db.prepare(`
-      INSERT INTO processed_triggers (chat_id, tg_message_id, processed_at)
-      VALUES (?, ?, ?)
+      INSERT INTO processed_triggers (chat_id, tg_message_id, agent_key, processed_at)
+      VALUES (?, ?, 'orchestrator', ?)
     `).run(chatId, tgMessageId1, oldTimestamp);
 
     // Process new trigger - this should clean up the old entry
-    shouldProcessTrigger(chatId, tgMessageId2);
+    shouldProcessTrigger(chatId, tgMessageId2, "orchestrator");
 
     // Old entry should be gone
     const oldExists = db.prepare(`
@@ -118,7 +118,7 @@ describe("T-545: Trigger Anti-Duplication", () => {
     const tgMessageId = 67890;
 
     // First processing should succeed
-    const first = shouldProcessTrigger(chatId, tgMessageId);
+    const first = shouldProcessTrigger(chatId, tgMessageId, "orchestrator");
     expect(first).toBe(true);
 
     // Manually update the timestamp to simulate expired window
@@ -130,7 +130,7 @@ describe("T-545: Trigger Anti-Duplication", () => {
     `).run(expiredTimestamp, chatId, tgMessageId);
 
     // Should now allow processing again
-    const second = shouldProcessTrigger(chatId, tgMessageId);
+    const second = shouldProcessTrigger(chatId, tgMessageId, "orchestrator");
     expect(second).toBe(true);
   });
 
@@ -142,12 +142,12 @@ describe("T-545: Trigger Anti-Duplication", () => {
 
     // Manually insert a record to simulate race condition
     db.prepare(`
-      INSERT INTO processed_triggers (chat_id, tg_message_id, processed_at)
-      VALUES (?, ?, ?)
+      INSERT INTO processed_triggers (chat_id, tg_message_id, agent_key, processed_at)
+      VALUES (?, ?, 'orchestrator', ?)
     `).run(chatId, tgMessageId, now);
 
     // Should return false (duplicate detected)
-    const result = shouldProcessTrigger(chatId, tgMessageId);
+    const result = shouldProcessTrigger(chatId, tgMessageId, "orchestrator");
     expect(result).toBe(false);
   });
 
@@ -160,12 +160,12 @@ describe("T-545: Trigger Anti-Duplication", () => {
     const now = Math.floor(Date.now() / 1000);
 
     db.prepare(`
-      INSERT INTO processed_triggers (chat_id, tg_message_id, processed_at)
+      INSERT INTO processed_triggers (chat_id, tg_message_id, agent_key, processed_at)
       VALUES
-        ('123', 1, ?),
-        ('123', 2, ?),
-        ('123', 3, ?),
-        ('123', 4, ?)
+        ('123', 1, 'orchestrator', ?),
+        ('123', 2, 'orchestrator', ?),
+        ('123', 3, 'orchestrator', ?),
+        ('123', 4, 'orchestrator', ?)
     `).run(
       now,
       now - 30,      // внутри окна

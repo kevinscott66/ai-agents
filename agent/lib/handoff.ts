@@ -32,6 +32,7 @@ import {
   DELEGATED_EXECUTION_MANDATE,
   buildMemorySystemText,
   buildWikiPagesSystemText,
+  speakerLabel,
 } from "./agent-prompts.ts";
 
 export const MAX_HANDOFF_DEPTH = 3;
@@ -213,7 +214,7 @@ export function buildDelegateMessages(
 ): Anthropic.MessageParam[] {
   const messages: Anthropic.MessageParam[] = recent.map((r) => {
     const own = !!r.is_bot && r.agent_key === targetKey;
-    const speaker = r.agent_key ? `[${r.agent_key}]` : `[${r.from_name ?? "user"}]`;
+    const speaker = r.agent_key ? `[${r.agent_key}]` : speakerLabel(r.from_name);
     return {
       role: own ? "assistant" : "user",
       content: own ? r.text : `${speaker} ${r.text}`,
@@ -493,7 +494,7 @@ export async function respondAs(
     const recentSummary = recent
       .slice(-10)
       .map((r) => {
-        const who = r.agent_key ? `[${r.agent_key}]` : `[${r.from_name ?? "user"}]`;
+        const who = r.agent_key ? `[${r.agent_key}]` : speakerLabel(r.from_name);
         return `${who} ${r.text.slice(0, 200)}`;
       })
       .join("\n");

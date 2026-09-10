@@ -61,6 +61,7 @@ import {
   ORCHESTRATION_MANDATE,
   buildMemorySystemText,
   buildWikiPagesSystemText,
+  speakerLabel,
 } from "../lib/agent-prompts.ts";
 
 // P2 discussion-mode: предел глубины handoff-цепочки, когда режим включён.
@@ -483,8 +484,21 @@ export function registerMessageHandler(
         return;
       }
 
-      // T-545: Prevent duplicate orchestrator processing of the same trigger message
-      if (isOrchestrator && !shouldProcessTrigger(chatId, ctx.message?.message_id)) {
+      // T-545: Prevent duplicate processing of the same trigger message.
+      //
+      // Аудит 2026-09-11: условие было `isOrchestrator && …`, и держалось оно
+      // не на замысле, а на ключе дедупа: `UNIQUE(chat_id, tg_message_id)` без
+      // роли означал «этот апдейт уже кто-то отработал», а ботов двенадцать и
+      // упомянуть в одном сообщении можно двоих — включённый для всех, он
+      // заглушил бы второго. Ключ теперь несёт роль (миграция 053), и
+      // утверждение стало правильным: «этот апдейт уже отработала ЭТА роль».
+      //
+      // Ролям защита нужна ровно та же, что оркестратору: Telegram
+      // передоставляет неподтверждённый апдейт после рестарта, и без дедупа
+      // это второй платный ход LLM и повторное исполнение инструментов с
+      // побочными эффектами. Тот же довод уже принят для голосового пути
+      // (voice-handler.ts, аудит 2026-08-28).
+      if (!shouldProcessTrigger(chatId, ctx.message?.message_id, def.key)) {
         log.info(`[anti-dup][${def.key}] skipping duplicate trigger chat=${chatId} msg_id=${ctx.message?.message_id}`);
         return;
       }
@@ -559,9 +573,9 @@ export function registerMessageHandler(
       ];
 
       const messages: Anthropic.MessageParam[] = recent.map((r) => {
-        const speaker = r.agent_key
-          ? `[${r.agent_key}]`
-          : `[${r.from_name ?? "user"}]`;
+        // `agent_key` — наш собственный ключ роли, он не из чата. Имя
+        // человека — из чата, и метку из него собирает `speakerLabel`.
+        const speaker = r.agent_key ? `[${r.agent_key}]` : speakerLabel(r.from_name);
         return {
           role: r.is_bot && r.agent_key === def.key ? "assistant" : "user",
           content: r.is_bot && r.agent_key === def.key
@@ -579,7 +593,7 @@ export function registerMessageHandler(
       if (!isTriggerDelivered(messages, text)) {
         messages.push({
           role: "user",
-          content: `[${ctx.from?.username ?? ctx.from?.first_name ?? "user"}] ${text}`,
+          content: `${speakerLabel(ctx.from?.username ?? ctx.from?.first_name)} ${text}`,
         });
       }
 
@@ -837,7 +851,7 @@ export function registerMessageHandler(
         });
 
         const recentSummary = recent.slice(-10).map((r) => {
-          const who = r.agent_key ? `[${r.agent_key}]` : `[${r.from_name ?? "user"}]`;
+          const who = r.agent_key ? `[${r.agent_key}]` : speakerLabel(r.from_name);
           return `${who} ${r.text.slice(0, 200)}`;
         }).join("\n");
         runCompactor(anthropic, {

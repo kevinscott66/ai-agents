@@ -1308,6 +1308,45 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    // Аудит 2026-09-11: ключ дедупа триггеров не различал роль.
+    //
+    // `UNIQUE(chat_id, tg_message_id)` писался под одну задачу — один и тот же
+    // апдейт, пришедший к ОРКЕСТРАТОРУ двумя транспортами (Bot API и
+    // MTProto-юзербот). Ботов, однако, двенадцать, и у каждого свой цикл
+    // поллинга: строку занимает тот, кто успел первым, а остальным она
+    // отвечает «дубль». Поэтому в message-handler.ts дедуп и стоял под
+    // `isOrchestrator` — включить его для всех значило бы глушить роль,
+    // упомянутую в том же сообщении, что и другая роль.
+    //
+    // Роль в ключе снимает конфликт: «этот апдейт уже отработала эта роль» —
+    // ровно то утверждение, которое дедупу и нужно, и оно по-прежнему ловит
+    // два транспорта одной роли.
+    //
+    // Таблица пересоздаётся, а не переливается: это кэш на 60 секунд
+    // (`DEDUP_WINDOW_SECONDS`), все строки старше окна и так подметаются на
+    // первом же вызове. Худшее, что даёт потеря содержимого, — один повтор в
+    // минуту, следующую за деплоем; перенос строк с выдуманным `agent_key`
+    // стоил бы того же и врал бы про роль.
+    name: "053_processed_triggers_per_agent",
+    up: (db) => {
+      db.exec(`
+        DROP TABLE IF EXISTS processed_triggers;
+
+        CREATE TABLE processed_triggers (
+          id INTEGER PRIMARY KEY,
+          chat_id TEXT NOT NULL,
+          tg_message_id INTEGER NOT NULL,
+          agent_key TEXT NOT NULL,
+          processed_at INTEGER NOT NULL,
+          UNIQUE(chat_id, tg_message_id, agent_key)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_processed_triggers_cleanup
+        ON processed_triggers(processed_at);
+      `);
+    },
+  },
 ];
 
 /**

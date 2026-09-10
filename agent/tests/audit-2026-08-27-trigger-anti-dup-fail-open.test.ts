@@ -35,23 +35,23 @@ afterEach(() => {
 describe("trigger-anti-dup: сбой БД не глотает сообщение", () => {
   test("падение SELECT'а даёт обработку, а не исключение", () => {
     breakStatement("SELECT 1 FROM processed_triggers");
-    expect(shouldProcessTrigger(CHAT, 101)).toBe(true);
+    expect(shouldProcessTrigger(CHAT, 101, "orchestrator")).toBe(true);
   });
 
   test("падение уборки не мешает дедупу работать дальше", () => {
     breakStatement("DELETE FROM processed_triggers");
-    expect(shouldProcessTrigger(CHAT, 102)).toBe(true);
+    expect(shouldProcessTrigger(CHAT, 102, "orchestrator")).toBe(true);
     // Уборка — это размер таблицы, а не ответ: дубль ловится по-прежнему.
-    expect(shouldProcessTrigger(CHAT, 102)).toBe(false);
+    expect(shouldProcessTrigger(CHAT, 102, "orchestrator")).toBe(false);
   });
 
   test("падение INSERT'а тоже даёт обработку", () => {
     breakStatement("INSERT OR IGNORE INTO processed_triggers");
-    expect(shouldProcessTrigger(CHAT, 103)).toBe(true);
+    expect(shouldProcessTrigger(CHAT, 103, "orchestrator")).toBe(true);
   });
 
   test("на здоровой БД поведение прежнее: первый — да, второй — нет", () => {
-    expect(shouldProcessTrigger(CHAT, 104)).toBe(true);
-    expect(shouldProcessTrigger(CHAT, 104)).toBe(false);
+    expect(shouldProcessTrigger(CHAT, 104, "orchestrator")).toBe(true);
+    expect(shouldProcessTrigger(CHAT, 104, "orchestrator")).toBe(false);
   });
 });

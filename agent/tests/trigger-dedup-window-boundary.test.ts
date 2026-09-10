@@ -61,8 +61,8 @@ describe("границы окна дедупа", () => {
     const now = Math.floor(Date.now() / 1000);
     const msg = 4243;
     db.prepare(
-      `INSERT INTO processed_triggers (chat_id, tg_message_id, processed_at)
-       VALUES (?, ?, ?)`,
+      `INSERT INTO processed_triggers (chat_id, tg_message_id, agent_key, processed_at)
+       VALUES (?, ?, 'orchestrator', ?)`,
     ).run(CHAT, msg, now - 60);
 
     // Аудит 2026-08-21: одного `toBe(false)` тут мало — до фикса пограничная
@@ -77,7 +77,7 @@ describe("границы окна дедупа", () => {
       return (orig as any).call(log, msgText, ...rest);
     }) as typeof log.debug;
     try {
-      expect(shouldProcessTrigger(CHAT, msg)).toBe(false);
+      expect(shouldProcessTrigger(CHAT, msg, "orchestrator")).toBe(false);
     } finally {
       log.debug = orig;
     }
@@ -89,14 +89,14 @@ describe("границы окна дедупа", () => {
     const now = Math.floor(Date.now() / 1000);
     const msg = 4244;
     db.prepare(
-      `INSERT INTO processed_triggers (chat_id, tg_message_id, processed_at)
-       VALUES (?, ?, ?)`,
+      `INSERT INTO processed_triggers (chat_id, tg_message_id, agent_key, processed_at)
+       VALUES (?, ?, 'orchestrator', ?)`,
     ).run(CHAT, msg, now - 61);
-    expect(shouldProcessTrigger(CHAT, msg)).toBe(true);
+    expect(shouldProcessTrigger(CHAT, msg, "orchestrator")).toBe(true);
   });
 
   test("свежий дубль по-прежнему отбивается", () => {
-    expect(shouldProcessTrigger(CHAT, 8)).toBe(true);
-    expect(shouldProcessTrigger(CHAT, 8)).toBe(false);
+    expect(shouldProcessTrigger(CHAT, 8, "orchestrator")).toBe(true);
+    expect(shouldProcessTrigger(CHAT, 8, "orchestrator")).toBe(false);
   });
 });

@@ -36,12 +36,12 @@ describe("аудит 2026-08-20: окно статистики триггеро�
     const now = Math.floor(Date.now() / 1000);
     // Строка старше окна — как будто чат работал два часа назад.
     db.prepare(
-      `INSERT INTO processed_triggers (chat_id, tg_message_id, processed_at) VALUES (?, ?, ?)`,
+      `INSERT INTO processed_triggers (chat_id, tg_message_id, agent_key, processed_at) VALUES (?, ?, 'orchestrator', ?)`,
     ).run(CHAT, 1, now - 7200);
     expect(getTriggerStats().total).toBe(1);
 
     // Один живой триггер — и уборка внутри shouldProcessTrigger сносит старьё.
-    expect(shouldProcessTrigger(CHAT, 2)).toBe(true);
+    expect(shouldProcessTrigger(CHAT, 2, "orchestrator")).toBe(true);
 
     const stats = getTriggerStats();
     expect(stats.total).toBe(1);
@@ -49,25 +49,25 @@ describe("аудит 2026-08-20: окно статистики триггеро�
   });
 
   test("реальный счёт равен числу свежих триггеров", () => {
-    for (let i = 1; i <= 5; i++) expect(shouldProcessTrigger(CHAT, i)).toBe(true);
+    for (let i = 1; i <= 5; i++) expect(shouldProcessTrigger(CHAT, i, "orchestrator")).toBe(true);
     const stats = getTriggerStats();
     expect(stats.inWindow).toBe(5);
     expect(stats.total).toBe(5);
   });
 
   test("дубль не увеличивает счёт", () => {
-    expect(shouldProcessTrigger(CHAT, 42)).toBe(true);
-    expect(shouldProcessTrigger(CHAT, 42)).toBe(false);
+    expect(shouldProcessTrigger(CHAT, 42, "orchestrator")).toBe(true);
+    expect(shouldProcessTrigger(CHAT, 42, "orchestrator")).toBe(false);
     expect(getTriggerStats().inWindow).toBe(1);
   });
 
   test("total может быть больше inWindow: уборка ленивая", () => {
     const now = Math.floor(Date.now() / 1000);
     db.prepare(
-      `INSERT INTO processed_triggers (chat_id, tg_message_id, processed_at) VALUES (?, ?, ?)`,
+      `INSERT INTO processed_triggers (chat_id, tg_message_id, agent_key, processed_at) VALUES (?, ?, 'orchestrator', ?)`,
     ).run(CHAT, 100, now - 3600);
     db.prepare(
-      `INSERT INTO processed_triggers (chat_id, tg_message_id, processed_at) VALUES (?, ?, ?)`,
+      `INSERT INTO processed_triggers (chat_id, tg_message_id, agent_key, processed_at) VALUES (?, ?, 'orchestrator', ?)`,
     ).run(CHAT, 101, now);
 
     // Без единого вызова shouldProcessTrigger таблицу никто не подметает.
@@ -79,7 +79,7 @@ describe("аудит 2026-08-20: окно статистики триггеро�
   test("граница окна включена, как и в самом дедупе", () => {
     const now = Math.floor(Date.now() / 1000);
     db.prepare(
-      `INSERT INTO processed_triggers (chat_id, tg_message_id, processed_at) VALUES (?, ?, ?)`,
+      `INSERT INTO processed_triggers (chat_id, tg_message_id, agent_key, processed_at) VALUES (?, ?, 'orchestrator', ?)`,
     ).run(CHAT, 200, now - 60);
     // `>=` в обоих местах: строка ровно на границе видна поиску и ещё не
     // подметена строгим `<`. Иначе она не попадала бы ни под один предикат.
