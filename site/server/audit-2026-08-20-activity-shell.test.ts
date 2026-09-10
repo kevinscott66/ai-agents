@@ -37,6 +37,16 @@ writeFileSync(
     `</head><body><div id="app"></div></body></html>`,
 );
 
+// P5 (гонка тестов сайта, 2026-09-10): снимок env берётся ДО подмены.
+// Раньше `PREV_DIST` объявлялся ниже по файлу — то есть уже ПОСЛЕ
+// присваивания, и «восстановление» в `afterAll` возвращало `SITE_WEB_DIST`
+// его же временный каталог. Переменная оставалась выставленной до конца
+// процесса, `webDist()` читает её на каждый запрос, и `digest-meta` (который
+// решает, собран ли фронт, по наличию `../web/dist/index.html`) получал 200
+// там, где ждал 404. По отдельности оба файла зелёные — красит только
+// порядок, а `--max-concurrency 1 --isolate` в `bun run test` это прятал.
+const PREV_DIST = process.env.SITE_WEB_DIST;
+
 process.env.SITE_DB_PATH = join(TMP, "audit.db");
 process.env.SITE_WEB_DIST = DIST;
 
@@ -50,7 +60,6 @@ const SHELL = readFileSync(join(import.meta.dir, "..", "web", "index.html"), "ut
 
 const TOKEN = "s3cret-ingest-token-0123456789ab";
 const PREV_TOKEN = process.env.SITE_INGEST_TOKEN;
-const PREV_DIST = process.env.SITE_WEB_DIST;
 
 const PROBE_ID = "activity-shell-probe";
 const PROBE_TITLE = "Гайд по «Проекту» с кавычками & амперсандом";

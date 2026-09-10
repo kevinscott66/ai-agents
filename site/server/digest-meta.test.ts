@@ -26,7 +26,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { digestIdFromPath, injectDigestMeta } from "./index.ts";
+import { digestIdFromPath, injectDigestMeta, webDist } from "./index.ts";
 import type { Digest } from "./types.ts";
 
 /** Настоящая оболочка сайта — источник тех самых og-тегов. */
@@ -114,10 +114,6 @@ describe("мета-теги статьи", () => {
 });
 
 describe("сервер отдаёт это на самом маршруте", () => {
-  // Фронт в репозитории не собран (dist в .gitignore), поэтому проверяем оба
-  // мира: со сборкой — мета-теги статьи, без неё — прежнее поведение.
-  const built = existsSync(join(import.meta.dir, "..", "web", "dist", "index.html"));
-
   test("GET /digest/<id>", async () => {
     const TMP = mkdtempSync(join(tmpdir(), "web3puls-og-"));
     const previousSiteDbPath = process.env.SITE_DB_PATH;
@@ -127,6 +123,15 @@ describe("сервер отдаёт это на самом маршруте", ()
     const { listDigests } = await import("./db.ts");
     seedIfEmpty();
     const d = listDigests(1, 0)[0]!;
+    // Фронт в репозитории не собран (dist в .gitignore), поэтому проверяем оба
+    // мира: со сборкой — мета-теги статьи, без неё — прежнее поведение.
+    //
+    // P5 (гонка тестов сайта, 2026-09-10): каталог спрашивается у `webDist()`
+    // и ровно перед запросом, а не у захардкоженного `../web/dist` на этапе
+    // разбора `describe`. Сервер решает то же самое тем же вызовом и тоже на
+    // каждый запрос, а `SITE_WEB_DIST` в наборе выставляют соседние файлы —
+    // два разных источника правды расходились, и ветка выбиралась не та.
+    const built = existsSync(join(webDist(), "index.html"));
     // Bind the ephemeral test listener to loopback explicitly. Without a
     // hostname Bun can reuse the wildcard listener used by another isolated
     // server test and report EADDRINUSE for port 0.
