@@ -112,8 +112,12 @@ describe("Settings: отказ /api/budget-settings не выдаётся за �
   test("catch записывает ошибку и она рисуется", () => {
     const s = code("Settings.tsx");
     expect(s).not.toContain("api.budgetSettings().catch(() =>");
-    expect(s).toContain("overridesFailed.err = formatApiError(e)");
-    expect(s).toContain("setOverridesErr(overridesFailed.err)");
+    // Аудит 2026-09-11 развёл здесь два разных отказа: 403 — штатный ответ
+    // зрителю, всё прочее — сбой. Решение переехало в чистую `overridesFailure`
+    // (см. audit-2026-09-11-miniapp-viewer-dead-ends.test.ts), поэтому имена
+    // другие. Проверяем то же самое: ошибка ЗАПИСЫВАЕТСЯ и РИСУЕТСЯ.
+    expect(s).toContain("overridesFailure(e, formatApiError(e))");
+    expect(s).toContain("setOverridesErr(overridesOutcome.err)");
     expect(s).toContain("message={overridesErr}");
   });
 });

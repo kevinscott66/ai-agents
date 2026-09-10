@@ -8,6 +8,7 @@ import { SkeletonList } from "../components/Skeleton";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorBox } from "../components/ErrorBox";
 import { APPROVAL_STATUS_LABELS, label } from "../lib/labels";
+import { adminFromAutonomy } from "../lib/admin";
 import { InterAgentCard, isInterAgentAction } from "../components/InterAgentCard";
 
 interface Group {
@@ -150,6 +151,21 @@ export default function Approvals() {
   const [rejectingKey, setRejectingKey] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState<Record<string, boolean>>({});
+  /**
+   * Можно ли этому пользователю решать. Спрашиваем сервер, а не коды ошибок:
+   * общий инвариант Mini App, см. `lib/admin.ts`.
+   *
+   * Аудит 2026-09-11: эта страница была единственной без признака прав — и при
+   * этом с самыми дорогими кнопками. Допущенный не-админ видел «Одобрить» на
+   * каждой карточке, проходил через `window.confirm` («Выполнить …?» — то
+   * самое предупреждение о необратимости, ради которого его и завёл аудит
+   * 2026-08-10), карточки оптимистично исчезали, сервер отвечал 403
+   * (`requireAdmin` на `POST /api/approvals/:id/decide`), `restoreFailed`
+   * возвращал их обратно, и всё кончалось тостом с сырой английской строкой
+   * `admin only`. Ровно тот сценарий, который у «Задач» закрыл аудит
+   * 2026-08-20, а у вкладки Mac — 2026-08-28.
+   */
+  const [canDecide, setCanDecide] = useState(false);
 
   // decideMany делает свой load() после решений, а то же решение прилетает ещё
   // и событием approval.decided — два запроса в полёте. Ответ, ушедший ДО
@@ -173,6 +189,16 @@ export default function Approvals() {
       if (isCurrent()) setLoading(false);
     }
   }
+
+  // Отдельно от загрузки списка: права — не то, ради чего открывают вкладку,
+  // и их запрос не должен ни ронять список аппрувов, ни всплывать над ним.
+  // Ровно как на Tasks.tsx и Mac.tsx.
+  useEffect(() => {
+    api
+      .autonomy()
+      .then((r) => setCanDecide(adminFromAutonomy(r)))
+      .catch(() => setCanDecide(adminFromAutonomy(null)));
+  }, []);
 
   useEffect(() => {
     load();
@@ -248,6 +274,15 @@ export default function Approvals() {
     const ids = g.list.map((a) => a.id);
     const anyBusy = ids.some((id) => busy[id]);
     const n = g.list.length;
+    // Решение закрыто админом на сервере — кнопок нет вовсе. Карточка
+    // остаётся: смотреть, что висит в очереди, допущенному можно.
+    if (!canDecide) {
+      return (
+        <div style={{ fontSize: 12, color: "#7f8c8d", marginTop: 8 }}>
+          Решение принимает админ
+        </div>
+      );
+    }
     if (rejectingKey === g.key) {
       return (
         <>

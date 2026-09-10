@@ -77,6 +77,33 @@ export function effectiveHint(
 }
 
 /**
+ * Как читать отказ `GET /api/budget-settings`.
+ *
+ * Аудит 2026-09-11: с аудита 2026-08-20 чтение закрыто админом
+ * (lib/miniapp-server.ts), и для допущенного НЕ-админа 403 здесь — штатный
+ * ответ «не твоё», а не сбой загрузки. Страница же гнала его в общий
+ * `ErrorBox` с кнопкой «Повторить», которая не могла сработать никогда: под
+ * оранжевой полосой «Просмотр настроек (только для админа)» у каждого
+ * зрителя навсегда висела красная ошибка про то же самое.
+ *
+ * Отличаем «нельзя» от «не получилось»: первому объяснение уже стоит рядом,
+ * второе — настоящий сбой, и о нём админу надо сказать. Общее у них одно:
+ * свои лимиты НЕизвестны, поэтому подпись «общий лимит» под пустым полем в
+ * обоих случаях — утверждение, выведенное из отсутствия данных
+ * (аудит 2026-08-27), и её не показываем.
+ *
+ * Экспортируется ради теста: DOM-харнесса у Mini App нет.
+ */
+export function overridesFailure(
+  e: { status?: number } | null,
+  message: string,
+): { known: boolean; err: string | null } {
+  if (!e) return { known: true, err: null };
+  if (e.status === 403) return { known: false, err: null };
+  return { known: false, err: message };
+}
+
+/**
  * Что именно надо отправить на сервер: только изменившиеся лимиты.
  *
  * Экспортируется ради теста — DOM-харнесса у Mini App нет, а решение тут
@@ -131,13 +158,15 @@ export default function Settings() {
    * существующего.
    */
   const [overridesErr, setOverridesErr] = useState<string | null>(null);
+  /** Пришли ли свои лимиты. `false` — и отказ, и «нельзя»: см. `overridesFailure`. */
+  const [overridesKnown, setOverridesKnown] = useState(true);
   const [editingAutonomyMode, setEditingAutonomyMode] = useState<AutonomyMode>("manual");
 
   async function load() {
     setLoading(true);
     setErr(null);
     try {
-      const overridesFailed: { err: string | null } = { err: null };
+      let overridesOutcome = { known: true, err: null as string | null };
       const [agentsRes, budgetsRes, autonomyRes, overridesRes] = await Promise.all([
         api.agents(),
         // 403 здесь не приходит: гейт стоит на POST, а GET открыт всем
@@ -153,17 +182,19 @@ export default function Settings() {
         // Без chat_id/agent — это и есть глобальный режим по умолчанию,
         // тот самый, который пишет POST /api/autonomy без scope.
         api.autonomy(),
-        // Свои строки лимитов. Открыты всем пущенным, как и /api/budgets;
-        // отказ не должен ронять страницу — форма тогда просто пустая, а не
-        // заполненная чужим (общим) числом.
+        // Свои строки лимитов. Закрыты админом (аудит 2026-08-20), поэтому
+        // 403 тут — штатный ответ зрителю, а не сбой; всё остальное — сбой.
+        // Ни то ни другое не должно ронять страницу: форма тогда просто
+        // пустая, а не заполненная чужим (общим) числом.
         api.budgetSettings().catch((e: any) => {
-          overridesFailed.err = formatApiError(e);
+          overridesOutcome = overridesFailure(e, formatApiError(e));
           return { settings: [] };
         }),
       ]);
 
       setAgents(agentsRes.agents);
-      setOverridesErr(overridesFailed.err);
+      setOverridesErr(overridesOutcome.err);
+      setOverridesKnown(overridesOutcome.known);
 
       // Права сообщает сервер. До аудита 2026-08-12 не-админ получал
       // редактируемые поля и кнопку «Сохранить», которая падала 403 на каждом
@@ -288,7 +319,11 @@ export default function Settings() {
           {agents.map((agent) => {
             const budget = settings.budgets.find(b => b.agentKey === agent.key);
             const currentLimit = editingBudgets[agent.key] ?? null;
-            const hint = effectiveHint(currentLimit, budget?.limit ?? null);
+            // Свои лимиты неизвестны — молчим: «общий лимит» под пустым
+            // полем был бы утверждением из отсутствия ответа.
+            const hint = overridesKnown
+              ? effectiveHint(currentLimit, budget?.limit ?? null)
+              : null;
             const usedPct = budget && budget.limit ? (budget.usedTokens / budget.limit) * 100 : 0;
 
             return (
