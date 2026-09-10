@@ -156,9 +156,21 @@ export async function handleSendMessage(
       };
     }
     let last: any;
-    let sentParts = 0;
+    // Считаем ПОПЫТКИ, а не успехи.
+    //
+    // Аудит 2026-09-11: счётчик увеличивался после возврата
+    // `guardedUserbotCall`, и `release(partCount - sentParts)` в finally
+    // возвращал в ведро слот той части, ради которой мы к аккаунту владельца
+    // уже постучались (при `skipBucket` первую попытку каждой части оплачивает
+    // именно резерв). Таймаут и RPC-ошибка приходят и тогда, когда запрос до
+    // Telegram дошёл, — ровно тот случай, из-за которого коммит слота в
+    // `userbot-flood.ts` переехал ДО обращения к серверу: «ведро считает
+    // обращения к аккаунту, а не успехи». Возвращаем только те части, к
+    // которым не притрагивались.
+    let attemptedParts = 0;
     try {
       last = await sendChunked(async (text) => {
+        attemptedParts++;
         const r = await guardedUserbotCall(
           ctx.agentKey,
           ctx.chatId,
@@ -171,15 +183,14 @@ export async function handleSendMessage(
             }),
           { skipBucket: true },
         );
-        sentParts++;
         ubFirst = false;
         return r;
       }, payload.text);
     } catch (e) {
       return partialSendFailure(e);
     } finally {
-      // Неотправленное возвращаем в ведро: заняли под план, платим по факту.
-      slots.release(partCount - sentParts);
+      // Нетронутое возвращаем в ведро: заняли под план, платим по попыткам.
+      slots.release(partCount - attemptedParts);
     }
     return {
       ok: true,

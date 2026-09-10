@@ -158,6 +158,43 @@ export type MacHandlerContext = {
 
 export type MacHandlerResult = HandlerResult;
 
+/**
+ * Отказ моста, после которого прогон на маке МОЖЕТ быть ещё жив.
+ *
+ * Аудит 2026-09-11. `sendToMac` режектит по нескольким разным поводам, и catch
+ * в `handleMacRunClaude` сворачивал их все в одинаковый `{ok:false, error}` без
+ * `sideEffect` — то есть `action-dispatch.ts` возвращал слот лимита и звал
+ * повторить. Для части поводов это правильно, для части — нет, и разница не
+ * косметическая:
+ *
+ *   — `mac_offline`, `mac_busy`, `mac_send_dropped` — кадр `run` до демона не
+ *     дошёл вовсе, на маке ничего не запускалось. Рефанд и повтор уместны.
+ *   — `mac_timeout` — прогон запускался, но таймаут ПЕРЕД ответом вызывающему
+ *     зовёт `cancelOnMac(id)` (см. mac-bridge.ts), то есть просит демон убить
+ *     именно его.
+ *   — `mac_stopped` — `stopMac()` доставил кадр `stop` (доставка проверена
+ *     через `frameAccepted`), а он убивает на маке всё разом.
+ *   — `mac_replaced`, `mac_disconnected`, `mac_bridge_stopped` — здесь
+ *     `failAllPending` только чистит карту ожиданий. Отменить прогон нечем:
+ *     сокет уже мёртв (обрыв связи, остановка моста) либо `activeSocket` уже
+ *     указывает на НОВЫЙ демон (замена клиента), и `cancel` со старым id ушёл
+ *     бы не туда. Процесс `claude` в режиме `bypass` продолжает работать в том
+ *     же проекте на машине владельца, но в `pending` его больше нет — значит,
+ *     он не считается и в `MAC_MAX_CONCURRENT_RUNS`. Рефанд плюс повтор дают
+ *     второй `claude` поверх первого, оба пишут в один рабочий каталог.
+ *
+ * Поэтому третья группа помечается `sideEffect`: след снаружи уже оставлен —
+ * буквально запущенный и не убитый процесс, — и рефандить его нельзя по тому
+ * же правилу, что и частичную доставку в чат (см. action-dispatch.ts).
+ */
+export function macFailureLeavesRunAlive(error: string): boolean {
+  return (
+    error.startsWith("mac_replaced") ||
+    error.startsWith("mac_disconnected") ||
+    error.startsWith("mac_bridge_stopped")
+  );
+}
+
 export async function handleMacRunClaude(
   payload: PayloadByType["MAC_RUN_CLAUDE"],
   ctx: MacHandlerContext,
@@ -267,6 +304,16 @@ export async function handleMacRunClaude(
     });
   } catch (e) {
     const msg = getErrorMessage(e);
+    if (macFailureLeavesRunAlive(msg)) {
+      return {
+        ok: false,
+        error:
+          `${msg}: связь с маком оборвалась после запуска — прогон мог ` +
+          `остаться живым. Повтор запустит второй \`claude\` в том же ` +
+          `проекте; сначала MAC_STOP.`,
+        sideEffect: true,
+      };
+    }
     return { ok: false, error: msg };
   }
   // Final single message back to the chat with the result.
@@ -278,9 +325,10 @@ export async function handleMacRunClaude(
   // Это ровно тот случай, который комментарий там запрещает: «провал, уже
   // оставивший след снаружи, рефандить нельзя».
   //
-  // Транспортные отказы моста (`mac_offline`, `mac_busy`, `mac_send_dropped`,
-  // `mac_timeout`) сюда не доходят — они РЕЖЕКТЯТ промис и уходят в catch выше,
-  // до всякой отправки; их рефанд правильный и описан в `rate-limits.ts`.
+  // Транспортные отказы моста сюда не доходят — они РЕЖЕКТЯТ промис и уходят
+  // в catch выше, до всякой отправки. Рефандить из них можно не все:
+  // `macFailureLeavesRunAlive` называет те, после которых прогон на маке
+  // остаётся жив (аудит 2026-09-11), и помечает их `sideEffect` там же.
   // Резолв с `ok:false` — это ответ демона: `project_not_allowed`,
   // `spawn_failed`, ненулевой код выхода CLI. Каждый из них уже написал в чат.
   //
