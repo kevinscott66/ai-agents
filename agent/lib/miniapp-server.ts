@@ -408,14 +408,22 @@ export function startMiniappServer(
     return result;
   }
 
-  function isAdmin(user: MiniAppUser): boolean {
+  /**
+   * Тот же вопрос, но по голому id: у SSE нет `MiniAppUser`, он входит по
+   * одноразовому билету, из которого достаётся только число (sse-ticket.ts).
+   */
+  function isAdminId(id: number): boolean {
     // Аудит 2026-08-04: пустой список админов — fail-closed, и это правильно, но
     // молча. Все восемь мутирующих ручек отвечают 403 навсегда, а причина нигде
     // не видна: у allowlist предупреждение есть (warnIfEmptyAllowlist), у
     // админов не было. Плюс env-фоллбэк в самом сервере мёртв — services.ts
     // всегда передаёт массив, а `[] ?? …` оставляет `[]`.
     warnIfEmptyAllowlist("MINIAPP_ADMIN_USER_IDS", adminUserIds);
-    return adminUserIds.length > 0 && adminUserIds.includes(user.id);
+    return adminUserIds.length > 0 && adminUserIds.includes(id);
+  }
+
+  function isAdmin(user: MiniAppUser): boolean {
+    return isAdminId(user.id);
   }
 
   /**
@@ -529,6 +537,46 @@ export function startMiniappServer(
     if (mini) return `miniapp:\u2026${mini[1].slice(-4)}`;
     const tg = v.match(RAW_TG_ACTOR);
     return tg ? `tg:\u2026${tg[1].slice(-4)}` : null;
+  }
+
+  /**
+   * Событие шины в том виде, в котором его увидит наблюдатель без прав.
+   *
+   * Аудит 2026-09-11, вторая дверь к той же утечке. Правило «актор-человек
+   * укорачивается до последних четырёх цифр» жило только в `redactContent`,
+   * то есть на REST-ответах. Мимо него шёл SSE: `GET /api/events` пускает по
+   * аллоу-листу без admin-проверки (билет несёт только id), а подписчик
+   * сериализовал `e.payload` как есть.
+   *
+   * Достижимо тем же путём, что и утечка через `decided_by`. `setPermission`
+   * пишет строку аудита `logAction({ agentKey: audit.changedBy })`
+   * (permissions.ts:523), а `changedBy` для `/grant` и `/revoke` в Telegram —
+   * это `deciderIdentity` (admin-commands.ts:172), то есть
+   * `tg:<id> (@username)`; для Mini App — `miniapp:<id>`. `logAction` сразу же
+   * шлёт в шину `action.executed` с полем `agent: agent_key`
+   * (audit.ts:186,324). Наблюдатель, которому `GET /api/actions` отдаёт ту же
+   * строку уже укороченной, получал её целиком через открытый поток — и
+   * получал первым, ещё до того, как список успевал перезагрузиться.
+   *
+   * Правило то же, что у `redactContent`: по ЗНАЧЕНИЮ, не по имени поля.
+   * Полезной нагрузки в этих событиях нет по построению (id, статус, чат —
+   * см. `InsertedAction.event`), поэтому тела здесь не прячем: скрывать
+   * нечего, а лента событий должна остаться живой.
+   *
+   * Админу отдаём как было. Проверка идёт на каждое событие, а не один раз на
+   * подключение: `isAdminId` — единственная точка правды о правах, а поток
+   * живёт часами, и кэш её ответа стал бы вторым источником.
+   */
+  function redactBusPayload(payload: unknown): unknown {
+    if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+      return shortenActor(payload) ?? payload;
+    }
+    const out = { ...(payload as Record<string, unknown>) };
+    for (const [k, v] of Object.entries(out)) {
+      const short = shortenActor(v);
+      if (short !== null) out[k] = short;
+    }
+    return out;
   }
 
   function redactContent<T>(user: MiniAppUser, rows: T[], fields: string[]): T[] {
@@ -906,7 +954,12 @@ export function startMiniappServer(
             }
           };
           const unsub = busSubscribe((e) => {
-            const data = JSON.stringify(e.payload ?? null);
+            // Наблюдателю без прав — тот же укороченный актор, что и в REST
+            // (см. redactBusPayload).
+            const payload = isAdminId(sseUserId)
+              ? e.payload
+              : redactBusPayload(e.payload);
+            const data = JSON.stringify(payload ?? null);
             safeEnqueue(`event: ${e.name}\ndata: ${data}\n\n`);
           });
 
