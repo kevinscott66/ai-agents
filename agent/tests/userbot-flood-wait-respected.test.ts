@@ -20,7 +20,7 @@
  * Гермётично: без сети, без сна (инжектим _sleep и _now).
  */
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { _resetRateLimits } from "../lib/rate-limits.ts";
+import { _resetRateLimits, setUserbotSessionProbe } from "../lib/rate-limits.ts";
 import {
   withUserbotFloodGuard,
   guardedUserbotCall,
@@ -262,6 +262,8 @@ describe("кулдаун переживает вызов", () => {
 
   test("с роутером у роли своя сессия — чужой бан её не трогает", async () => {
     process.env[ROUTER_KEY] = "true"; // восстанавливает afterEach
+    // Аудит 2026-09-11: своя сессия — это объявленная сессия, см. предикат.
+    setUserbotSessionProbe(() => true);
     const c = clock();
     await banSmm(c);
 

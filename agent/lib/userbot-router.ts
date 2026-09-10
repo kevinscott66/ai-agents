@@ -14,6 +14,7 @@
 import { existsSync } from "node:fs";
 import { type UserbotHandle, startUserbot, getCurrentUserbot } from "./userbot.ts";
 import { log } from "./log.ts";
+import { setUserbotSessionProbe } from "./rate-limits.ts";
 
 export interface UserbotRouterOpts {
   /** Callback for incoming messages from any agent session */
@@ -422,8 +423,20 @@ export function buildUserbotRouter(
 
 let _routerInstance: UserbotRouter | null = null;
 
+/**
+ * Аудит 2026-09-11: вместе с роутером ставим предикат «у роли своя сессия».
+ *
+ * Ведро анти-флуда и кулдаун FLOOD_WAIT защищают АККАУНТ, а не роль
+ * (rate-limits.ts, `userbotAccountKey`). Роль без объявленной сессии ходит
+ * через синглтон владельца — `getUserbotHandle` ниже, — и ведро у неё обязано
+ * быть общим. Знание об этом живёт здесь, а не в rate-limits: тот модуль —
+ * лист, и импорт роутера притащил бы в него всю MTProto-библиотеку.
+ */
 export function setUserbotRouter(router: UserbotRouter | null): void {
   _routerInstance = router;
+  setUserbotSessionProbe(
+    router ? (agentKey: string) => router.getAgentStatus(agentKey).registered : null,
+  );
 }
 
 export function getUserbotRouter(): UserbotRouter | null {

@@ -246,6 +246,30 @@ function chatIdParam(url: URL): number | undefined | Response {
 }
 
 /**
+ * Значение курсора пагинации: пустое и пробельное считаются НЕ заданными.
+ *
+ * Аудит 2026-09-11: два соседних докблока (`/api/actions` и `/api/audit-logs`)
+ * объявляют класс «молчаливая потеря фильтра» закрытым, а пустая строка сквозь
+ * обе проверки проходила. `?before=` давал `Number("") === 0` — конечное, то
+ * есть мимо валидации, — а следом `if (before && …)` оказывался ложным, и
+ * ОБА компонента курсора (`before` и `before_id`) исчезали без единого
+ * признака в ответе: клиент получал самую свежую страницу и дописывал её к
+ * списку. `?before=%20` доходил дальше и давал `created_at < 0`, то есть
+ * пустую страницу и «конец списка» посреди журнала.
+ *
+ * Пустое значение — это отсутствие курсора, а не курсор в нуле, поэтому оно
+ * нормализуется в `null` и дальше живёт по правилам «параметра не было».
+ * Отвечать на него 400 нельзя: `?before_id=` — законный способ клиента сказать
+ * «страница первая».
+ */
+function cursorParam(url: URL, name: string): string | null {
+  const raw = url.searchParams.get(name);
+  if (raw === null) return null;
+  const trimmed = raw.trim();
+  return trimmed === "" ? null : trimmed;
+}
+
+/**
  * Build the agents list (with health snapshots + paused flags) used by
  * /api/dashboard and /api/agents.
  */
@@ -475,13 +499,30 @@ export function startMiniappServer(
    *
    * Флаг `redacted` при этом НЕ ставится: он означает «тело скрыто», а тело
    * здесь на месте.
+   *
+   * Аудит 2026-09-11: у `approvals.decided_by` писателя ДВА, а шаблон знал
+   * одного. Mini App кладёт `miniapp:<id>` (ручка decide ниже), а `/approve` и
+   * `/reject` в Telegram — `deciderIdentity` (admin-commands.ts:172), то есть
+   * `tg:<id> (@username)`. Второй формат проходил насквозь, и утечка
+   * восстанавливалась целиком: `GET /api/approvals?status=approved` админа не
+   * требует (читалки живут на allowlist, см. докблок про наблюдателя ниже),
+   * так что наблюдатель, которому тела уже закрыли, читал сырой Telegram-ID
+   * владельца — ровно то, что закрывал этот код для Mini App.
+   *
+   * Приписка `(@username)` уходит вместе с цифрами: `t.me/<username>`
+   * открывает тот же профиль, что и `t.me/<id>`, и прятать одну половину
+   * личности, оставляя вторую, смысла нет. `tg:unknown` (id у апдейта не
+   * было) шаблону не соответствует и проходит как есть — прятать там нечего.
    */
   const RAW_MINIAPP_ACTOR = /^miniapp:(\d+)$/;
+  const RAW_TG_ACTOR = /^tg:(\d+)(?: \(.*\))?$/;
 
   function shortenActor(v: unknown): string | null {
     if (typeof v !== "string") return null;
-    const m = v.match(RAW_MINIAPP_ACTOR);
-    return m ? `miniapp:\u2026${m[1].slice(-4)}` : null;
+    const mini = v.match(RAW_MINIAPP_ACTOR);
+    if (mini) return `miniapp:\u2026${mini[1].slice(-4)}`;
+    const tg = v.match(RAW_TG_ACTOR);
+    return tg ? `tg:\u2026${tg[1].slice(-4)}` : null;
   }
 
   function redactContent<T>(user: MiniAppUser, rows: T[], fields: string[]): T[] {
@@ -1605,7 +1646,7 @@ export function startMiniappServer(
       const status = url.searchParams.get("status");
       const type = url.searchParams.get("type");
       const taskId = url.searchParams.get("task_id");
-      const beforeId = url.searchParams.get("before_id");
+      const beforeId = cursorParam(url, "before_id");
       const limit = parseIntOr(url.searchParams.get("limit"), 50, 200);
 
       const where: string[] = [];
@@ -1720,10 +1761,10 @@ export function startMiniappServer(
       const eventType = url.searchParams.get("event_type");
       const chatId = chatIdParam(url);
       if (chatId instanceof Response) return chatId;
-      const before = url.searchParams.get("before"); // created_at (ms), курсор
+      const before = cursorParam(url, "before"); // created_at (ms), курсор
       // Тай-брейк курсора: см. комментарий в /api/actions выше. Без него строки,
       // записанные в одну миллисекунду с границей страницы, терялись целиком.
-      const beforeId = url.searchParams.get("before_id");
+      const beforeId = cursorParam(url, "before_id");
       const limit = parseIntOr(url.searchParams.get("limit"), 50, 200);
 
       const where: string[] = [];
@@ -1755,7 +1796,7 @@ export function startMiniappServer(
       if (beforeId && before === null) {
         return json({ error: "before_id requires before" }, 400);
       }
-      if (before && Number.isFinite(Number(before))) {
+      if (before !== null) {
         if (beforeId) {
           where.push("(created_at < ? OR (created_at = ? AND id < ?))");
           args.push(Number(before), Number(before), beforeId);

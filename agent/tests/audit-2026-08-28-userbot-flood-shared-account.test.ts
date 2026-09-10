@@ -27,6 +27,7 @@ import {
   commitUserbotFloodLimit,
   userbotFloodCapacity,
   reserveUserbotFloodSlots,
+  setUserbotSessionProbe,
   _resetRateLimits,
 } from "../lib/rate-limits.ts";
 import {
@@ -126,9 +127,14 @@ describe("кулдаун FLOOD_WAIT — на аккаунт", () => {
 });
 
 describe("с роутером у роли своя сессия — вёдра раздельные", () => {
+  // Аудит 2026-09-11: «роутер включён» само по себе не означает «у роли своя
+  // сессия» — сессию надо ещё объявить. Предикат здесь и играет объявленную
+  // сессию; случай необъявленной проверяет
+  // audit-2026-09-11-userbot-account-follows-session.test.ts.
   test("ведро не делится между ролями", () => {
     setEnv(ROUTER_KEY, "true");
     _resetRateLimits();
+    setUserbotSessionProbe(() => true);
     burn("smm", CHANNEL, 3);
     expect(checkUserbotFloodLimit("smm", CHANNEL).ok).toBe(false);
     expect(checkUserbotFloodLimit("copy", CHANNEL).ok).toBe(true);
@@ -137,6 +143,7 @@ describe("с роутером у роли своя сессия — вёдра �
   test("кулдаун не делится между ролями", () => {
     setEnv(ROUTER_KEY, "true");
     _resetFloodCooldowns();
+    setUserbotSessionProbe(() => true);
     noteFloodWait("smm", 30);
     expect(floodCooldownRemainingMs("smm")).toBeGreaterThan(0);
     expect(floodCooldownRemainingMs("copy")).toBe(0);

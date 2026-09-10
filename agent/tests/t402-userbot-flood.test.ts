@@ -17,6 +17,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import {
   checkUserbotFloodLimit,
   commitUserbotFloodLimit,
+  setUserbotSessionProbe,
   _resetRateLimits,
 } from "../lib/rate-limits.ts";
 import {
@@ -110,6 +111,9 @@ describe("checkUserbotFloodLimit — per-character/chat bucket", () => {
     process.env[FLOOD_MAX_KEY] = "5";
     process.env[FLOOD_WIN_KEY] = "60000";
     process.env[ROUTER_KEY] = "true"; // восстанавливает afterEach
+    // Аудит 2026-09-11: включённого роутера мало — ведро следует за аккаунтом,
+    // а своя сессия у роли только если она объявлена.
+    setUserbotSessionProbe(() => true);
 
     const chat = "-2001";
     const now = 2_000_000;

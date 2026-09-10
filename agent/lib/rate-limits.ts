@@ -594,13 +594,47 @@ function userbotFloodRule(): BucketRule {
  *
  * С включённым роутером у роли своя сессия, и раздельные вёдра верны. Поэтому
  * ключ зависит от режима: одна сессия — один ключ на всех.
+ *
+ * Аудит 2026-09-11: «с роутером у роли своя сессия» — неправда для роли, у
+ * которой сессия не объявлена. `getUserbotHandle` (userbot-router.ts:452)
+ * отдаёт персональный хэндл только зарегистрированным; незарегистрированная
+ * роль штатно откатывается на тот же синглтон владельца («Агенты БЕЗ
+ * объявленной сессии откатываются как и раньше»). Оператор, включивший роутер
+ * ради одной роли, получал ровно ту дыру, которую этот докблок описывает выше:
+ * четыре роли с PUBLISH_TO_CHANNEL шлют через ОДИН аккаунт, а вёдра у них
+ * четыре — потолок аккаунта вчетверо выше настроенного, и кулдаун FLOOD_WAIT
+ * (userbot-flood.ts ключуется этой же функцией) глушит только ту роль, что
+ * его поймала.
+ *
+ * Поэтому ключ следует не за режимом, а за АККАУНТОМ: своя сессия объявлена —
+ * свой ключ, иначе общий. Ответ на «объявлена ли» знает роутер, но тянуть его
+ * сюда импортом нельзя (этот модуль — лист, а за роутером стоит вся MTProto-
+ * библиотека), поэтому роутер сам кладёт сюда предикат в `setUserbotRouter`.
+ * Предиката нет — значит роутер не установлен, значит все ходят через
+ * синглтон: дефолт совпадает с самым строгим вариантом, и это правильная
+ * сторона для ошибки.
  */
 export const SHARED_USERBOT_ACCOUNT_KEY = "@owner";
 
+let declaredUserbotSession: ((agentKey: string) => boolean) | null = null;
+
+/**
+ * Кто из ролей ходит со своей сессии. Ставится роутером (`setUserbotRouter`),
+ * снимается им же при остановке. Тесты вызывают напрямую; `_resetRateLimits`
+ * снимает предикат, чтобы он не утекал между файлами одного прогона.
+ */
+export function setUserbotSessionProbe(
+  probe: ((agentKey: string) => boolean) | null,
+): void {
+  declaredUserbotSession = probe;
+}
+
 export function userbotAccountKey(characterId: string | number): string {
-  return process.env.USERBOT_ROUTER_ENABLED === "true"
-    ? String(characterId)
-    : SHARED_USERBOT_ACCOUNT_KEY;
+  if (process.env.USERBOT_ROUTER_ENABLED !== "true") {
+    return SHARED_USERBOT_ACCOUNT_KEY;
+  }
+  const key = String(characterId);
+  return declaredUserbotSession?.(key) === true ? key : SHARED_USERBOT_ACCOUNT_KEY;
 }
 
 function userbotBucketKey(
@@ -898,4 +932,5 @@ export function _resetRateLimits(): void {
   buckets.clear();
   lastEvict = 0;
   maxWindowMs = HOUR_MS;
+  declaredUserbotSession = null;
 }
