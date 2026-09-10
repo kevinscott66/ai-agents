@@ -20,6 +20,11 @@
  *    проверка воркера молча уводит строку в `failed` — одобренный человеком
  *    прогон не случается. `awaiting_review` вдобавок не трогает `gcStaleTasks`
  *    (намеренно: это ожидание человека), так что строка зависает навсегда.
+ * 3. `POST /api/tasks/:id/status` в Mini App: тот же исход, но мимо обоих
+ *    отказов выше — роут зовёт `updateTaskStatus` напрямую. Админ на доске не
+ *    отличает прогон роли от обычной задачи. Поэтому запрет стоит и в самой
+ *    `updateTaskStatus`: воркер туда не ходит (свои UPDATE'ы с
+ *    `AND status='running'`), значит любой приход туда — посторонний.
  */
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { db } from "../lib/db.ts";
@@ -102,6 +107,19 @@ describe("статус прогона роли принадлежит ворке
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(getTask(roleTaskId)!.status).toBe("running");
+  });
+
+  test("прямой updateTaskStatus по задаче роли бросает", () => {
+    // Третья дверь: `POST /api/tasks/:id/status` в Mini App зовёт
+    // `updateTaskStatus` напрямую, мимо обоих dispatch-отказов. Админ на доске
+    // не отличает прогон роли от обычной задачи.
+    const roleTaskId = runningRole();
+
+    expect(() => updateTaskStatus(roleTaskId, "done")).toThrow(
+      /прогон временной роли/,
+    );
+    expect(getTask(roleTaskId)!.status).toBe("running");
+    expect(queueState(roleTaskId)).toBe("running");
   });
 
   test("обычный родитель по-прежнему закрывается по детям (контроль)", () => {

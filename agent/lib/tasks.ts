@@ -482,6 +482,25 @@ export function updateTaskStatus(
 ): Task {
   const t = getTask(id);
   if (!t) throw new Error(`task not found: ${id}`);
+  // Аудит 2026-09-11 (продолжение): дверей к расхождению задачи-роли с её
+  // строкой очереди оказалось три, и латать их поодиночке — способ завести
+  // четвёртую. `handleUpdateTaskStatus`/`handleRequestReview` закрыты своими
+  // отказами (dispatch/tasks.ts), `rollupParent` — ранним возвратом ниже, а
+  // `POST /api/tasks/:id/status` в Mini App звал эту функцию напрямую: админ
+  // на доске не отличает прогон роли от обычной задачи, ставит ей `done` — и
+  // очередь остаётся `running`, `heartbeatRoleTask` (ищет `status='running'`)
+  // не находит строки, воркер получает `leaseLost` и выбрасывает оплаченный
+  // прогон мимо `failRoleTask`.
+  //
+  // Отсюда запрет в самом узком месте: воркер сюда не ходит вовсе (свои
+  // UPDATE'ы с `AND status='running'`, role-runtime.ts:356-591), значит любой
+  // приход СЮДА с задачей-ролью — это посторонний, и ему отказывают.
+  if (isSpawnRoleTask(t)) {
+    throw new Error(
+      `cannot change status of task ${id}: это прогон временной роли, его ` +
+        `статусом управляет воркер вместе со строкой очереди.`,
+    );
+  }
   const allowed = FSM[t.status];
   if (!allowed || !allowed.includes(status)) {
     throw new Error(
