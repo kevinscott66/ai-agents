@@ -1187,7 +1187,28 @@ export function startMiniappServer(
     }
 
     // GET /api/db-stats — C31 DB maintenance / size dashboard.
+    //
+    // Аудит 2026-09-10: ручка была открыта любому допущенному, и это дороже,
+    // чем выглядит. `dbStats` (db-maint.ts:930) делает `COUNT(*)` по всем 19
+    // таблицам STAT_TABLES — включая `messages`, `messages_archive` и
+    // `agent_actions_archive` — плюс `dbstatByOwner`, про который его же
+    // комментарий говорит прямо: «`dbstat` — полный скан БД». `bun:sqlite`
+    // синхронна, а поток у процесса один на 12 ботов, HTTP и SSE-раздачу, так
+    // что скан блокирует не запросившего, а всех. GET-ведро здесь
+    // `{ capacity: 120, refillPerSec: 4 }`, то есть четыре полных скана в
+    // секунду — это ещё В ПРЕДЕЛАХ политики, а не злоупотребление.
+    //
+    // Гейт тот же, что у соседей по смыслу: `/api/audit-logs`,
+    // `/api/permissions`, `/api/budget-settings` — операторская интроспекция
+    // требует админа, наблюдателю остаются рабочие экраны. Заодно уходит
+    // раскрытие размеров и числа строк по таблицам тому, кому `redactContent`
+    // (487) не отдаёт ни одного тела.
+    //
+    // Mini App этим эндпоинтом не пользуется: экрана «БД» в miniapp/src/pages
+    // нет вовсе, вызова `db-stats` во фронтенде нет — гейт ничего не ломает.
     if (path === "/api/db-stats" && method === "GET") {
+      const adminErr = requireAdmin(user);
+      if (adminErr) return adminErr;
       return json({ stats: dbStats() });
     }
 
@@ -1212,6 +1233,47 @@ export function startMiniappServer(
           400,
         );
       }
+      // Аудит 2026-09-10: тот же класс, что у `status` выше, — последний
+      // непроверенный фильтр этой ручки. `listTasksByAssignee` (tasks.ts:842)
+      // сравнивает `assigned_to = ?` точным равенством, без LOWER и без
+      // нормализации, а канонический вид ключа гарантируют ВСЕ семь писателей:
+      // dispatch/tasks.ts:132,166, action-dispatch.ts:630 (роль делегата),
+      // :1418 («aieng»), diagnostic.ts:598 (pickResponsibleRole), а в
+      // dispatch/diagnostic-action.ts:236 явный `target_agent_key` пропущен
+      // через `VALID_AGENT_KEYS`. То есть неканоническое значение в колонке
+      // взяться неоткуда — и запрос по нему не может совпасть НИКОГДА.
+      //
+      // Читающая ветка при этом отвечала на «Backend» и на «devops» ровно тем
+      // же, чем на пустую очередь: 200 и `{"tasks": []}`. Пишущая ветка ниже
+      // (:1362) ту же опечатку отклоняет 400-м и своим докблоком объясняет
+      // почему — «`assigned_to` — адрес очереди». У чтения та же цена: по
+      // ответу нельзя отличить опечатку от «дел нет».
+      //
+      // `allowed` в теле — как у `status`: чинить опечатку по ответу, а не по
+      // исходнику.
+      // Условие ровно как у ветки-потребителя ниже: пустой `?assignee=` до
+      // фильтра не доходит вовсе, это «без фильтра», а не опечатка. Так же
+      // устроен сосед `/api/autonomy?agent=`.
+      //
+      // `canonicalAssignee` не проверяет, а НОРМАЛИЗУЕТ (`trim` + `toLowerCase`
+      // по CHARACTERS), и пишущая ветка ниже (:1362) кладёт в колонку именно
+      // её результат. Поэтому читающей мало пропустить значение — ей нужно
+      // спрашивать тем же ключом, каким писали: иначе `?assignee=Backend`
+      // проходит проверку и всё равно не совпадает ни с чем. Отказ остаётся
+      // только для того, чего в CHARACTERS нет вовсе.
+      let assigneeKey: string | null = null;
+      if (assignee) {
+        assigneeKey = canonicalAssignee(assignee);
+        if (assigneeKey === null) {
+          return json(
+            {
+              error: `bad query: unknown assignee: ${assignee}`,
+              allowed: CHARACTERS.map((c) => c.key),
+            },
+            400,
+          );
+        }
+      }
       const statuses: TaskStatus[] | undefined = status ? [status] : undefined;
       // Аудит 2026-08-28: выдача резалась молча. Ответ на сто задач из ста и
       // ответ на сто задач из трёхсот выглядели одинаково — код 200, массив
@@ -1224,11 +1286,11 @@ export function startMiniappServer(
       const probe = limit + 1;
       let tasks;
       let truncated = false;
-      if (assignee) {
+      if (assigneeKey) {
         // Аудит 2026-08-28: `chat_id` сюда не доезжал вовсе — ветка assignee
         // выигрывала и молча теряла сужение области, отвечая 200 с задачами
         // роли из всех чатов сразу.
-        const rows = listTasksByAssignee(assignee, statuses, probe, chatId);
+        const rows = listTasksByAssignee(assigneeKey, statuses, probe, chatId);
         truncated = rows.length > limit;
         // Очередь роли отсортирована `priority DESC`: лишняя строка последняя.
         tasks = truncated ? rows.slice(0, limit) : rows;

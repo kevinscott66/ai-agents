@@ -183,20 +183,28 @@ describe("C13a routes", () => {
   });
 
   test("tasks: seed, GET by id, list by assignee, update status", async () => {
-    // Use a unique assignee key so prior runs in the shared SQLite db
-    // don't poison the list-by-assignee query (which is limited to 50).
-    const uniqueAssignee = `qa-${crypto.randomUUID()}`;
+    // Изоляция от прошлых прогонов в общей SQLite нужна прежней (выдача
+    // режется лимитом 50), но держаться она должна не на выдуманном
+    // исполнителе: с аудита 2026-09-10 `?assignee=` сверяется с CHARACTERS и
+    // на `qa-<uuid>` честно отвечает 400. Разводим по chat_id — это и так
+    // граница арендатора в этом коде, и ветка assignee её учитывает
+    // (аудит 2026-08-28), так что сужение вышло даже строже прежнего.
+    const uniqueChatId = -1_000_000 - Math.floor(Math.random() * 1_000_000);
     const t = createTask({
-      chatId: -123,
+      chatId: uniqueChatId,
       createdBy: "orchestrator",
-      assignedTo: uniqueAssignee,
+      assignedTo: "qa",
       title: "c13 test task",
     });
     const got = await api(`/api/tasks/${t.id}`, {}, freshInitData());
     expect(got.status).toBe(200);
     expect(got.body.task.id).toBe(t.id);
 
-    const list = await api(`/api/tasks?assignee=${uniqueAssignee}`, {}, freshInitData());
+    const list = await api(
+      `/api/tasks?assignee=qa&chat_id=${uniqueChatId}`,
+      {},
+      freshInitData(),
+    );
     expect(list.status).toBe(200);
     expect(list.body.tasks.some((x: any) => x.id === t.id)).toBe(true);
 

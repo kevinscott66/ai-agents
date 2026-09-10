@@ -28,6 +28,8 @@ import {
   unlinkSync,
 } from "node:fs";
 import { join } from "node:path";
+import { readFileSync } from "node:fs";
+import { gunzipSync } from "node:zlib";
 import { DAY_MS } from "./time-constants.ts";
 import { db } from "./db.ts";
 import { log } from "./log.ts";
@@ -170,6 +172,33 @@ export const _readColdDays = readColdDays;
 export function coldStorageFileName(table: string, now: number): string {
   const stamp = new Date(now).toISOString().slice(0, 19).replace(/:/g, "-");
   return `${table}-${stamp}.ndjson.gz`;
+}
+
+/**
+ * Прочитать файл холодного хранилища обратно в строки NDJSON.
+ *
+ * Аудит 2026-09-10. Файл — конкатенация gzip-членов, по одному на батч
+ * (см. BATCH_ROWS выше). Это валидный gzip: `zcat`, `gunzip`, python `gzip` и
+ * `node:zlib` читают все члены. А `Bun.gzipSync`/`Bun.gunzipSync` — те самые
+ * функции, которыми файл здесь ПИШЕТСЯ, — на многочленном входе возвращают
+ * только ПЕРВЫЙ член. Без ошибки, без флага, без короткого чтения:
+ *
+ *   Bun.gunzipSync(concat(gzip("line1\n"), gzip("line2\n")))  →  "line1\n"
+ *
+ * Цена ровно та, о которой предупреждает шапка модуля: после prune файл —
+ * единственная копия строк. Восстановление, написанное в этом репозитории
+ * очевидным способом (тем же Bun, что и всё остальное), молча вернуло бы
+ * первые 2000 строк из скольких угодно и выглядело бы успешным.
+ *
+ * Поэтому читатель живёт здесь, рядом с писателем, и берёт `node:zlib`
+ * намеренно. Тест `audit-2026-09-10-cold-storage-multimember.test.ts`
+ * закрепляет обе половины: что `node:zlib` читает файл целиком и что
+ * `Bun.gunzipSync` на нём обрезает, — чтобы «упростить» читателя обратно
+ * было нельзя незаметно.
+ */
+export function readColdStorageExport(file: string): string[] {
+  const text = gunzipSync(readFileSync(file)).toString("utf8");
+  return text.split("\n").filter((l) => l !== "");
 }
 
 /** Tables may not exist on a minimal/legacy DB — treat missing as empty. */
