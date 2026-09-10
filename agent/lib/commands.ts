@@ -289,7 +289,10 @@ export async function cmdApprove(args: {
    *  DELEGATE_TO_ROLE и CREATE_TEAM_CHANNEL. */
   deps?: ApprovalExecDeps;
 }): Promise<string> {
-  const existing = resolveApproval(args.approvalId);
+  // Полный id решается из любого чата: админ, отклоняющий из лички,
+  // — сценарий из аудита 2026-08-09, и журнал у него уходит в чат заявки.
+  // Сужается только префикс — см. докблок `resolveApproval`.
+  const existing = resolveApproval(args.approvalId, args.chatId);
   if (!existing) return `Approval не найден: ${args.approvalId}`;
   if (existing.status !== "pending") {
     return `Approval ${args.approvalId} уже ${existing.status}.`;
@@ -321,7 +324,7 @@ export function cmdReject(args: {
   chatId: number;
   reason?: string;
 }): string {
-  const existing = resolveApproval(args.approvalId);
+  const existing = resolveApproval(args.approvalId, args.chatId);
   if (!existing) return `Approval не найден: ${args.approvalId}`;
   if (existing.status !== "pending") {
     return `Approval ${args.approvalId} уже ${existing.status}.`;
@@ -675,7 +678,12 @@ export function cmdApprovals(args: {
     .map((a) => {
       // Без выжимки владелец жал /approve, не видя ни строки того, что уйдёт
       // подписчикам: строка состояла только из id, роли и типа действия.
-      const preview = approvalPreview(a.action_type, a.payload);
+      // Чат — из строки заявки, не из payload'а: исполнение пинит действие
+      // к `approval.chat_id` (`executeApproved` выше передаёт его как
+      // `chatId` в `dispatchAndAudit`), а `payload.chatId` игнорируется.
+      const preview = approvalPreview(a.action_type, a.payload, undefined, {
+        chatId: a.chat_id,
+      });
       const head = `${a.id} ${a.requested_by} ${a.action_type} (создано ${fmtTs(a.created_at)})`;
       return preview ? `${head} — ${preview}` : head;
     })

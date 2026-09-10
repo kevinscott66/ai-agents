@@ -1185,11 +1185,24 @@ function auditRecoveryPayload(payload: unknown): unknown {
   }
 }
 
-function auditFailureMessage(auditError: unknown, sideEffectSucceeded: boolean): string {
-  const state = sideEffectSucceeded
-    ? "external side effect succeeded"
-    : "external side effect did not complete";
-  return `${state}, but audit write failed: ${getErrorMessage(auditError)}`;
+/**
+ * Что успело случиться снаружи к моменту, когда упала запись аудита.
+ *
+ * Третье состояние («partial») — не педантизм: провал с уже случившимся
+ * побочным эффектом приходит сюда обычным `!ok` с `sideEffect: true`
+ * (частичная доставка `sendChunked` после k из N частей), и оба прежних
+ * варианта текста были про него неправдой.
+ */
+type SideEffectState = "succeeded" | "partial" | "none";
+
+function auditFailureMessage(auditError: unknown, state: SideEffectState): string {
+  const prefix =
+    state === "succeeded"
+      ? "external side effect succeeded"
+      : state === "partial"
+        ? "external side effect partially completed"
+        : "external side effect did not complete";
+  return `${prefix}, but audit write failed: ${getErrorMessage(auditError)}`;
 }
 
 function unavailableAuditId(requestId: string): string {
@@ -1255,7 +1268,7 @@ export async function dispatchAndAudit<T extends ActionType>(
       // The handler may already have sent to Telegram or changed another
       // external system. Record that fact as an error; do not report success
       // merely because the side effect cannot be rolled back.
-      const error = auditFailureMessage(auditError, true);
+      const error = auditFailureMessage(auditError, "succeeded");
       try {
         const recovery = closeRecoveryAudit(inflightId, {
           agentKey: ctx.agentKey,
@@ -1328,7 +1341,25 @@ export async function dispatchAndAudit<T extends ActionType>(
       requestId,
     }));
   } catch (auditError) {
-    const error = auditFailureMessage(auditError, false);
+    // Аудит 2026-09-11: эта ветка теряла `sideEffect`/`retryable`.
+    //
+    // Зеркальная ветка на `ok`-пути (выше) ставит их намеренно: без
+    // `sideEffect` рефанд в `gateOrDispatch` возвращает слот рейт-лимита за
+    // ход, который уже написал в Telegram. Здесь рассуждение то же и случай
+    // не гипотетический: частичная доставка приходит именно `!ok` с
+    // `sideEffect: true` (см. audit-2026-08-28-approved-partial-delivery-
+    // refund). Наложи на это падение записи аудита (SQLITE_BUSY, диск) — и
+    // получаем ход, положивший k сообщений в чат, которому вернули слот и
+    // сказали модели «ошибка, можно повторить». Под залипшей БД это
+    // повторяется каждый ход: чат набивается кусками, а лимит не срабатывает,
+    // потому что его каждый раз возвращают.
+    const error = auditFailureMessage(
+      auditError,
+      res.sideEffect ? "partial" : "none",
+    );
+    const sideEffectFields = res.sideEffect
+      ? { sideEffect: true as const, retryable: false as const }
+      : {};
     try {
       const recovery = closeRecoveryAudit(inflightId, {
         agentKey: ctx.agentKey,
@@ -1352,6 +1383,7 @@ export async function dispatchAndAudit<T extends ActionType>(
         error: `${error}; recovery audit status recorded as error`,
         actionId: recovery.id,
         taskId,
+        ...sideEffectFields,
       };
     } catch (recoveryError) {
       const recoveryMessage = getErrorMessage(recoveryError);
@@ -1367,6 +1399,7 @@ export async function dispatchAndAudit<T extends ActionType>(
         error: `${error}; recovery audit also failed: ${recoveryMessage}`,
         actionId: unavailableAuditId(requestId),
         taskId,
+        ...sideEffectFields,
       };
     }
   }

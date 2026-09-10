@@ -13,6 +13,7 @@ import {
   updateTaskStatus,
   getTask,
   isDiagTaskInput,
+  isSpawnRoleTaskInput,
   DIAG_ASSIGNEE,
   OPEN_TASK_STATUSES,
   type Task,
@@ -265,6 +266,46 @@ function diagStatusGuard(
   };
 }
 
+/**
+ * Прогон временной роли статусом двигает только воркер.
+ *
+ * Аудит 2026-09-11, третья дверь к тому же расхождению (первые две закрыты в
+ * `createTask` и `rollupParent`). Задача-роль и строка `role_runtime_queue` —
+ * половины одного прогона: id общий, вставляются одной транзакцией, и каждый
+ * UPDATE воркера обусловлен `status='running'` / `state='running'`. Модель к
+ * этой паре доступа не имеет вовсе — а `UPDATE_TASK_STATUS` и
+ * `REQUEST_REVIEW` пускали её к одной половине.
+ *
+ * Обе двери ведут в тупик, и обе тихие. `pending → running` на ещё не
+ * взятой роли: очередь остаётся `queued`, задача уже не `pending`, и
+ * сводящая проверка воркера молча уводит строку в `failed` — одобренный
+ * человеком прогон не случается, сообщения об этом нет. `awaiting_review`
+ * (REQUEST_REVIEW) хуже вдвойне: `gcStaleTasks` этот статус не трогает
+ * НАМЕРЕННО, так что строка не исчезнет и через сутки.
+ *
+ * Исключения для «своего» агента здесь нет, в отличие от задач самопочинки:
+ * у прогона роли нет агента-владельца на доске — им распоряжается воркер, а
+ * не участник чата.
+ */
+function spawnRoleStatusGuard(
+  current: { id: string; input: unknown },
+  ctx: TaskHandlerContext,
+  action: string,
+): TaskHandlerResult | null {
+  if (!isSpawnRoleTaskInput(current.input)) return null;
+  log.warn(`[security] ${action}: смена статуса прогона роли — отказ`, {
+    task_id: current.id,
+    agent: ctx.agentKey,
+  });
+  return {
+    ok: false,
+    error:
+      `cannot change status of task ${current.id}: это прогон временной роли, ` +
+      `его статусом управляет воркер вместе со строкой очереди (иначе прогон ` +
+      `потеряется). Своя работа — заведи задачу через CREATE_TASK.`,
+  };
+}
+
 export function handleUpdateTaskStatus(
   payload: PayloadByType["UPDATE_TASK_STATUS"],
   ctx: TaskHandlerContext,
@@ -302,6 +343,8 @@ export function handleUpdateTaskStatus(
   }
   const diagErr = diagStatusGuard(current, ctx, "UPDATE_TASK_STATUS");
   if (diagErr) return diagErr;
+  const roleErr = spawnRoleStatusGuard(current, ctx, "UPDATE_TASK_STATUS");
+  if (roleErr) return roleErr;
   const patch: { output?: unknown; error?: string | null } = {};
   if (payload.output !== undefined) patch.output = payload.output;
   if (payload.error !== undefined) patch.error = payload.error;
@@ -323,6 +366,8 @@ export function handleRequestReview(
   }
   const diagErr = diagStatusGuard(current, ctx, "REQUEST_REVIEW");
   if (diagErr) return diagErr;
+  const roleErr = spawnRoleStatusGuard(current, ctx, "REQUEST_REVIEW");
+  if (roleErr) return roleErr;
   const task = updateTaskStatus(payload.taskId, "awaiting_review");
   return {
     ok: true,

@@ -242,11 +242,22 @@ export function enqueueRoleTask(
   });
   const id = crypto.randomUUID();
   const now = Date.now();
+  // Аудит 2026-09-11: `system_prompt` отсюда убран, и это не косметика.
+  // `role_runtime_queue` стоит в денилисте QUERY_DB (query-db.ts) как «тот же
+  // класс данных, что agent_prompts», а `tasks` намеренно читаема — её
+  // читаемость закреплена тестом. Дубль промпта в `tasks.input` сводил запрет
+  // на нет: `SELECT input FROM tasks WHERE input LIKE '%_spawn_role%'` отдавал
+  // ровно то, что денилист прячет, и запрос проходил валидацию целиком.
+  //
+  // Терять нечего: единственным читателем этой копии была миграция 044,
+  // разово перенёсшая легаси-строки в очередь; живой код берёт промпт из
+  // `role_runtime_queue.system_prompt` (:173). `queue_version: 2` — метка
+  // формата без промпта, чтобы старую строку было видно по данным, а не по
+  // догадке. Старые строки чистит миграция 052.
   const queueInput = JSON.stringify({
     _spawn_role: true,
-    queue_version: 1,
+    queue_version: 2,
     role_slug: roleSlug,
-    system_prompt: systemPrompt,
     task_hint: taskHint,
     provider,
   });

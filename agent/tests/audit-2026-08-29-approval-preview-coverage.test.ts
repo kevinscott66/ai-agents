@@ -30,7 +30,11 @@ import { approvalPreview } from "../lib/approvals.ts";
 
 describe("payload из одних чисел даёт непустую выжимку", () => {
   test("DELETE_MESSAGE называет сообщение и чат", () => {
-    const s = approvalPreview("DELETE_MESSAGE", { chatId: -1001, messageId: 8231 });
+    // Чат приходит контекстом (`approvals.chat_id`), а не из payload'а:
+    // см. аудит 2026-09-11 и его тест про пиннинг.
+    const s = approvalPreview("DELETE_MESSAGE", { chatId: -1001, messageId: 8231 }, undefined, {
+      chatId: -1001,
+    });
     expect(s).toContain("8231");
     expect(s).toContain("-1001");
   });
@@ -44,8 +48,10 @@ describe("payload из одних чисел даёт непустую выжи�
     expect(s).toContain("77");
   });
 
-  test("FORWARD_MESSAGE называет сообщение и чат-источник", () => {
-    const s = approvalPreview("FORWARD_MESSAGE", { messageId: 5, fromChatId: -42 });
+  test("FORWARD_MESSAGE называет сообщение и чат исполнения", () => {
+    const s = approvalPreview("FORWARD_MESSAGE", { messageId: 5, fromChatId: -42 }, undefined, {
+      chatId: -42,
+    });
     expect(s).toContain("5");
     expect(s).toContain("-42");
   });

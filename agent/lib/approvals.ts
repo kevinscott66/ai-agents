@@ -9,6 +9,7 @@ import { HOUR_MS } from "./time-constants.ts";
 import { emit as busEmit } from "./events-bus.ts";
 import type { Database } from "bun:sqlite";
 import { closeAgentPromptProposals } from "./dispatch/agent-prompt.ts";
+import { crossChatRequested } from "./dispatch/helpers.ts";
 
 /**
  * `failed` — человек одобрил, но исполнение упало (см. markApprovalFailed).
@@ -274,7 +275,25 @@ export function getApproval(id: string): Approval | null {
  * exact first, then a prefix match that is UNIQUE among PENDING approvals.
  * Returns null if not found or the prefix is ambiguous.
  */
-export function resolveApproval(idOrPrefix: string): Approval | null {
+/**
+ * Найти заявку по полному id или однозначному префиксу.
+ *
+ * `chatId` сужает поиск по префиксу до одного чата — и это не удобство.
+ * Очередь заявок чат-локальна: `/approvals` печатает
+ * `listPendingApprovals(chatId, …)`, предел на роль считается по чату
+ * (см. докблок `maxPendingApprovals`), и человек, набирающий `/approve ab12`,
+ * называет строку ИЗ ТОГО СПИСКА, который перед ним. Без фильтра тот же
+ * префикс мог совпасть с единственной подходящей заявкой ЧУЖОГО чата — и
+ * тогда команда молча решала не ту заявку, которую назвали, ровно как
+ * `/approve ____` до аудита 2026-08-08. Разница лишь в том, что там угадывал
+ * шаблон, а здесь — соседняя доска.
+ *
+ * Без `chatId` (Mini App, инструменты, тесты) поведение прежнее: по всем чатам.
+ */
+export function resolveApproval(
+  idOrPrefix: string,
+  chatId?: number,
+): Approval | null {
   const exact = getApproval(idOrPrefix);
   if (exact) return exact;
   const p = (idOrPrefix ?? "").trim();
@@ -284,12 +303,15 @@ export function resolveApproval(idOrPrefix: string): Approval | null {
   // ровно один ряд, то есть команда решала не ту заявку, которую назвали, —
   // «одобрить хоть что-нибудь». Команда админская, но угадывать она не должна.
   const like = p.replace(/[\\%_]/g, "\\$&");
+  const scoped = chatId === undefined ? "" : " AND a.chat_id = ?";
+  const params: unknown[] = [`${like}%`];
+  if (chatId !== undefined) params.push(chatId);
   const rows = db
     .prepare(
       `${APPROVAL_SELECT}
-        WHERE a.id LIKE ? ESCAPE '\\' AND a.status = 'pending' LIMIT 2`,
+        WHERE a.id LIKE ? ESCAPE '\\' AND a.status = 'pending'${scoped} LIMIT 2`,
     )
-    .all(`${like}%`) as ApprovalRow[];
+    .all(...(params as never[])) as ApprovalRow[];
   if (rows.length !== 1) return null; // none or ambiguous
   return rowToApproval(rows[0]);
 }
@@ -375,9 +397,48 @@ function coverNote(p: Record<string, unknown>): string {
   return "баннер по заголовку поста";
 }
 
+/**
+ * Чат, в котором заявка будет ИСПОЛНЕНА, — и пометка, если payload просит
+ * другой.
+ *
+ * Аудит 2026-09-11: карточка печатала `payload.chatId` как цель, а исполнение
+ * пинит чат к чату-источнику — `pinnedChatId(payload.chatId, ctx.chatId, …)`
+ * (dispatch/helpers.ts) ВСЕГДА возвращает `ctx.chatId`, и это защита от
+ * увода данных, а не редкая ветка. То есть карточка называла чат, в котором
+ * ничего не произойдёт, — и хуже всего у `DELETE_MESSAGE`: id сообщений
+ * нумеруются в каждом чате отдельно, так что «удалить 8231 в чате B»,
+ * одобренное как безобидная уборка в соседнем чате, необратимо удаляет
+ * ЧУЖОЕ сообщение 8231 в этом. У `FORWARD_MESSAGE` пиннингу подчинены оба
+ * конца: пересылка всегда внутри своего чата, «из чата B» — выдумка.
+ *
+ * Предикат берём общий (`crossChatRequested`), а не `!==` по месту: его
+ * докстрока прямо просит не разводить копии условия, иначе заметка окажется
+ * не про тот случай, который сработал.
+ */
+function pinnedChatPart(
+  p: Record<string, unknown>,
+  field: string,
+  ctx: PreviewCtx,
+  label: string,
+): string {
+  // Без контекста (старый вызывающий) чужой чат не называем вовсе: солгать
+  // молчанием безопаснее, чем назвать чат, в котором ничего не случится.
+  if (ctx.chatId === undefined) return "";
+  const requested = typeof p[field] === "number" ? (p[field] as number) : undefined;
+  return crossChatRequested(requested, ctx.chatId)
+    ? `${label} ${ctx.chatId} (запрошен ${requested} — игнорируется)`
+    : `${label} ${ctx.chatId}`;
+}
+
+/** Что карточка знает о заявке помимо payload'а. */
+export interface PreviewCtx {
+  /** `approvals.chat_id` — чат, в котором заявка будет исполнена. */
+  chatId?: number;
+}
+
 const PREVIEW_BY_ACTION: Record<
   string,
-  (p: Record<string, unknown>) => string
+  (p: Record<string, unknown>, ctx: PreviewCtx) => string
 > = {
   GRANT_PERMISSION: (p) =>
     join([
@@ -434,21 +495,23 @@ const PREVIEW_BY_ACTION: Record<
   SEND_MESSAGE: (p) => join([ownerVoice(p), str(p, "text")]),
   EDIT_MESSAGE: (p) =>
     join([`правка сообщения ${num(p, "messageId")}`, str(p, "text")]),
-  DELETE_MESSAGE: (p) =>
+  DELETE_MESSAGE: (p, c) =>
     join([
       ownerVoice(p),
       `удалить сообщение ${num(p, "messageId")}`,
-      typeof p.chatId === "number" ? `в чате ${p.chatId}` : "",
+      pinnedChatPart(p, "chatId", c, "в чате"),
     ]),
-  PIN_MESSAGE: (p) =>
+  PIN_MESSAGE: (p, c) =>
     join([
       `закрепить сообщение ${num(p, "messageId")}`,
-      typeof p.chatId === "number" ? `в чате ${p.chatId}` : "",
+      pinnedChatPart(p, "chatId", c, "в чате"),
     ]),
-  FORWARD_MESSAGE: (p) =>
+  FORWARD_MESSAGE: (p, c) =>
     join([
       `переслать сообщение ${num(p, "messageId")}`,
-      typeof p.fromChatId === "number" ? `из чата ${p.fromChatId}` : "",
+      // Оба конца пересылки пиннятся к чату заявки (dispatch/telegram.ts:441-442),
+      // поэтому источник и назначение — один и тот же чат.
+      pinnedChatPart(p, "fromChatId", c, "внутри чата"),
     ]),
   SET_REACTION: (p) =>
     join([
@@ -495,6 +558,7 @@ export function approvalPreview(
   actionType: string,
   payload: unknown,
   limit = 120,
+  ctx: PreviewCtx = {},
 ): string {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return "";
@@ -503,7 +567,7 @@ export function approvalPreview(
   const pick = (): string => {
     const byAction = PREVIEW_BY_ACTION[actionType];
     if (byAction) {
-      const s = byAction(p);
+      const s = byAction(p, ctx);
       if (s.trim()) return s;
     }
     for (const f of PREVIEW_FIELDS) {

@@ -379,21 +379,48 @@ export function handleUpdateAgentPromptRejected(args: {
   // agent_prompts и в журнал не смотрит, а `GET_PROMPT_HISTORY` читает ту же
   // таблицу и печатал `applied: false` и для отказа, и для «ещё не решено».
   //
-  // Отбор тот же, что у одобрения (по содержимому, ASC): id approval'а не
-  // несёт ссылки на строку версии, а очередь решают со старшей.
-  const pending = db
-    .prepare(
-      `SELECT id, version FROM agent_prompts
-       WHERE agent_key = ? AND applied_at IS NULL AND rejected_at IS NULL
-         AND closed_at IS NULL
-         AND prompt = ? AND reason = ?
-       ORDER BY version ASC LIMIT 1`,
-    )
-    .get(
-      args.payload.target_agent_key,
-      args.payload.new_prompt,
-      args.payload.reason,
-    ) as { id: number; version: number } | undefined;
+  // Отбор тот же, что у одобрения, и по той же причине — сначала по
+  // `approval_id`, содержимое запасным путём.
+  //
+  // Аудит 2026-09-11: здесь стояло «id approval'а не несёт ссылки на строку
+  // версии». С миграции 050 это неверно: `insertPendingAgentPrompt` пишет
+  // `approval_id` в строку, одобрение по нему уже ищет, а отказ — единственный
+  // из двух путей, который остался угадывать по тексту. Угадывание ломается
+  // ровно там же, где ломалось у одобрения: автор переспросил тем же текстом
+  // (v5 под заявкой A, v6 под B), владелец решает очередь не по порядку — из
+  // Mini App это одно нажатие — и `ORDER BY version ASC` ставит `rejected_at`
+  // не на ту версию. Дальше одобрение заявки A своей строки уже не находит
+  // (она помечена отказом) и уходит в запасной путь, то есть штампует
+  // `applied_at` на v6. В `GET_PROMPT_HISTORY` обе половины решения оказываются
+  // перевёрнуты, а тексты одинаковы — заметить нечем.
+  //
+  // Запасной путь по содержимому остаётся: у строк до миграции 050
+  // `approval_id` пуст.
+  const byApproval = args.approvalId
+    ? (db
+        .prepare(
+          `SELECT id, version FROM agent_prompts
+           WHERE approval_id = ? AND applied_at IS NULL AND rejected_at IS NULL
+             AND closed_at IS NULL
+           LIMIT 1`,
+        )
+        .get(args.approvalId) as { id: number; version: number } | undefined)
+    : undefined;
+  const pending =
+    byApproval ??
+    (db
+      .prepare(
+        `SELECT id, version FROM agent_prompts
+         WHERE agent_key = ? AND applied_at IS NULL AND rejected_at IS NULL
+           AND closed_at IS NULL
+           AND prompt = ? AND reason = ?
+         ORDER BY version ASC LIMIT 1`,
+      )
+      .get(
+        args.payload.target_agent_key,
+        args.payload.new_prompt,
+        args.payload.reason,
+      ) as { id: number; version: number } | undefined);
   // Аудит 2026-08-29: отметка отказа в строке версии и запись решения в
   // журнал — две половины одного решения, а уходили двумя автокоммитами.
   // Обрыв между ними давал ровно тот развал, который эта же функция чинила

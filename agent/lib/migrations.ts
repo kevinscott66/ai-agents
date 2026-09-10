@@ -1255,6 +1255,58 @@ export const MIGRATIONS: Migration[] = [
       addColumn(db, "agent_prompts", "closed_at INTEGER");
     },
   },
+  {
+    /*
+     * Аудит 2026-09-11: денилист QUERY_DB прятал очередь временных ролей, а
+     * копия промпта лежала в читаемой таблице.
+     *
+     * `role_runtime_queue` и её архив закрыты аудитом 2026-08-27 именно
+     * потому, что `system_prompt` — тот же класс данных, что `agent_prompts`.
+     * Но `enqueueRoleTask` писал тот же текст вторым экземпляром в
+     * `tasks.input`, а `tasks` намеренно читаема (и пришпилена читаемой
+     * тестом audit-2026-08-20-query-db-archive-tables). Одна строка —
+     * `SELECT input FROM tasks WHERE input LIKE '%_spawn_role%'` — проходила
+     * валидатор целиком и отдавала ровно то, ради чего денилист заведён.
+     *
+     * Новые строки промпта больше не несут (`queue_version: 2`), эта миграция
+     * убирает его из старых. Ключ `system_prompt` вырезается, остальные поля
+     * payload'а сохраняются: `_spawn_role` читает `isSpawnRoleTask`
+     * (tasks.ts), на нём же держится запрет переоткрывать спавн-задачу.
+     *
+     * Что теряется. Строки, заведённые до миграции 044 и НЕ бывшие тогда в
+     * `pending`, в очередь не переносились — для них копия в `tasks.input`
+     * единственная, и она исчезнет. Это и есть цель: роль отработала, а её
+     * системный промпт остался лежать в таблице, которую читает модель.
+     * Живые прогоны не страдают — 044 идёт раньше и уже перенесла всё, что
+     * ждало исполнения.
+     */
+    name: "052_tasks_input_drop_role_prompt",
+    up: (db) => {
+      const rows = db
+        .prepare(
+          `SELECT id, input FROM tasks
+            WHERE input LIKE '%"_spawn_role":true%'
+              AND input LIKE '%"system_prompt"%'`,
+        )
+        .all() as Array<{ id: string; input: string | null }>;
+      const update = db.prepare(`UPDATE tasks SET input = ? WHERE id = ?`);
+      for (const row of rows) {
+        try {
+          const payload = JSON.parse(row.input ?? "{}");
+          if (payload?._spawn_role !== true) continue;
+          if (!("system_prompt" in payload)) continue;
+          delete payload.system_prompt;
+          // `updated_at` не трогаем: это не событие задачи, а уборка хранения,
+          // и сдвиг метки увёл бы её из выборок санитара по возрасту.
+          update.run(JSON.stringify(payload), row.id);
+        } catch {
+          // Битый payload оставляем как есть — вырезать ключ из не-JSON
+          // регуляркой значит испортить строку, которую оператор ещё может
+          // прочитать глазами.
+        }
+      }
+    },
+  },
 ];
 
 /**

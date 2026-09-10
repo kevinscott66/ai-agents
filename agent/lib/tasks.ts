@@ -104,12 +104,16 @@ function parseJSON(v: string | null): unknown | null {
  * (migrations.ts:999). Отличать её от обычной задачи нужно ровно затем, чтобы
  * логика набора детей не переписывала итог чужого прогона — см. `createTask`.
  */
-function isSpawnRoleTask(task: Task): boolean {
+export function isSpawnRoleTaskInput(input: unknown): boolean {
   return (
-    typeof task.input === "object" &&
-    task.input !== null &&
-    (task.input as { _spawn_role?: unknown })._spawn_role === true
+    typeof input === "object" &&
+    input !== null &&
+    (input as { _spawn_role?: unknown })._spawn_role === true
   );
+}
+
+function isSpawnRoleTask(task: Task): boolean {
+  return isSpawnRoleTaskInput(task.input);
 }
 
 function rowToTask(row: TaskRow): Task {
@@ -779,6 +783,16 @@ export function reconcileExpectedChildren(
 ): void {
   const parent = getTask(parentId);
   if (!parent) return;
+  // Аудит 2026-09-11: та же граница, что в `rollupParent` ниже. Нулевая ветка
+  // здесь тоже штампует терминал (`forceTerminalStatus(parent, "failed")`), а
+  // прогон роли статусом двигает только воркер — в паре со строкой очереди.
+  if (isSpawnRoleTask(parent)) {
+    log.warn("[tasks] reconcileExpectedChildren: родитель — прогон роли, пропуск", {
+      task_id: parent.id,
+      status: parent.status,
+    });
+    return;
+  }
   const inp =
     parent.input && typeof parent.input === "object"
       ? { ...(parent.input as Record<string, unknown>) }
@@ -841,6 +855,31 @@ export function rollupParent(parentId: string): void {
   const parent = getTask(parentId);
   if (!parent) return;
   if (parent.status === "done" || parent.status === "failed" || parent.status === "cancelled") {
+    return;
+  }
+  // Аудит 2026-09-11: вторая дверь к тому же расхождению, что закрыл круг
+  // 2026-09-10 со стороны переоткрытия. Там запретили поднимать ЗАВЕРШЁННЫЙ
+  // прогон роли обратно в running; здесь — закрывать ЖИВОЙ по чужим детям.
+  //
+  // Статус задачи-роли — не вывод из набора детей, а половина строки
+  // `role_runtime_queue`: обе таблицы двигает воркер и двигает вместе. Дети у
+  // неё появляются потому, что модель внутри роли вправе звать
+  // CREATE_TASK{parentId} — это её работа, а не её план, и полнота такого
+  // набора ничего про прогон не говорит.
+  //
+  // Что ломалось, без всякого злоумышленника: роль claim'нута (`tasks.status
+  // = 'running'`, `queue.state = 'running'`), любая роль с доски заводит под
+  // ней подзадачу и закрывает её. Набор «полон» (expectedChildren роль не
+  // ставила), и `forceTerminalStatus` штампует прогон `done`. Очередь
+  // остаётся `running`, а `heartbeatRoleTask` обусловлен `tasks.status =
+  // 'running'` (role-runtime.ts) — он не находит строки, воркер получает
+  // `leaseLost` и бросает «role task lease lost before completion», минуя
+  // `failRoleTask`. Оплаченный прогон выброшен, доска показывает «done».
+  if (isSpawnRoleTask(parent)) {
+    log.warn("[tasks] rollupParent: родитель — прогон роли, статус не трогаем", {
+      task_id: parent.id,
+      status: parent.status,
+    });
     return;
   }
   const children = db
