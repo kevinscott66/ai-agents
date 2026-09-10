@@ -37,6 +37,8 @@ const TG_ACTOR = `tg:${ADMIN_ID} (@ownerhandle)`;
 const TG_ACTOR_SHORT = "tg:…6677";
 /** Апдейт без from.id — id нет, прятать нечего. */
 const TG_UNKNOWN = "tg:unknown";
+/** @username не задан — в приписку уходит first_name, а он произвольный. */
+const TG_MULTILINE = `tg:${ADMIN_ID} (Имя\nв две строки)`;
 
 function initDataFor(userId: number): string {
   return buildInitData(BOT_TOKEN, {
@@ -50,6 +52,7 @@ let server: MiniappServerHandle;
 let base: string;
 let approvedId: string;
 let unknownId: string;
+let multilineId: string;
 
 async function get(path: string, userId: number): Promise<any> {
   const r = await fetch(`${base}${path}`, {
@@ -88,6 +91,7 @@ beforeAll(() => {
   base = `http://127.0.0.1:${server.port}`;
   approvedId = decided("approved", TG_ACTOR);
   unknownId = decided("rejected", TG_UNKNOWN);
+  multilineId = decided("approved", TG_MULTILINE);
 });
 
 afterAll(() => {
@@ -122,6 +126,17 @@ describe("решение из Telegram не выдаёт наблюдателю 
     const row = body.approvals.find((a: any) => a.id === unknownId);
     expect(row).toBeTruthy();
     expect(row.decided_by).toBe(TG_UNKNOWN);
+  });
+
+  test("перенос строки в приписке не проносит ID мимо шаблона", async () => {
+    const body = await get(
+      `/api/approvals?status=approved&chat_id=${CHAT_ID}&limit=200`,
+      VIEWER_ID,
+    );
+    const row = body.approvals.find((a: any) => a.id === multilineId);
+    expect(row).toBeTruthy();
+    expect(row.decided_by).toBe(TG_ACTOR_SHORT);
+    expect(JSON.stringify(body)).not.toContain(String(ADMIN_ID));
   });
 
   test("админу решение видно целиком", async () => {
