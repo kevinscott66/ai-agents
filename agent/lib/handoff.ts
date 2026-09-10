@@ -20,7 +20,7 @@ import {
 import { agentStopReason } from "./permissions.ts";
 import { isTriggerDelivered } from "./trigger-delivery.ts";
 import type { RunningBot, InputImage, InputDocument } from "./types.ts";
-import { log } from "./log.ts";
+import { log, redactText } from "./log.ts";
 import {
   sendChunked,
   messagePlainFits,
@@ -463,8 +463,15 @@ export async function respondAs(
       HTML_MESSAGE_FITS,
     );
     deliveredReply = reply;
+    // Аудит 2026-09-11: тут стояли первые 80 символов ответа открытым
+    // текстом — ровно то, что на прямом пути закрыли аудиты 2026-08-12 и
+    // 2026-08-29. Ответ делегата такой же пересказ приватной переписки, как
+    // и ответ орхестратора (`[out]`, orchestrator/message-handler.ts:825), а
+    // восемьдесят символов — типичное сообщение целиком. Каскад по
+    // упоминаниям заводит эту строку на каждый хоп, на уровне info, то есть
+    // в journalctl на проде. Пишем симметрично со строкой `[out]`.
     log.info(
-      `[handoff-out][${target.def.key}] chat=${chatId} text=${reply.slice(0, 80)}`,
+      `[handoff-out][${target.def.key}] chat=${chatId} text=${redactText(reply)}`,
     );
 
     recordMessage({
