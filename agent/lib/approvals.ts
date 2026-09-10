@@ -8,6 +8,7 @@ import { db } from "./db.ts";
 import { HOUR_MS } from "./time-constants.ts";
 import { emit as busEmit } from "./events-bus.ts";
 import type { Database } from "bun:sqlite";
+import { closeAgentPromptProposals } from "./dispatch/agent-prompt.ts";
 
 /**
  * `failed` — человек одобрил, но исполнение упало (см. markApprovalFailed).
@@ -620,6 +621,13 @@ export function markApprovalFailed(id: string, error: string): Approval | null {
     `UPDATE approvals SET status = 'failed', reason = ? WHERE id = ? AND status = 'approved'`,
   ).run(error.slice(0, 2000), id);
   if (res.changes === 0) return null;
+  // Аудит 2026-09-10: у UPDATE_AGENT_PROMPT одобрение и применение — разные
+  // шаги. Если исполнение упало ДО того, как обработчик проставил applied_at,
+  // строка версии оставалась с обоими NULL, то есть неотличимой от ждущей
+  // решения, и следующее одобрение того же текста стамповало её вместо новой
+  // (докблок `closeAgentPromptProposals`). Если applied_at уже стоит, UPDATE
+  // внутри ничего не меняет: условие требует обоих NULL.
+  closeAgentPromptProposals([id]);
   const updated = getApproval(id);
   if (updated) {
     busEmit("approval.decided", { id: updated.id, status: updated.status });

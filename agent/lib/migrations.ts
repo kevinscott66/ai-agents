@@ -1191,6 +1191,42 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    /*
+     * Аудит 2026-09-10: строка версии промпта не знала, какая заявка её решает.
+     *
+     * Связи между `agent_prompts` и `approvals` не было вовсе: и одобрение
+     * (`handleUpdateAgentPromptApproved`), и отказ
+     * (`handleUpdateAgentPromptRejected`) искали строку ПО СОДЕРЖИМОМУ —
+     * `agent_key + prompt + reason`, `applied_at IS NULL AND rejected_at IS
+     * NULL`, `ORDER BY version ASC LIMIT 1`. Пока каждая заявка получает
+     * решение, это работает: неразрешённая строка ровно одна.
+     *
+     * Но решение получает не каждая. `expireStaleApprovals` (TTL, db-maint.ts)
+     * и `markApprovalFailed` (исполнение упало уже после одобрения) закрывают
+     * заявку, НЕ трогая строку версии, — и та остаётся с обоими NULL, то есть
+     * неотличимой от ждущей решения. Дальше повторяется развал, который аудит
+     * 2026-08-27 уже чинил со стороны отказа: автор переспрашивает тем же
+     * текстом (v6), владелец одобряет, а `ORDER BY version ASC` находит
+     * ПРОТУХШУЮ v5 и стамповывает applied_at ей. Одобренная v6 навсегда
+     * числится непринятой, `GET_PROMPT_HISTORY` показывает перевёрнутую
+     * картину — а это единственный след правок system prompt'ов, какой есть.
+     *
+     * Колонка снимает не симптом, а способ сопоставления: закрыть строку по
+     * `approval_id` можно там, где содержимого payload'а под рукой нет вовсе
+     * (db-maint работает по таблице approvals), и без разбора JSON.
+     * Заполняется с этой миграции вперёд; у строк, созданных раньше, остаётся
+     * NULL, и для них работает прежний отбор по содержимому.
+     */
+    name: "050_agent_prompts_approval_id",
+    up: (db) => {
+      addColumn(db, "agent_prompts", "approval_id TEXT");
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_agent_prompts_approval
+           ON agent_prompts(approval_id);`,
+      );
+    },
+  },
 ];
 
 /**

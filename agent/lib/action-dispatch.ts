@@ -1700,13 +1700,6 @@ export async function gateOrDispatch<T extends ActionType>(
           status: "pending_approval",
           requestId,
         });
-        if (actionType === "UPDATE_AGENT_PROMPT") {
-          insertPendingAgentPrompt(
-            payload as PayloadByType["UPDATE_AGENT_PROMPT"],
-            ctx.agentKey,
-            database,
-          );
-        }
         approvalTransactionFaultForTests?.();
         const approvalId = insertApprovalRow({
           actionId: action.id,
@@ -1715,6 +1708,19 @@ export async function gateOrDispatch<T extends ActionType>(
           actionType,
           payload,
         }, database);
+        // Аудит 2026-09-10: строка версии писалась ДО заявки и ссылки на неё
+        // не получала — сопоставить их потом можно было только по содержимому
+        // (докблок `closeAgentPromptProposals`). Порядок внутри одной
+        // транзакции роли не играет: снаружи видны либо обе строки, либо ни
+        // одной, — а заявка, вставленная первой, отдаёт свой id.
+        if (actionType === "UPDATE_AGENT_PROMPT") {
+          insertPendingAgentPrompt(
+            payload as PayloadByType["UPDATE_AGENT_PROMPT"],
+            ctx.agentKey,
+            database,
+            approvalId,
+          );
+        }
         return { kind: "queued" as const, action, approvalId };
       }, db);
     } catch (e) {

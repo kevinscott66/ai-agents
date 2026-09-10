@@ -139,7 +139,31 @@ let maxWindowMs = HOUR_MS;
 const EVICT_MIN_INTERVAL_MS = 1_000;
 let lastEvict = 0;
 
-function evictExpiredBuckets(now: number): void {
+/**
+ * Порог вытеснения обязан покрывать окно ЛЮБОГО правила, ведро которого лежит
+ * в карте, иначе вытеснение перестаёт быть тождественным преобразованием и
+ * становится сбросом лимита.
+ *
+ * Аудит 2026-09-10: поднимался порог ровно в одном месте — в `checkBucket`, —
+ * а `reserveUserbotFloodSlots` читает и пишет ведро сам, мимо него, и при этом
+ * зовёт вытеснение. Окно userbot-flood настраивается переменной и допускает до
+ * семи суток (`readUserbotFloodWindowMs`), то есть при
+ * `USERBOT_FLOOD_WINDOW_MS` больше часа порог оставался часовым: набранное
+ * владельцем ведро вычищал ЛЮБОЙ посторонний вызов через час после последней
+ * записи (входящее сообщение зовёт `checkAndConsumeIngestLimit`, тот —
+ * вытеснение), и следующая резервация видела пустое ведро. Ограничение на
+ * личный аккаунт владельца молча превращалось из «N за окно» в «N в час».
+ *
+ * Дыра закрывалась сама собой после первого `checkUserbotFloodLimit` в
+ * процессе (реакции и удаления идут через `checkBucket`), то есть жила от
+ * старта до первого такого вызова — но именно на старте лимит и важен.
+ *
+ * Поэтому окно передаётся сюда параметром: всякий, кто вытесняет, обязан
+ * назвать правило, по которому работает. `commit` вызывается только следом за
+ * `checkBucket`, который окно уже учёл, — ему называть нечего.
+ */
+function evictExpiredBuckets(now: number, windowMs = 0): void {
+  if (windowMs > maxWindowMs) maxWindowMs = windowMs;
   if (now - lastEvict < EVICT_MIN_INTERVAL_MS) return;
   lastEvict = now;
   const cutoff = now - maxWindowMs;
@@ -159,8 +183,7 @@ function checkBucket(
   rule: BucketRule,
   now: number,
 ): { ok: boolean; retryInMs?: number } {
-  if (rule.windowMs > maxWindowMs) maxWindowMs = rule.windowMs;
-  evictExpiredBuckets(now);
+  evictExpiredBuckets(now, rule.windowMs);
   const arr = buckets.get(key) ?? [];
   const cutoff = now - rule.windowMs;
   // Drop old timestamps (in place, mutating).
@@ -746,6 +769,9 @@ export function reserveUserbotFloodSlots(
   }
   if (!Number.isFinite(count) || count <= 0) return noop;
 
+  // Правило нужно обеим веткам: отказу — чтобы посчитать срок ожидания,
+  // успеху — чтобы поднять порог вытеснения (evictExpiredBuckets).
+  const rule = userbotFloodRule();
   const cap = userbotFloodCapacity(characterId, chatId, now);
   if (count > cap.free) {
     // Аудит 2026-08-27: отказ раньше сообщал `cap.retryInMs` — время до
@@ -759,7 +785,6 @@ export function reserveUserbotFloodSlots(
     //
     // Считаем срок до освобождения ИМЕННО нужного числа слотов и отдельно
     // сообщаем случай, когда ждать бесполезно.
-    const rule = userbotFloodRule();
     const impossible = count > cap.max;
     return {
       ok: false,
@@ -774,7 +799,7 @@ export function reserveUserbotFloodSlots(
 
   const k = userbotBucketKey(characterId, chatId);
   const reservationId = nextReservationId++;
-  evictExpiredBuckets(now);
+  evictExpiredBuckets(now, rule.windowMs);
   const arr = buckets.get(k) ?? [];
   for (let i = 0; i < count; i++) arr.push({ ts: now, reservationId });
   buckets.set(k, arr);

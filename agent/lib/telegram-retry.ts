@@ -25,6 +25,33 @@ import { log } from "./log.ts";
 export const MAX_RETRY_AFTER_SECONDS = 60;
 const MAX_ATTEMPTS = 3;
 
+/**
+ * Пол ожидания перед повтором 429.
+ *
+ * Аудит 2026-09-10: спали ровно `secs * 1000`, а `secs` приходит снаружи и
+ * законно бывает нулём — `parseRetryAfterSeconds` принимает любое `>= 0`, и
+ * текстовая форма `retry after 0` разбирается так же. Ноль означал повтор
+ * МГНОВЕННО, то есть ровно то, что этот модуль и заведён устранять: шапка
+ * `sendWithHtml` (telegram-format.ts:459) называет мгновенный повтор
+ * недопустимым и обосновывает всю конструкцию тем, что пауза настоящая.
+ * Получалось до трёх запросов подряд без единой паузы в тот самый эндпойнт,
+ * который только что ответил «слишком часто», — не катастрофа (попытки
+ * ограничены `MAX_ATTEMPTS`), но приглашение углубить флуд-окно вместо того,
+ * чтобы его переждать.
+ *
+ * Тот же довод уже записан в `anthropic-client.ts` (`MIN_RETRY_AFTER_MS`):
+ * «ноль информации не несёт, сервер только что отказал по лимиту». Там нулевой
+ * заголовок игнорируется в пользу СОБСТВЕННОГО экспоненциального отступа; здесь
+ * своего отступа нет — `secs === undefined` означает «пробросить ошибку», — так
+ * что игнорировать нельзя, иначе потеряем законный повтор. Поэтому не отбрасываем,
+ * а поднимаем до секунды.
+ *
+ * `launch-restart.ts:193` в поле не нуждается: там `retry_after` только
+ * поднимает собственную задержку (`Math.max(waitMs, retryAfterMs)`), и ноль там
+ * не значит ничего.
+ */
+export const MIN_RETRY_AFTER_SECONDS = 1;
+
 function asRecord(v: unknown): Record<string, unknown> | undefined {
   return v !== null && typeof v === "object" ? (v as Record<string, unknown>) : undefined;
 }
@@ -112,13 +139,18 @@ export async function withTelegramRateLimitRetry<T>(
         }
         throw e;
       }
+      // Пол — только на сон. Сравнение с `maxWait` выше идёт по названному
+      // Telegram числу: поднимать до секунды то, что и так меньше потолка,
+      // решение о «ждать или отдать наверх» не меняет.
+      const waitSecs = Math.max(secs, MIN_RETRY_AFTER_SECONDS);
       log.warn("[tg] 429 — ждём столько, сколько просит Telegram", {
         label: opts.label,
         retryAfter: secs,
+        waitSeconds: waitSecs,
         attempt,
         maxAttempts,
       });
-      await sleep(secs * 1_000);
+      await sleep(waitSecs * 1_000);
     }
   }
 }

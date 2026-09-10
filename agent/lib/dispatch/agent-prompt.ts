@@ -86,12 +86,21 @@ interface VersionRow {
 /**
  * Insert a new agent_prompts row with version = max(version)+1 and
  * applied_at = NULL. Returns { id, version }. Called from gateOrDispatch
- * BEFORE approval-row creation (so even rejected proposals are recorded).
+ * inside the same transaction as the approval row (so even rejected
+ * proposals are recorded), and from the fallback branch of the approve
+ * handler.
+ *
+ * `approvalId` — заявка, которая эту версию решает (миграция 050). Передаётся
+ * всегда, когда известна: по ней строку закрывают истечение TTL и провал
+ * исполнения, у которых на руках нет ни текста промпта, ни причины. У ветки
+ * «строки не нашлось, вставляем применённой» заявки нет по построению —
+ * там NULL.
  */
 export function insertPendingAgentPrompt(
   payload: UpdateAgentPromptPayload,
   editedBy: string,
   database: Database = db,
+  approvalId: string | null = null,
 ): { id: number; version: number } {
   const now = Date.now();
   const row = database
@@ -103,8 +112,9 @@ export function insertPendingAgentPrompt(
   const ins = database
     .prepare(
       `INSERT INTO agent_prompts(
-        agent_key, version, prompt, edited_by, edited_at, applied_at, reason
-      ) VALUES (?, ?, ?, ?, ?, NULL, ?)`,
+        agent_key, version, prompt, edited_by, edited_at, applied_at, reason,
+        approval_id
+      ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)`,
     )
     .run(
       payload.target_agent_key,
@@ -113,8 +123,52 @@ export function insertPendingAgentPrompt(
       editedBy,
       now,
       payload.reason,
+      approvalId,
     );
   return { id: Number(ins.lastInsertRowid), version: nextVersion };
+}
+
+/**
+ * Закрыть строку версии, заявку по которой решили НЕ применением: истёк TTL
+ * (`expireStaleApprovals`) или исполнение упало уже после одобрения
+ * (`markApprovalFailed`).
+ *
+ * Аудит 2026-09-10: оба пути меняли статус заявки и на строку версии не
+ * смотрели, а строка с `applied_at IS NULL AND rejected_at IS NULL` — это ровно
+ * тот маркер, по которому одобрение ищет, что применять (докблок
+ * `handleUpdateAgentPromptApproved`). Мёртвая версия оставалась кандидатом
+ * навсегда, и следующее одобрение того же текста стамповало её вместо новой:
+ * тот же развал, что чинил аудит 2026-08-27 со стороны отказа.
+ *
+ * Отбор строго по `approval_id` и без запасного варианта по содержимому:
+ * догадываться, какую из одинаковых версий закрыть, здесь нельзя — ошибка
+ * закрыла бы ЖИВОЕ предложение, ждущее решения владельца. У строк старше
+ * миграции 050 approval_id пуст, их этот проход просто не трогает: они и так
+ * относятся к заявкам, решённым до появления колонки.
+ *
+ * `rejected_at`, а не отдельная колонка: колонка значит «версия закрыта, не
+ * применена» — и для отказа человека, и для протухшей заявки; чем именно
+ * закрыта, видно в самой строке approvals (status + reason).
+ */
+export function closeAgentPromptProposals(
+  approvalIds: string[],
+  now: number = Date.now(),
+  database: Database = db,
+): number {
+  if (approvalIds.length === 0) return 0;
+  const upd = database.prepare(
+    `UPDATE agent_prompts SET rejected_at = ?
+     WHERE approval_id = ? AND applied_at IS NULL AND rejected_at IS NULL`,
+  );
+  let closed = 0;
+  const tx = database.transaction(() => {
+    for (const id of approvalIds) closed += Number(upd.run(now, id).changes);
+  });
+  tx();
+  if (closed > 0) {
+    log.info("[agent-prompt] версии закрыты вместе с заявками", { closed });
+  }
+  return closed;
 }
 
 /**
@@ -223,7 +277,19 @@ export function handleUpdateAgentPromptApproved(
       },
       status: "ok",
     });
-  })();
+    // Аудит 2026-09-10: транзакция была DEFERRED, а её запасная ветка
+    // открывается ЧТЕНИЕМ — `SELECT COALESCE(MAX(version), 0)` внутри
+    // `insertPendingAgentPrompt` — и только потом пишет. В WAL это ровно тот
+    // случай, из-за которого SQLite отдаёт SQLITE_BUSY_SNAPSHOT: снимок для
+    // чтения взят до того, как кто-то другой закоммитил, и повышение до записи
+    // невозможно. `busy_timeout` такое НЕ пережидает — он повторяет ожидание
+    // блокировки, а не устаревший снимок, — то есть отказ приходит вызывающему
+    // сразу, уже ПОСЛЕ того, как человек нажал «одобрить».
+    //
+    // BEGIN IMMEDIATE берёт запись сразу: конкурент ждёт по busy_timeout, как
+    // и на всех остальных путях (`withApprovalTransaction` в approvals.ts
+    // делает то же самое).
+  }).immediate();
   emitActionEvents(applied);
 
   return {

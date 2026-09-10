@@ -1824,17 +1824,25 @@ async function routeApi(
   // заголовки (в т.ч. Content-Type и CORS) при этом остаются на месте.
   // Токен лимитера HEAD тратит наравне с GET — работа по сборке ответа
   // выполняется та же самая.
-  if (req.method !== "GET" && req.method !== "HEAD") {
-    return json(
-      { error: "method_not_allowed" },
-      { status: 405, headers: { Allow: "GET, HEAD, OPTIONS" } },
-      origin,
-    );
-  }
+  //
+  // Аудит 2026-09-10: лимитер стоял ПОСЛЕ проверки метода — та же дыра, что
+  // 2026-08-29 закрыли двадцатью строками выше для ингеста, только здесь её
+  // забыли. `POST /api/health` (и любой другой метод на любой путь под /api/)
+  // отвечал 405 сколько угодно раз подряд, не тронув ведро: канал бесплатных
+  // проб оставался неучтённым, а честные 60 чтений в минуту у того же адреса
+  // — нетронутыми. Порядок теперь один на обе ветки: сначала считаем, потом
+  // отвечаем. Preflight по-прежнему выходит выше и токена не тратит.
   if (!rateLimitOk(clientIp(req, server))) {
     return json(
       { error: "rate_limited" },
       { status: 429, headers: { "Retry-After": "60" } },
+      origin,
+    );
+  }
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    return json(
+      { error: "method_not_allowed" },
+      { status: 405, headers: { Allow: "GET, HEAD, OPTIONS" } },
       origin,
     );
   }
@@ -2138,6 +2146,19 @@ export function makeFetchHandler() {
     }
 
     if (req.method !== "GET" && req.method !== "HEAD") {
+      // Аудит 2026-09-10: тот же бесплатный 405, что и на /api/, только шире —
+      // здесь под него подходит ЛЮБОЙ путь. Считаем только те, за которые выше
+      // ещё не списали: `rateLimitedNonApi` уже прошёл своё ведро, и второй
+      // экземпляр брал бы два токена за один запрос (об этом же предупреждает
+      // комментарий выше).
+      if (!rateLimitedNonApi && !rateLimitOk(clientIp(req, server))) {
+        return withSecurityHeaders(
+          new Response("Too Many Requests", {
+            status: 429,
+            headers: { "Retry-After": "60", "Content-Type": "text/plain; charset=utf-8" },
+          }),
+        );
+      }
       return withSecurityHeaders(
         new Response("Method Not Allowed", {
           status: 405,

@@ -14,6 +14,7 @@
 import { describe, test, expect } from "bun:test";
 import {
   parseRetryAfterSeconds,
+  MIN_RETRY_AFTER_SECONDS,
   isRateLimitError,
   withTelegramRateLimitRetry,
   MAX_RETRY_AFTER_SECONDS,
@@ -150,16 +151,24 @@ describe("sendWithHtml: 429 переживается, остальное пов�
   test("сообщение доезжает после 429, а не теряется", async () => {
     let calls = 0;
     const seen: Array<string | undefined> = [];
+    const slept: number[] = [];
+    // Аудит 2026-09-10: раньше здесь стоял `tgError(0)` с комментарием «сна
+    // нет» и БЕЗ подмены сна — тест молча опирался на то, что нулевую паузу
+    // ждать не надо. Ноль больше не значит «мгновенно» (MIN_RETRY_AFTER_SECONDS),
+    // поэтому сон подменён, а пол проверяется явно ниже.
     const out = await sendWithHtml(
       async (text, pm) => {
         calls++;
         seen.push(pm);
-        if (calls === 1) throw tgError(0); // retry_after: 0 — сна нет
+        if (calls === 1) throw tgError(0);
         return { message_id: 7, text };
       },
       "**жирный** текст",
+      undefined,
+      { sleep: async (ms) => void slept.push(ms) },
     );
     expect(calls).toBe(2);
+    expect(slept).toEqual([MIN_RETRY_AFTER_SECONDS * 1000]);
     expect(out.message_id).toBe(7);
     // Повтор идёт тем же путём: HTML, а не деградация в плейн.
     expect(seen).toEqual(["HTML", "HTML"]);

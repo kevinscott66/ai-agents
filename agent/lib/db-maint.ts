@@ -17,6 +17,7 @@ import { log } from "./log.ts";
 import { safeTick } from "./safe-timer.ts";
 import { rollupParent } from "./tasks.ts";
 import { approvalTtlMs } from "./approvals.ts";
+import { closeAgentPromptProposals } from "./dispatch/agent-prompt.ts";
 import { emit as busEmit } from "./events-bus.ts";
 import { DAY_MS, HOUR_MS, MINUTE_MS } from "./time-constants.ts";
 import {
@@ -702,6 +703,13 @@ export function expireStaleApprovals(
   }>;
   const expired = rows.length;
   if (expired > 0) {
+    // Аудит 2026-09-10: истечение меняло статус заявки и на строку версии
+    // промпта не смотрело. Строка с обоими NULL — маркер «ждёт решения», по
+    // которому одобрение выбирает, что применять, так что протухшая версия
+    // оставалась кандидатом навсегда (докблок `closeAgentPromptProposals`).
+    // Заявок не по промптам это не касается: у них в agent_prompts строки нет,
+    // и UPDATE по approval_id ничего не находит.
+    closeAgentPromptProposals(rows.map((r) => r.id), now);
     log.info("[db-maint] approvals expired", { expired, ttl_hours: hours });
     // Аудит 2026-08-13: протухание было единственной сменой статуса апрува без
     // события — `decideApproval` и `markApprovalFailed` его шлют оба. Открытая
