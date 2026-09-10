@@ -151,8 +151,15 @@ function isScaffoldLine(line: string): boolean {
  * агент ничего не выделил сам, уезжал на delabs.space с заголовком
  * «Copyright 2023-2026 [DeLabs](…)» — вместе с записью в RSS и без обратного
  * хода. Обе ветки теперь смотрят на один и тот же набор строк.
+ *
+ * Аудит 2026-09-11: у поста два заголовка, и второй жил своей копией этой
+ * функции — `deriveBannerTitle` в dispatch/publish.ts, с телом ДО правки
+ * 2026-08-20 и без снятия ссылок (2026-08-28). Тот же футер уезжал уже не в
+ * запись на сайте, а в PNG-обложку публичного поста — и вот там обратного
+ * хода нет совсем, картинку не переингестишь. Копию убрали, длину вынесли в
+ * параметр: баннеру 70, записи на сайте 120.
  */
-function deriveTitle(text: string): string {
+export function deriveTitle(text: string, maxLen = 120): string {
   const lines = text
     .split("\n")
     .map((l) => l.trim())
@@ -179,7 +186,7 @@ function deriveTitle(text: string): string {
     .replace(MD_PUNCT_RE, "")
     .replace(/^[^\p{L}\p{N}]+/u, "")
     .trim();
-  return (t || "Дайджест").slice(0, 120);
+  return (t || "Дайджест").slice(0, maxLen);
 }
 
 /**
@@ -247,7 +254,13 @@ export function parseDigestPost(postText: string): ParsedDigest {
     if (firstItemIdx === -1) firstItemIdx = i;
     // One item per link found on the line.
     for (const m of matches) {
-      const itText = (m[1] ?? "").replace(/[#*_`~]/g, "").trim();
+      // Аудит 2026-09-11: тут стоял свой набор знаков — без `>` и `|`, то
+      // есть текст пункта нормализовался НЕ так, как заголовок и описание
+      // того же поста. Маркер цитаты и палка из таблицы уезжали на
+      // delabs.space и в RSS. Набор ровно один, он и назван (`MD_PUNCT_RE`);
+      // делить `.replace` с глобальным флагом безопасно — он сам сбрасывает
+      // `lastIndex`, в отличие от `.test`.
+      const itText = (m[1] ?? "").replace(MD_PUNCT_RE, "").trim();
       const url = m[2];
       items.push(itText ? { text: itText, url } : { text: url, url });
     }

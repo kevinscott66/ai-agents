@@ -20,7 +20,7 @@ import {
 } from "../telegram-actions.ts";
 import { guardedUserbotCall } from "../userbot-flood.ts";
 import type { UserbotHandle } from "../userbot.ts";
-import { ingestDigestToSite } from "../site-ingest.ts";
+import { ingestDigestToSite, deriveTitle } from "../site-ingest.ts";
 import { isTeamChannel } from "../team-channels.ts";
 import { ensureChannelFooter, isChannelFooterLine } from "../channel-footer.ts";
 import type { PayloadByType } from "../action-payload.ts";
@@ -148,22 +148,18 @@ export async function renderCoverBanner(
   return deps.clean(opts);
 }
 
-function deriveBannerTitle(text: string): string {
-  const bold = text.match(/\*\*(.+?)\*\*/);
-  let t = bold?.[1] ?? "";
-  if (!t) {
-    const line = text
-      .split("\n")
-      .map((l) => l.trim())
-      .find((l) => l.replace(/[^\p{L}\p{N}]/gu, "").length >= 6);
-    t = line ?? "Дайджест";
-  }
-  t = t
-    .replace(/[#*_`>|~]/g, "")
-    .replace(/^[^\p{L}\p{N}]+/u, "")
-    .trim();
-  return (t || "Дайджест").slice(0, 70);
-}
+/**
+ * Заголовок авто-баннера — тем же кодом, что и заголовок записи на сайте.
+ *
+ * Аудит 2026-09-11: здесь стояла своя копия `deriveTitle`, застывшая до двух
+ * правок. Без `!isFooterLine` пост, где агент написал футер сам и ничего не
+ * выделил жирным, получал на обложку «Copyright 2023-2026 [DeLabs](…)» — ту
+ * самую строку, которую на сайте убрал аудит 2026-08-20. Без `unwrapMdLinks`
+ * жирная ссылка `**[Zora Drop](https://…)**` рисовалась на картинке вместе с
+ * адресом, а строка-ссылка проходила порог «шесть букв» за счёт самого URL
+ * (аудит 2026-08-28). Разница между двумя заголовками ровно одна — длина.
+ */
+const BANNER_TITLE_MAX = 70;
 
 export async function handlePublishToChannel(
   p: PayloadByType["PUBLISH_TO_CHANNEL"],
@@ -291,7 +287,7 @@ export async function handlePublishToChannel(
           usedCover("авто-баннера по тексту поста", ["coverStyle"]);
           coverBuf = await renderCoverBanner(
             {
-              title: deriveBannerTitle(p.text),
+              title: deriveTitle(p.text, BANNER_TITLE_MAX),
               date: formatRuDate(),
               seed: p.text.slice(0, 80),
             },
@@ -314,7 +310,7 @@ export async function handlePublishToChannel(
         try {
           coverBuf = await renderCoverBanner(
             {
-              title: p.coverTitle || deriveBannerTitle(p.text),
+              title: p.coverTitle || deriveTitle(p.text, BANNER_TITLE_MAX),
               subtitle: p.coverSubtitle,
               date: formatRuDate(),
               seed: p.text.slice(0, 80),
