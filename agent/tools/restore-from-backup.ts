@@ -262,8 +262,8 @@ export async function restoreFromBackup(options: RestoreOptions): Promise<Restor
         // нулевой длины — валидная пустая база для sqlite: quick_check
         // отвечает ok, таблиц ноль, счётчиков ноль. Учебный restore печатал
         // `Tables: 0`, `{"success":true,"errors":[]}` и выходил с кодом 0.
-        // Сам бэкап такой снапшот считает битым (`verifySnapshot`,
-        // lib/backup.ts:82: «в снапшоте нет таблиц») — расхождение означало,
+        // Сам бэкап такой снапшот считает битым (`verifySnapshot` в
+        // lib/backup.ts бросает «в снапшоте нет таблиц») — расхождение означало,
         // что проверка копии слабее проверки при её создании.
         if (Object.keys(result.originalRowCounts).length === 0) {
           result.errors.push(

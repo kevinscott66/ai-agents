@@ -219,7 +219,8 @@ export default function Logs() {
     // событие. `liveActionMode` прикрывает только догруженный набор
     // (`paged.current === true`, режим `notify`); в состоянии по умолчанию —
     // первая страница — режим `reload`, а `action.executed` шина шлёт на
-    // каждую записанную строку действия любой из 12 ролей (lib/audit.ts:190).
+    // каждую записанную строку действия любой из 12 ролей (`emitActionEvents`
+    // в lib/audit.ts).
     // Ход команды на ~15 действий = ~15 GET за пару секунд из общего ведра
     // (capacity 120, refill 4/сек — `GET_LIMIT` в lib/miniapp-server.ts), и
     // вкладка, ради
