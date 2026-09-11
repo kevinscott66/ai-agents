@@ -296,21 +296,64 @@ export function scrubbedHead(s: string, max: number): string {
  * вызовы, а не этот абзац (аудит 2026-09-11, круг 51).
  */
 export function scrubSecretsDeep<T>(value: T): T {
-  return scrubSecrets(value) as T;
+  return scrubSecrets(value, 0, new WeakSet()) as T;
 }
 
-function scrubSecrets(value: unknown, depth = 0): unknown {
-  if (depth > 6) return value;
+/**
+ * Предел вложенности обхода.
+ *
+ * Нужен не потому, что глубже секретов не бывает, а потому, что обход должен
+ * кончаться на любом входе. Цикл ловит `seen` (ниже), так что предел остаётся
+ * только против патологической глубины, и потому он щедрый: живые payload'ы
+ * этого дерева не доходят и до половины.
+ */
+export const SCRUB_MAX_DEPTH = 20;
+
+/** Что встаёт на место поддерева, до которого обход не дошёл. */
+export const SCRUB_TOO_DEEP = "[[глубже SCRUB_MAX_DEPTH — не проверено]]";
+/** Что встаёт на место второго появления того же объекта. */
+export const SCRUB_CYCLE = "[[цикл]]";
+
+/**
+ * Аудит 2026-09-11, круг 51: здесь было `if (depth > 6) return value` — и это
+ * отказ в сторону утечки. Поддерево глубже шести уровней возвращалось
+ * НЕТРОНУТЫМ: и строка с `BOT_TOKEN=…`, и значение под ключом `botToken`
+ * уезжали в `agent_actions.payload` как есть. Замер: секрет на глубине 6 и
+ * ниже проходил скраббер насквозь, на глубине 5 — нет. Обещание «секрет сюда
+ * не попадёт» держалось ровно до шестого уровня вложенности и молчало об
+ * этом. Теперь предел отказывает в другую сторону: вместо непроверенного
+ * поддерева встаёт `SCRUB_TOO_DEEP`.
+ *
+ * Второе: предел не был защитой от цикла, хотя выглядел ею. Циклическая
+ * структура доходила до седьмого уровня, возвращала сам цикл — и падал уже
+ * `JSON.stringify` у вызывающего, то есть на записи строки аудита. Строка не
+ * появлялась вовсе. Цикл теперь ловится `seen` и помечается `SCRUB_CYCLE`.
+ *
+ * Третье: `Date` обнулялся. `Object.entries(new Date())` — пустой список, и
+ * дата превращалась в `{}`, тогда как без скраббера `JSON.stringify` отдал бы
+ * ISO-строку. Секрета в дате нет, поэтому она проходит как есть.
+ */
+function scrubSecrets(value: unknown, depth: number, seen: WeakSet<object>): unknown {
   if (typeof value === "string") return scrubSecretString(value);
-  if (Array.isArray(value)) return value.map((v) => scrubSecrets(v, depth + 1));
-  if (value && typeof value === "object") {
+  if (!value || typeof value !== "object") return value;
+  if (value instanceof Date) return value;
+  if (seen.has(value)) return SCRUB_CYCLE;
+  if (depth >= SCRUB_MAX_DEPTH) return SCRUB_TOO_DEEP;
+
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) return value.map((v) => scrubSecrets(v, depth + 1, seen));
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value)) {
-      out[k] = SENSITIVE_KEY.test(k) ? "***" : scrubSecrets(v, depth + 1);
+      out[k] = SENSITIVE_KEY.test(k) ? "***" : scrubSecrets(v, depth + 1, seen);
     }
     return out;
+  } finally {
+    // Снимаем метку на выходе: `seen` обязан ловить цикл (объект внутри самого
+    // себя), а не повтор. Один и тот же объект, положенный в два поля рядом,
+    // циклом не является, и терять второе вхождение нельзя.
+    seen.delete(value);
   }
-  return value;
 }
 
 interface LogEntry {
@@ -370,7 +413,7 @@ class Logger {
       level,
       msg: scrubSecretString(msg),
       time: new Date().toISOString(),
-      ...(data && { data: scrubSecrets(data) as LogData })
+      ...(data && { data: scrubSecretsDeep(data) as LogData })
     };
   }
 
