@@ -69,7 +69,8 @@ export function shouldAllowTools(
   //
   // Уточнение 2026-08-28: в проде эта ложная сработка сегодня недостижима, и
   // сценарий выше описывает прошлое, а не текущий риск. Единственный
-  // вызывающий (message-handler.ts:710) всегда передаёт `mentions`, а
+  // вызывающий (вызов shouldAllowTools в orchestrator/message-handler.ts)
+  // всегда передаёт `mentions`, а
   // `mentionedHandles` отдаёт undefined только при отсутствии `ctx.message`,
   // чего в обработчике сообщения не бывает — значит `mentioned` идёт по
   // разметке Telegram, а `mentionsHandle` остаётся путём тестов и внутренних

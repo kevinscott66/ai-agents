@@ -48,7 +48,8 @@ export function isTriggerDelivered(
   const last = messages[messages.length - 1];
   const lastText = typeof last?.content === "string" ? last.content : "";
   // Суффикс, а не вхождение. Оба сборщика склеивают строку истории как
-  // `[speaker] text` (handoff.ts:216, message-handler.ts:565-570), то есть
+  // `[speaker] text` (сборка `speaker` в handoff.ts и в
+  // orchestrator/message-handler.ts — ищи `speakerLabel`), то есть
   // доставленный триггер стоит в самом КОНЦЕ последней реплики — ничего
   // после него быть не может.
   //

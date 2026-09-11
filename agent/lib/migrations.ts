@@ -1423,20 +1423,19 @@ export const MIGRATIONS: Migration[] = [
      * добавляла индексы под страницы Mini App, не сверяясь с тем, что уже
      * создано при создании таблиц.
      *
-     *   approvals(status, chat_id)        — `idx_approvals_status_chat` (:147)
-     *     и `idx_approvals_status_chat_v2` (:356) совпадают побайтово.
-     *   tasks(assigned_to)                — `idx_tasks_assigned_to` (:350) —
-     *     строгий префикс `idx_tasks_assigned_status(assigned_to, status)`
-     *     (:91); любой запрос, который обслуживает первый, обслуживает и
-     *     второй.
+     *   approvals(status, chat_id)        — `idx_approvals_status_chat`
+     *     и `idx_approvals_status_chat_v2` совпадают побайтово.
+     *   tasks(assigned_to)                — `idx_tasks_assigned_to` —
+     *     строгий префикс `idx_tasks_assigned_status(assigned_to, status)`;
+     *     любой запрос, который обслуживает первый, обслуживает и второй.
      *   agent_actions(agent_key, created_at) — `idx_agent_actions_agent_created`
-     *     (:366) отличается от `idx_agent_actions_agent_ts` (:167) только
-     *     словом DESC. SQLite читает индекс в обе стороны, так что DESC в
-     *     объявлении ничего не добавляет.
+     *     отличается от `idx_agent_actions_agent_ts` только словом DESC.
+     *     SQLite читает индекс в обе стороны, так что DESC в объявлении
+     *     ничего не добавляет.
      *
      * Четвёртый — из другой миграции: `agent_prompts` объявлен с
-     * `UNIQUE(agent_key, version)` (:621), а UNIQUE в SQLite это уже индекс
-     * (sqlite_autoindex). Явный `idx_agent_prompts_key_version` (:623) поверх
+     * `UNIQUE(agent_key, version)`, а UNIQUE в SQLite это уже индекс
+     * (sqlite_autoindex). Явный `idx_agent_prompts_key_version` поверх
      * него — третья копия тех же ключей.
      *
      * Лишний индекс — не безобидная память: каждая вставка и каждое
