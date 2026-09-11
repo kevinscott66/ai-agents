@@ -1,9 +1,15 @@
 /**
  * Mini App auth middleware extracted from lib/miniapp-server.ts (R1).
  *
- * `authOr401` verifies the Telegram initData (header or `initData` query
- * param for SSE) and checks the allow-list. Returns either a typed
- * MiniAppUser or a ready-to-send 401/403 Response.
+ * `authOr401` verifies the Telegram initData taken ONLY from the
+ * X-Telegram-Init-Data header, and checks the allow-list. Returns either a
+ * typed MiniAppUser or a ready-to-send 401/403 Response.
+ *
+ * Audit 2026-09-11: this header advertised an `initData` query parameter "for
+ * SSE" — a channel that no longer exists here and is contradicted twenty lines
+ * below by the docblock on `authOr401` itself. SSE authenticates with a
+ * one-shot ticket instead; a header that still offers a query channel invites
+ * putting a credential back into a URL (logs, Referer, history).
  */
 import { verifyInitData, type MiniAppUser } from "./miniapp-auth.ts";
 import { json } from "./http-utils.ts";

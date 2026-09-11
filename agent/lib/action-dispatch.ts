@@ -1719,8 +1719,11 @@ export async function gateOrDispatch<T extends ActionType>(
     // INSERT в approvals падает, остаётся действие в статусе
     // `pending_approval`, к которому не привязана ни одна заявка. Подобрать
     // его некому: expireStaleApprovals работает по таблице approvals и такой
-    // строки не видит, gcStaleTasks трогает только tasks, а санитайзера по
-    // agent_actions.status='pending_approval' в db-maint.ts нет вовсе.
+    // строки не видит, а gcStaleTasks трогает только tasks. Санитар по
+    // `pending_approval` с тех пор появился — `closeGatedActionRow` зовут
+    // отказ, протухание заявки и три отказа исполнения до диспатча, — но все
+    // три входа идут ОТ строки заявки, поэтому именно сиротскую строку без
+    // заявки не подберут и они. Ради этого случая транзакция здесь и стоит.
     //
     // P1: action, approval, and UPDATE_AGENT_PROMPT proposal are one durable
     // unit. BEGIN IMMEDIATE also makes COUNT+INSERT an atomic cap reservation
@@ -1885,8 +1888,12 @@ export async function gateOrDispatch<T extends ActionType>(
   // allow
   // T-315/T-240: чат-бакеты уже зарезервированы выше — как и агентский
   // внутри checkAndConsumeRateLimit (T-314). The reservation is released in
-  // finally on every non-success path, including an audit exception after an
-  // external handler side effect has already completed.
+  // finally on non-success paths — but NOT on all of them: a failure that
+  // already left a mark outside keeps its slot (`res.sideEffect` below, audit
+  // 2026-08-21). This comment used to promise "every non-success path,
+  // including an audit exception after an external handler side effect has
+  // already completed" — which is the exact case the sideEffect branch was
+  // added to exclude.
   let outcome: GateOrDispatchResult = {
     kind: "error",
     error: "dispatch/audit did not produce a result",

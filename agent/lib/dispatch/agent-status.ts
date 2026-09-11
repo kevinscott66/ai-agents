@@ -160,10 +160,13 @@ export function handleChangeAgentStatus(
 
   const target = payload.target_agent_key;
   const oldStatus = getAgentStatus(target);
-  // Report the mode that governs this action in its originating chat: agent
-  // scope still wins, then chat scope, then global. Omitting chatId would make
-  // a status-only change describe the global fallback instead of the mode the
-  // operator actually sees in this conversation.
+  // Report the mode that governs this action in its originating chat. Scope
+  // order is agent → chat → global, with ONE exception that outranks all of
+  // them: a chat set to `locked` is not overridden by an agent row (see the
+  // docblock on `getAutonomy`). The old comment said "agent scope still wins"
+  // flatly, which is exactly the case the exception was added for. Omitting
+  // chatId would make a status-only change describe the global fallback
+  // instead of the mode the operator actually sees in this conversation.
   const oldAutonomy = getAutonomy(ctx.chatId, target);
 
   const newStatus: AgentStatus = payload.new_status ?? oldStatus;
