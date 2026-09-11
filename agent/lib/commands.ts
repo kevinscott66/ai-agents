@@ -24,7 +24,7 @@ import {
   listAgentAutonomyOverrides,
 } from "./permissions.ts";
 import { getDiscussionMode, setDiscussionMode } from "./chat-settings.ts";
-import { listActions } from "./audit.ts";
+import { listActions, closeGatedActionRow } from "./audit.ts";
 import {
   listPendingApprovals,
   countPendingApprovalsInChat,
@@ -145,6 +145,35 @@ export function isAutonomyMode(s: string): s is AutonomyMode {
   return (AUTONOMY_MODES as string[]).includes(s);
 }
 
+/**
+ * Отказ ДО диспатча: строку действия закрываем сами.
+ *
+ * Аудит 2026-09-11. `executeApproved` может отказать четырьмя способами, и три
+ * из них срабатывают ДО `dispatchAndAudit`: протухший TTL заявки, вызывающий,
+ * которому этот тип действия не положен, и deny-гейт, появившийся между
+ * созданием заявки и нажатием «Approve». В этих трёх случаях второй строки в
+ * `agent_actions` не заводится вовсе — а первая, заведённая гейтом в
+ * `pending_approval`, так и остаётся ждать решения, которое уже принято.
+ * Санитары мимо: `expireStaleApprovals` смотрит на `approvals.status='pending'`
+ * (а тут `approved`), `expireStaleAttempts` — на `attempted`. То есть строка
+ * висит «ждёт аппрув» вечно: и в `/audit`, и в ленте Mini App, и в GET_LOGS,
+ * который читает сама модель, и в метрике `agent_actions_recent`.
+ *
+ * Обещание «dispatchAndAudit уже записал status='error'» стояло в обоих
+ * вызывающих (`cmdApprove` ниже и Mini App) и для этих трёх путей было
+ * неправдой: до `dispatchAndAudit` управление не доходило.
+ *
+ * `forbidden` — тот же статус и тот же смысл, что у отказа человека и у
+ * протухшей заявки (докблок `closeGatedActionRow`): наружу не ушло, потому что
+ * не разрешили. Четвёртый способ отказать — провал самого диспатча — сюда не
+ * заходит: у него своя пара строк с тем же `request_id`, и переписывать здесь
+ * ещё и первую значило бы посчитать один ход дважды.
+ */
+function failBeforeDispatch(approval: Approval, msg: string): never {
+  closeGatedActionRow(approval.action_id, msg);
+  throw new Error(msg);
+}
+
 export async function executeApproved(
   approval: Approval,
   deps: ApprovalExecDeps = {},
@@ -166,7 +195,8 @@ export async function executeApproved(
   const age = Date.now() - approval.created_at;
   if (age > ttl) {
     const hours = Math.round(age / HOUR_MS);
-    throw new Error(
+    failBeforeDispatch(
+      approval,
       `approval expired: заявке ${hours} ч при сроке ${Math.round(ttl / HOUR_MS)} ч — ` +
         `пусть агент запросит заново, payload устарел`,
     );
@@ -177,7 +207,8 @@ export async function executeApproved(
   // never run from a non-allowed requester, even if the row was crafted.
   const requiredCaller = CALLER_RESTRICTED[actionType];
   if (requiredCaller && byAgent !== requiredCaller) {
-    throw new Error(
+    failBeforeDispatch(
+      approval,
       `caller not allowed at execution: ${actionType} restricted to '${requiredCaller}' (was '${byAgent}')`,
     );
   }
@@ -198,7 +229,7 @@ export async function executeApproved(
     chatId: approval.chat_id ?? undefined,
   });
   if (gate.decision === "deny") {
-    throw new Error(`blocked at execution: ${gate.reason}`);
+    failBeforeDispatch(approval, `blocked at execution: ${gate.reason}`);
   }
 
   const payload = (approval.payload ?? {}) as PayloadFor<typeof actionType>;
@@ -307,7 +338,9 @@ export async function cmdApprove(args: {
   try {
     await executeApproved(approved, args.deps ?? {});
   } catch (e) {
-    // dispatchAndAudit уже записал status='error' в agent_actions.
+    // Строку действия закрыл тот, кто отказал: `dispatchAndAudit` пишет свою
+    // пару `attempted` → `error`, а три отказа ДО него — `failBeforeDispatch`
+    // (аудит 2026-09-11). Прежний комментарий обещал первое на все случаи.
     const msg = (e as Error).message;
     // Аудит 2026-08-07: сообщение в чат — единственный след провала, если не
     // пометить строку. Иначе апрув навсегда остаётся `approved`, и потом не

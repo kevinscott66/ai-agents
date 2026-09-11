@@ -3,10 +3,13 @@
  *
  * HTTP-сервер на Bun.serve. Защищённые маршруты под /api/ требуют заголовка
  * X-Telegram-Init-Data: <raw> — initData из Telegram WebApp, проверяется
- * HMAC-ом по lib/miniapp-auth.ts. Исключение ровно одно: /api/events (SSE)
- * идёт до этой стены и аутентифицируется одноразовым билетом в query —
- * EventSource в браузере заголовков не умеет. Здесь было сказано «все», и
- * аудит по этому описанию проходил мимо второго входа.
+ * HMAC-ом по lib/miniapp-auth.ts. Исключений ДВА, и оба до этой стены:
+ *   • /api/events (SSE) — аутентифицируется одноразовым билетом в query,
+ *     потому что EventSource в браузере заголовков не умеет;
+ *   • /api/health (GET) — проба живости, отвечает без initData вовсе.
+ * Здесь было сказано сперва «все», потом «исключение ровно одно», и аудит по
+ * такому описанию проходил мимо очередного входа. Пересчитывать этот список
+ * надо каждый раз, когда маршрут ставят ВЫШЕ стены (аудит 2026-09-11).
  *
  * Маршруты: см. README/спецификация C13a.
  *
@@ -447,8 +450,12 @@ export function startMiniappServer(
 
   /**
    * MINIAPP_ALLOWED_USER_IDS и MINIAPP_ADMIN_USER_IDS — разные списки, и код
-   * это предполагает: мутирующие ручки требуют админа, читающие — только
-   * allowlist. То есть «наблюдатель без прав» — предусмотренная роль.
+   * это предполагает: «наблюдатель без прав» — предусмотренная роль. Правило
+   * «мутирующие ручки требуют админа» верно; обратное — «читающие обходятся
+   * allowlist'ом» — нет, и никогда не было общим: админа требуют и четыре
+   * ЧИТАЮЩИЕ ручки — GET /api/budget-settings, /api/db-stats, /api/wiki/page
+   * и /api/permissions (аудит 2026-09-11). Редактирование ниже — не замена
+   * гейту, а то, что остаётся наблюдателю там, где роут ему всё же открыт.
    *
    * Проблема была в том, что наблюдателю доставался не метаданный, а
    * СОДЕРЖАТЕЛЬНЫЙ слой: agent_actions.payload/result и approvals.payload
@@ -1668,8 +1675,11 @@ export function startMiniappServer(
               error: execMsg,
             });
             // Decision is recorded; surface the execution failure so the UI
-            // can show it instead of a false success. dispatchAndAudit has
-            // already logged status='error' in agent_actions.
+            // can show it instead of a false success. The action row is closed
+            // by whoever refused: dispatchAndAudit writes its own
+            // `attempted` → `error` pair, and the three refusals that happen
+            // BEFORE it go through `failBeforeDispatch` (audit 2026-09-11).
+            // The old comment promised the first case for all of them.
             // Аудит 2026-08-07: 502 живёт ровно один запрос — если вкладку
             // закрыли, провал терялся, а строка оставалась `approved`.
             // Помечаем её, чтобы «одобрено» и «одобрено, но упало» различались.
@@ -2000,8 +2010,10 @@ export function startMiniappServer(
       // спускается на чатовый и глобальный уровень, и ответ 200 показывал
       // ЧУЖОЙ режим рядом с эхом опечатки: `?agent=Backend` (ключ — `backend`)
       // отдавал `{"mode":"semi_auto","agent":"Backend"}`, пока у роли стоял
-      // `full_auto`. Ровно то введение админа в заблуждение, которое чинили на
-      // POST-ветках.
+      // `auto`. Ровно то введение админа в заблуждение, которое чинили на
+      // POST-ветках. (Аудит 2026-09-11: в примере стоял режим `full_auto`,
+      // которого в `AutonomyMode` нет — вымышленное значение в разборе делает
+      // пример непроверяемым.)
       // Пустая строка (`?agent=`) — это «без роли», ровно как её трактует сам
       // `getAutonomy` (`if (agentKey)`, permissions.ts:585); опечаткой она быть
       // не может, поэтому в словарь не идёт.
@@ -2064,8 +2076,13 @@ export function startMiniappServer(
         // Наследовать чату и глобальному не от кого — это и есть корень.
         return json({ error: "bad body: inherit requires agent" }, 400);
       }
-      // Что именно записали. Ниже отдаём в ответ и в шину только это, а не
-      // то, что было в запросе.
+      // Куда именно записали: `scope`/`scopeKey` считает код, а не запрос.
+      //
+      // Аудит 2026-09-11: здесь было сказано «отдаём только это, а не то, что
+      // было в запросе» — и это верно про адрес записи, но не про сам режим:
+      // `applied.mode` ниже берётся из `body.mode`. Для `inherit` расхождение
+      // видно прямо: строка роли СНИМАЕТСЯ (`clearAutonomy`), не записав
+      // никакого режима, а в ответ и в шину всё равно уходит `mode` из тела.
       let scope: "agent" | "chat" | "global";
       let scopeKey: string;
       if (wantsAgent) {
