@@ -17,7 +17,11 @@ import {
   tgSendPhoto,
   tgSendDocument,
 } from "../telegram-actions.ts";
-import { getCurrentUserbot, type UserbotHandle } from "../userbot.ts";
+import {
+  getCurrentUserbot,
+  loadUserbotTextParser,
+  type UserbotHandle,
+} from "../userbot.ts";
 import { getUserbotHandle } from "../userbot-router.ts";
 import type { PayloadByType } from "../action-payload.ts";
 // resolveChatId здесь больше не используется намеренно: любое исходящее
@@ -35,6 +39,7 @@ import {
   splitForTelegram,
   PartialSendError,
   HTML_MESSAGE_FITS,
+  userbotPartFits,
 } from "../telegram-chunking.ts";
 import { reserveUserbotFloodSlots } from "../rate-limits.ts";
 // Аудит 2026-08-07: гвард существовал с T-402, но не импортировался нигде,
@@ -137,7 +142,20 @@ export async function handleSendMessage(
     // вперемешку и ведро всё равно кончалось на середине. Резерв делает
     // проверку и занятие одной синхронной операцией; части идут со
     // skipBucket, чтобы не расходовать ведро дважды.
-    const partCount = splitForTelegram(payload.text).length;
+    //
+    // Аудит 2026-09-11: мерка была СЫРОЙ (`splitForTelegram(payload.text)` с
+    // предикатом по умолчанию), потому что докстрока HTML_MESSAGE_FITS
+    // утверждала, будто у юзербота Telegram считает сырую длину. Это неправда:
+    // gramjs снимает markdown перед отправкой (`loadUserbotTextParser`).
+    // Замер на 90 строках `**Пункт N** — короткое пояснение про статус`: сырых
+    // 4039 против разобранных 3679 — две части с префиксами «(1/2) » там, где
+    // уезжала одна, и два слота из флуд-ведра владельца вместо одного, вплоть
+    // до отказа «Ожидание не поможет: сократи ответ» за ответ, который влезал.
+    // Мерим ту же величину, что и Telegram; предикат один на резерв и на
+    // sendChunked ниже, иначе резерв разойдётся с числом реально отправленных
+    // частей.
+    const ubFits = userbotPartFits(await loadUserbotTextParser());
+    const partCount = splitForTelegram(payload.text, undefined, ubFits).length;
     const slots = reserveUserbotFloodSlots(ctx.agentKey, ctx.chatId, partCount);
     if (!slots.ok) {
       // Аудит 2026-08-27: срок повтора всегда печатался как есть, а при
@@ -185,7 +203,7 @@ export async function handleSendMessage(
         );
         ubFirst = false;
         return r;
-      }, payload.text);
+      }, payload.text, undefined, ubFits);
     } catch (e) {
       return partialSendFailure(e);
     } finally {

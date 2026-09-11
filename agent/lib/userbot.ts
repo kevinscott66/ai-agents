@@ -443,6 +443,30 @@ export async function _startRealClient(
 }
 
 /**
+ * Разбор markdown ровно тем парсером, который применит gramjs.
+ *
+ * `client.sendMessage` в `buildHandle()` не получает ни `parseMode`, ни
+ * `formattingEntities`, а у gramjs это значит «применить парс-мод клиента»,
+ * заданный безусловно в базовом конструкторе (`telegramBaseClient.js`:
+ * `this._parseMode = MarkdownParser`). Значит текст, который реально уедет — и
+ * длину которого считает Telegram, — разобранный, а не сырой.
+ *
+ * Отдаём СИНХРОННУЮ функцию, а не готовую строку: этот же разбор нужен мерке
+ * части внутри splitForTelegram, а тот принимает только синхронный предикат.
+ *
+ * Импорт не удался — отдаём тождество. Вызывающий останется на сырой длине,
+ * то есть на ЗАВЫШЕННОЙ мерке: лишнее дробление, а не превышение лимита.
+ */
+export async function loadUserbotTextParser(): Promise<(text: string) => string> {
+  try {
+    const { MarkdownParser } = await import("telegram/extensions/markdown.js");
+    return (text) => (MarkdownParser.parse(text) as [string, unknown])[0];
+  } catch {
+    return (text) => text;
+  }
+}
+
+/**
  * Экспортируется для тестов: `startUserbot` требует файл сессии и реальный
  * `import("telegram")`, а проверять надо поведение самих методов хендла.
  */
@@ -465,10 +489,8 @@ export function buildHandle(client: UserbotClientLike, Api: any): UserbotHandle 
     },
     async sendMessage(chatId, text, opts) {
       // Аудит 2026-08-28: регистрировали СЫРОЙ текст, а Telegram сохранял
-      // разобранный. `client.sendMessage` ниже не получает ни `parseMode`, ни
-      // `formattingEntities`, а у gramjs это значит «применить парс-мод
-      // клиента», и он задан безусловно в базовом конструкторе
-      // (`telegramBaseClient.js`: `this._parseMode = MarkdownParser`). То есть
+      // разобранный — почему именно так, см. докстроку loadUserbotTextParser
+      // выше по файлу. То есть
       // разметка снималась, эхо приезжало снятым, ключ реестра не совпадал —
       // и собственный ответ роли писался в историю как реплика владельца
       // (`userbot-ingest.ts`: `self === null` → `agentKey: null`,
@@ -478,8 +500,7 @@ export function buildHandle(client: UserbotClientLike, Api: any): UserbotHandle 
       // `plain`, передаёт явные entities. Расходился только этот метод.
       let registered = text;
       try {
-        const { MarkdownParser } = await import("telegram/extensions/markdown.js");
-        [registered] = MarkdownParser.parse(text) as [string, unknown];
+        registered = (await loadUserbotTextParser())(text);
       } catch {
         // Разбор упал — gramjs упадёт на том же входе секундой позже. Режим
         // отказа не подменяем: регистрируем как есть и идём отправлять.

@@ -73,12 +73,42 @@ export function htmlPartFits(
  * лог. Дробление видит каждый читатель, обрезка живёт в ветке, куда попадают
  * только после невалидного HTML от нашего же конвертера.
  *
- * НЕ для сырых отправителей: `admin-commands.ts` шлёт без parse_mode, юзербот
- * (`buildHandle().sendMessage` в `userbot.ts`) зовёт gramjs
- * `sendMessage(peer, {message})` — там сырая
- * длина и есть та, что считает Telegram.
+ * НЕ для сырых отправителей: `admin-commands.ts` шлёт без parse_mode — там
+ * сырая длина и есть та, что считает Telegram.
+ *
+ * Аудит 2026-09-11: про юзербота здесь было написано ровно обратное тому, что
+ * стоит в самом `userbot.ts`. `buildHandle().sendMessage` зовёт gramjs
+ * `sendMessage(peer, {message})` без `parseMode` и без `formattingEntities`, а
+ * у gramjs это значит «применить парс-мод клиента», заданный безусловно в
+ * базовом конструкторе (`MarkdownParser`) — ради этого тот же метод и
+ * регистрирует РАЗОБРАННЫЙ текст, см. `loadUserbotTextParser`. То есть Telegram
+ * и там считает разобранную длину. Для юзербота мерка своя —
+ * `userbotPartFits` ниже: HTML-конвертер к нему отношения не имеет,
+ * разметку снимает gramjs и по своим правилам.
  */
 export const HTML_MESSAGE_FITS = htmlPartFits(TG_LIMIT);
+
+/**
+ * Мерка части для юзерботного пути: длина ПОСЛЕ разбора markdown.
+ *
+ * `plain` — парсер gramjs (`loadUserbotTextParser` в userbot.ts); сюда он
+ * приходит параметром, чтобы этот модуль не тянул gramjs ради одной мерки.
+ *
+ * Разбор части может бросить — вход тот же, что уедет в gramjs секундой
+ * позже. Тогда падаем на сырую длину: она завышена, то есть ошибка идёт в
+ * сторону лишнего дробления, а не превышения лимита.
+ */
+export function userbotPartFits(
+  plain: (text: string) => string,
+): (part: string) => boolean {
+  return (part) => {
+    try {
+      return plain(part).length <= TG_LIMIT;
+    } catch {
+      return part.length <= TG_LIMIT;
+    }
+  };
+}
 
 /**
  * Жёсткая резка строки без переносов — по границам символов, а не code units.

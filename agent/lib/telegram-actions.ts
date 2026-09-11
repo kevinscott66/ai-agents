@@ -382,7 +382,7 @@ export async function tgSetReaction(
   tg: Telegram,
   args: TgSetReactionArgs,
 ): Promise<{ ok: true }> {
-  // Повтор по 429 — см. докстроку у tgRetry ниже.
+  // Повтор по 429 — см. докстроку у tgRetry выше по файлу.
   await tgRetry("tgSetReaction", () =>
     tg.callApi("setMessageReaction" as never, {
       chat_id: args.chatId,
@@ -584,11 +584,22 @@ export async function tgSendPhoto(
         };
   // T-fmt: подпись к фото тоже рендерим Markdown→HTML (жирный, ссылки), с
   // плейн-текст-фолбэком при ошибке парсинга — как в tgSendMessage.
-  if (args.caption) {
-    const [head, ...tail] =
-      plainTelegramLength(args.caption) > TELEGRAM_CAPTION_LIMIT
-        ? splitForTelegram(args.caption, TELEGRAM_CAPTION_LIMIT, CAPTION_FITS)
-        : [args.caption];
+  //
+  // Аудит 2026-09-11: `head!` был ложным non-null. У splitForTelegram есть
+  // ранний выход `if (!text.trim()) return []`, то есть на подписи из одних
+  // пробелов длиннее лимита (замер на 1500 пробелах: plain 1500, частей 0)
+  // head === undefined. mdToTelegramHtml на этом не падает (`if (!input)
+  // return input`), и в tg.sendPhoto уезжало `caption: undefined,
+  // parse_mode: "HTML"`: фото без подписи, tail пуст, ответ — `ok: true` без
+  // captionTailIncomplete. Ни 400, ни лога, ни признака для модели, что
+  // подпись потеряна. Соседний tgSendDocument ровно этот случай проверяет
+  // явно (`parts.length === 0`) — здесь ветки просто не было.
+  const parts = !args.caption
+    ? []
+    : plainTelegramLength(args.caption) > TELEGRAM_CAPTION_LIMIT
+      ? splitForTelegram(args.caption, TELEGRAM_CAPTION_LIMIT, CAPTION_FITS)
+      : [args.caption];
+  if (parts.length > 0) {
     const m = await sendWithHtml(
       (caption, pm) =>
         tg.sendPhoto(
@@ -596,14 +607,17 @@ export async function tgSendPhoto(
           photoArg as never,
           pm ? { ...extra, caption, parse_mode: pm } : { ...extra, caption },
         ),
-      head!,
+      parts[0]!,
       CAPTION_PLAIN_FITS,
     );
     const messageId = (m as { message_id: number }).message_id;
-    if (tail.length === 0) return { ok: true, messageId };
-    const tailRes = await sendCaptionTail(tg, args.chatId, messageId, tail);
+    if (parts.length === 1) return { ok: true, messageId };
+    const tailRes = await sendCaptionTail(tg, args.chatId, messageId, parts.slice(1));
     return { ok: true, messageId, ...captionTailFields(tailRes) };
   }
+  // Сюда же попадает подпись, от которой после резки не осталось частей, —
+  // см. разбор выше.
+  //
   // Аудит 2026-08-21: без подписи звался голый tg.sendPhoto — мимо повтора по
   // 429, который у ветки С подписью есть (sendWithHtml обёрнут в него внутри).
   // Замер на заглушке, отдающей один 429 с retry_after: с подписью —

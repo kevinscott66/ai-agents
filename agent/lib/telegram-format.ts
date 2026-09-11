@@ -408,6 +408,15 @@ export function plainTelegramLength(md: string): number {
 }
 
 /**
+ * Фразы самого Telegram. Их не произносит ни транспорт, ни наша обёртка,
+ * поэтому кода ответа для распознавания не требуется: telegraf не всегда
+ * доносит `error_code` отдельным полем — иногда он только внутри message
+ * («400: Bad Request: can't parse entities: …»).
+ */
+const TELEGRAM_PARSE_PHRASES =
+  /can't parse entities|unsupported start tag|unclosed start tag|can't find end tag|tag "[^"]*" is unsupported/i;
+
+/**
  * Ошибка разметки — и только она. Telegram отвечает 400 с описанием вида
  * «can't parse entities: …», «unsupported start tag», «unclosed start tag».
  * Отличаем её от всего остального: таймаута, 429, 5xx и обрыва сети.
@@ -424,9 +433,21 @@ export function isHtmlParseError(e: unknown): boolean {
   const desc = String(
     err?.response?.description ?? err?.description ?? err?.message ?? "",
   );
-  return /can't parse entities|unsupported start tag|unclosed start tag|can't find end tag|entities|tag "[^"]*" is unsupported/i.test(
-    desc,
-  );
+  if (TELEGRAM_PARSE_PHRASES.test(desc)) return true;
+  // Аудит 2026-09-11: голое слово `entities` стояло равноправной альтернативой
+  // в той же регулярке — то есть ЛЮБАЯ ошибка без кода, в чьём тексте оно
+  // встретилось, считалась отказом разметки. Ответ на такую ошибку у
+  // sendWithHtmlOnce один: повторная отправка плейном. А бескодовая ошибка со
+  // словом `entities` — это и `TypeError: … reading 'entities'` из обёртки над
+  // fetch, которая прилетает в том числе тогда, когда запрос до Telegram ДОШЁЛ
+  // и сообщение уже опубликовано; повтор кладёт в чат ВТОРОЙ экземпляр. Ровно
+  // то, что докстрока sendWithHtml объявляет недопустимым («таймаут не значит
+  // "не доставлено"»). Догадку оставляем — под неизвестные формулировки самого
+  // Telegram, — но только при подтверждённом 400. Та же граница, что у
+  // parseRetryAfterSeconds в telegram-retry.ts (аудит 2026-08-28), с другой
+  // стороны: там текстовая ветка разрешена лишь БЕЗ кода, здесь догадка — лишь
+  // С кодом.
+  return code === 400 && /entities/i.test(desc);
 }
 
 /**
