@@ -71,7 +71,7 @@ export function getAgentStatusIndicator(agent: AgentInfo): {
  *
  * Аудит 2026-08-20: считалось `agents.filter(a => a.status === "running")`, но
  * сервер выставляет это поле как `paused ? "paused" : "running"`
- * (lib/miniapp-server.ts:210) — то есть счётчик мерил «не на паузе», а не
+ * (`buildAgentsList` в lib/miniapp-server.ts) — то есть счётчик мерил «не на паузе», а не
  * живость. Живость лежит в `health`, и её читает лампа. Карточка показывала
  * «12/12» над двенадцатью красными лампами.
  *

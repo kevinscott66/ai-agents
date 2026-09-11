@@ -18,7 +18,8 @@
  * action-dispatch.ts хука "выполнить после approve" не имеет (см. отчёт C13a).
  */
 import { getErrorMessage } from "./errors.ts";
-import { HOUR_MS } from "./time-constants.ts";
+import { HOUR_MS, SECOND_MS } from "./time-constants.ts";
+import { createLogThrottle } from "./log-throttle.ts";
 import { timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { resolve as resolvePath } from "node:path";
@@ -692,10 +693,43 @@ export function startMiniappServer(
    */
   const GET_LIMIT: RateLimitOpts = { capacity: 120, refillPerSec: 4 };
 
+  /**
+   * Окно молчания на один ключ в логе отбоев. Секунда выбрана по самому ведру:
+   * refillPerSec = 20, то есть за секунду по одному ключу заведомо набирается
+   * и отбой, и восстановление — строка в секунду показывает шторм, не печатая
+   * его целиком.
+   */
+  const anonDenyLog = createLogThrottle(SECOND_MS);
+
+  /**
+   * Отбои анонимного ведра ДОЛЖНЫ быть видны снаружи процесса.
+   *
+   * Аудит 2026-09-11: 429 из ветки `preAuth` уходил `return`'ом раньше обеих
+   * точек access-лога — и статической, и хвостовой, — так что в журнале от
+   * него не оставалось ни строки. 429 из ретроспективного счёта (ниже по
+   * `fetch`) в лог попадал, потому что идёт через пост-обработку; расхождение
+   * между двумя ветками одного и того же отбоя никем не объяснялось.
+   *
+   * Ключ здесь тот же, по которому считает ведро, а не «адрес»: при XFF от
+   * доверенного loopback-пира это разные вещи, и в журнале должно стоять то,
+   * по чему приняли решение.
+   */
   function anonLimit(req: Request, peer: string | null): Response | null {
     const key = clientIpKey(req.headers.get("x-forwarded-for"), peer);
     const rl = consumeRateToken(key, ANON_LIMIT);
     if (rl.ok) return null;
+    const d = anonDenyLog.take(key, Date.now());
+    if (d.emit) {
+      log.warn("[miniapp] анонимное ведро отбило запрос", {
+        key,
+        path: new URL(req.url).pathname,
+        method: req.method,
+        retryAfter: rl.retryAfter,
+        // Сколько таких же отбоев по этому ключу проглочено с прошлой строки.
+        // Ноль — значит шторма нет, это одиночный отбой.
+        suppressed: d.suppressed,
+      });
+    }
     return json({ error: "rate_limited", retryAfter: rl.retryAfter }, 429, {
       "retry-after": String(rl.retryAfter),
     });
