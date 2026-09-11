@@ -41,6 +41,7 @@ import {
 } from "../orchestrator/review-mode.ts";
 import type { GhRunner, GhRunResult, GithubResult } from "../lib/dispatch/github.ts";
 import type { ReviewedPr } from "../orchestrator/review-mode.ts";
+import { TRUSTED_PR_IDENTITY } from "./helpers/pr-view-fixture.ts";
 
 const CTX = { agentKey: "orchestrator", chatId: 0 };
 const NOW = Date.parse("2026-08-28T12:00:00Z");
@@ -56,6 +57,7 @@ interface PrView {
 /** Зелёный docs-only PR: в белом списке путей, готов к автомержу. */
 function safePr(extra: PrView = {}): PrView {
   return {
+    ...TRUSTED_PR_IDENTITY,
     state: "OPEN",
     mergeable: "MERGEABLE",
     files: [{ path: "docs/plan.md" }],

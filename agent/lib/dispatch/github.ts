@@ -199,7 +199,14 @@ function isAutoMergeable(f: string): boolean {
   //    future autonomous prompts, so they always require human review.
   //    README воркфлоу — единственный безопасный путь в `.github/`, ровно
   //    как в `case` фильтра автомержа.
-  if (f.startsWith("docs/")) return true;
+  //
+  //    Аудит 2026-09-11: здесь стояло `f.startsWith("docs/")` — без оговорки
+  //    про расширение, то есть шелл-скрипт или воркфлоу, положенный в каталог
+  //    docs/, уходил бы в `--squash` как документация (формы путей, а не
+  //    файлы: под docs/ в `git ls-files` на день правки нет ничего). Тот же
+  //    изъян, что дважды чинили в пункте 2, третьим экземпляром — не успевший
+  //    сработать только потому, что каталог пуст.
+  if (f.startsWith("docs/") && f.endsWith(".md")) return true;
   if (/^README[^/]*\.md$/.test(f)) return true;
   if (/^\.github\/workflows\/README[^/]*\.md$/.test(f)) return true;
 
@@ -289,7 +296,83 @@ export function isHumanReviewLabel(name: string): boolean {
 }
 
 /**
+ * Кому позволено вливаться автоматически.
+ *
+ * Аудит 2026-09-11, круг 50: единственная в системе проверка личности автора
+ * жила в файле, который ничего не исполняет. Пункт 3 шапки
+ * `.github/scripts/automerge-filter.sh` закрыл эту дыру 2026-08-29 — «форк
+ * отсекается, а автор обязан быть в аллоу-листе» — и поставил личность
+ * «раньше всех прочих проверок». Воркфлоу, звавший тот скрипт, удалён при
+ * публичном релизе 2026-09-01, а живой путь (`validatePrChecklist` ниже) не
+ * запрашивал у gh ни `author`, ни `isCrossRepository` и личность не смотрел
+ * нигде.
+ *
+ * Что это значило на публичном репозитории: посторонний форкает, шлёт PR,
+ * правящий один `README.md`, и весь чеклист отвечает «зелено» — open, не
+ * черновик, без меток, без конфликта, один файл, не risky. На пути к
+ * `gh pr merge --squash` оставалось требование зелёного CI, то есть ровно та
+ * «настройка GitHub, а не наш код», которую аудит 2026-08-29 признал
+ * недостаточной: у первого PR нового контрибьютора воркфлоу ждут ручного
+ * одобрения, у второго — уже нет.
+ *
+ * Человек в цепочке есть: мерж требует потреблённого одобрения. Но карточка
+ * одобрения (PREVIEW_BY_ACTION.REVIEW_AND_MERGE_PR в lib/approvals.ts)
+ * печатает номер PR и причину, которую пишет модель, — ни автора, ни ветки,
+ * ни того, форк это или нет. Гейт личности не может быть делегирован тому,
+ * кому личность не показывают, поэтому он машинный и здесь.
+ *
+ * Список — из той же переменной и с тем же значением по умолчанию, что у
+ * записанной политики; согласованность пришпилена в
+ * tests/audit-2026-09-11-automerge-author-gate.test.ts.
+ */
+const DEFAULT_AUTOMERGE_AUTHOR = "kevinscott66";
+
+export function automergeAllowedAuthors(
+  env: Record<string, string | undefined> = process.env,
+): string[] {
+  // Пустая или пробельная переменная означает «не задано» — как `KEY=` в
+  // EnvironmentFile, где значение приходит пустой строкой, а не отсутствует.
+  const list = (env.AUTOMERGE_ALLOWED_AUTHORS ?? "")
+    .split(",")
+    .map((a) => a.trim())
+    .filter(Boolean);
+  return list.length ? list : [DEFAULT_AUTOMERGE_AUTHOR];
+}
+
+/**
+ * Причина, по которой PR не рассматривается автоматически из-за того, КЕМ он
+ * прислан, — или `undefined`, если с личностью всё в порядке.
+ *
+ * Fail-closed в обе стороны: пропавшее поле — это «неизвестно», а не «не
+ * форк» и не «автор неважен». Расхождение с политикой намеренное и в строгую
+ * сторону: jq там сравнивает `.isCrossRepository == "true"` и на отсутствующем
+ * поле пускает дальше; здесь оба поля запрашиваем мы сами, и их отсутствие
+ * означает «gh ответил не тем, о чём просили», а по такому ответу автомержить
+ * нельзя.
+ */
+export function untrustedPrReason(
+  pr: { author?: { login?: string } | null; isCrossRepository?: boolean },
+  env: Record<string, string | undefined> = process.env,
+): string | undefined {
+  if (pr.isCrossRepository !== false) {
+    return pr.isCrossRepository === true
+      ? "PR пришёл из форка — чужую ветку автомерж не вливает"
+      : "gh не сказал, из форка ли PR (поле isCrossRepository) — автомерж невозможен";
+  }
+  const login = typeof pr.author?.login === "string" ? pr.author.login.trim() : "";
+  if (!login) {
+    return "gh не вернул автора PR — личность не подтверждена, автомерж невозможен";
+  }
+  if (!automergeAllowedAuthors(env).includes(login)) {
+    return `автор PR не в списке доверенных (${login})`;
+  }
+  return undefined;
+}
+
+/**
  * Validates a PR against the pre-push checklist:
+ *  - PR прислан не из форка и автор в списке доверенных (см.
+ *    {@link untrustedPrReason}) — личность раньше всех прочих проверок;
  *  - PR is OPEN, не черновик и без блокирующих меток;
  *  - PR is OPEN and not CONFLICTING;
  *  - the whole diff is visible (gh truncates `files` at 100);
@@ -327,7 +410,9 @@ async function validatePrChecklist(
     // списка files — см. проверку ниже.
     // isDraft/labels — сигналы человека «не вливать»; воркфлоу их спрашивал
     // с самого начала, этот путь — нет (аудит 2026-08-12).
-    "--json", "files,state,mergeable,changedFiles,isDraft,labels,headRefOid",
+    // author/isCrossRepository — личность автора; записанная политика просит
+    // их с 2026-08-29, живой путь не просил вовсе (аудит 2026-09-11).
+    "--json", "files,state,mergeable,changedFiles,isDraft,labels,headRefOid,author,isCrossRepository",
   ]);
   if (view.exitCode !== 0) {
     issues.push(
@@ -344,6 +429,8 @@ async function validatePrChecklist(
     isDraft?: boolean;
     labels?: { name?: string }[];
     headRefOid?: string;
+    author?: { login?: string } | null;
+    isCrossRepository?: boolean;
   };
   try {
     prData = JSON.parse(view.stdout);
@@ -353,6 +440,16 @@ async function validatePrChecklist(
   }
 
   const headSha = typeof prData.headRefOid === "string" ? prData.headRefOid : undefined;
+
+  // Личность — раньше всех прочих проверок, ровно как в записанной политике:
+  // про чужой PR полезнее узнать, что он чужой, чем что он черновик. Ответ
+  // тот же, что у политики на форк и незнакомого автора, — SKIP: ни мержа, ни
+  // комментария. Комментарий от имени проекта на PR постороннего — не сигнал
+  // человеку, а выдача бота наружу.
+  const untrusted = untrustedPrReason(prData);
+  if (untrusted) {
+    return { passed: false, issues, filesChanged, risky: false, blocked: untrusted, headSha };
+  }
 
   if (prData.state !== "OPEN") {
     issues.push(`PR #${prNumber} is not open (state: ${prData.state ?? "unknown"})`);
@@ -391,6 +488,21 @@ async function validatePrChecklist(
 
   if (prData.mergeable === "CONFLICTING") {
     issues.push("PR has merge conflicts");
+  } else if (prData.mergeable !== "MERGEABLE") {
+    // Аудит 2026-09-11: отвергался только CONFLICTING, а `UNKNOWN` (GitHub
+    // ещё считает мерджабельность — первые секунды после пуша) и пропавшее
+    // поле проходили дальше как «конфликтов нет». Политика на этом месте
+    // требует строго MERGEABLE и скипает всё остальное; держим то же правило.
+    // Это именно skip, а не замечание: сказать автору нечего, ответ будет
+    // другим сам собой, и следующий прогон вернётся к этому PR.
+    return {
+      passed: false,
+      issues,
+      filesChanged,
+      risky: false,
+      blocked: `GitHub ещё не вычислил мерджабельность PR (mergeable: ${prData.mergeable ?? "поля нет"})`,
+      headSha,
+    };
   }
 
   filesChanged = (prData.files ?? []).map((f) => f.path);

@@ -14,6 +14,7 @@ import {
 import { parseAgentArgs } from "../agent.ts";
 import type { GhRunner, GhRunResult } from "../lib/dispatch/github.ts";
 import { controlReviewMarker } from "../lib/dispatch/github.ts";
+import { TRUSTED_PR_IDENTITY } from "./helpers/pr-view-fixture.ts";
 
 /** Fixed "now" for deterministic windowing. */
 const NOW = Date.parse("2026-06-07T12:00:00Z");
@@ -38,6 +39,7 @@ function fakeGh(
 }
 
 const openSafePr = JSON.stringify({
+  ...TRUSTED_PR_IDENTITY,
   state: "OPEN",
   mergeable: "MERGEABLE",
   // Аудит 2026-08-11: было `agent/tests/foo.test.ts` — с инверсией
@@ -45,6 +47,7 @@ const openSafePr = JSON.stringify({
   files: [{ path: "docs/readme.md" }],
 });
 const openRiskyPr = JSON.stringify({
+  ...TRUSTED_PR_IDENTITY,
   state: "OPEN",
   mergeable: "MERGEABLE",
   files: [{ path: "agent/lib/dispatch/github.ts" }],

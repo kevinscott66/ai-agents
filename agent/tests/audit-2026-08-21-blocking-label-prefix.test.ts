@@ -33,6 +33,7 @@ import { describe, test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
 import { handleReviewAndMergePr } from "../lib/dispatch/github.ts";
 import type { GhRunner, GhRunResult } from "../lib/dispatch/github.ts";
+import { TRUSTED_PR_IDENTITY } from "./helpers/pr-view-fixture.ts";
 
 const CTX = { agentKey: "orchestrator", chatId: 0 };
 const REPO_ROOT = new URL("../../", import.meta.url).pathname;
@@ -47,6 +48,7 @@ function fakeGh(labels: string[]): { runGh: GhRunner; calls: string[][] } {
       return {
         exitCode: 0,
         stdout: JSON.stringify({
+          ...TRUSTED_PR_IDENTITY,
           state: "OPEN",
           mergeable: "MERGEABLE",
           changedFiles: 1,

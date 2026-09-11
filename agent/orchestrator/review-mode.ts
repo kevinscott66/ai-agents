@@ -5,11 +5,22 @@
  * were opened/updated recently and runs each one through the pre-push checklist
  * by reusing the T-511 `REVIEW_AND_MERGE_PR` handler (`handleReviewAndMergePr`).
  * Разбор НИЧЕГО не мержит — merge закрыт для полномочия `control-loop` ранним
- * возвратом в lib/dispatch/github.ts — и оставляет PR человеку. В разбор
- * попадают только свои ветки: список фильтруется по префиксу `agent/`
- * (`headRefName` в `listRecentOpenPrs`), и это граница безопасности автономного
- * цикла, а не оптимизация. Итог печатается для внутреннего наблюдателя
- * (раздел «Control loop»).
+ * возвратом в lib/dispatch/github.ts — и оставляет PR человеку. Список
+ * сужается префиксом ветки `agent/` (`headRefName` в `listRecentOpenPrs`):
+ * цикл смотрит свои PR, а не все подряд.
+ *
+ * Аудит 2026-09-11, круг 50: здесь стояло «в разбор попадают только свои
+ * ветки… и это граница безопасности автономного цикла, а не оптимизация».
+ * Границей этот фильтр быть не может: у PR из форка `headRefName` — имя ветки
+ * В ФОРКЕ, то есть строка, которую целиком выбирает посторонний, и ветка
+ * `agent/whatever` попадает в список ровно так же, как своя. Запрос здесь тоже
+ * не берёт `isCrossRepository`. Граница — в другом месте и в двух: merge
+ * закрыт для `control-loop` ранним возвратом, а личность автора с того же
+ * круга проверяет `validatePrChecklist` (форк и незнакомый автор — `skipped`,
+ * без комментария). Цена прежней формулировки — не дыра, а ложное чувство
+ * периметра: читатель мерил риск этого фильтра как проверку происхождения PR.
+ *
+ * Итог печатается для внутреннего наблюдателя (раздел «Control loop»).
  *
  * Аудит 2026-09-11: здесь стояло «Every PR gets a validation comment». Это
  * неправда в трёх ветках, и файл опровергает себя двадцатью строками ниже, в
@@ -210,9 +221,10 @@ export async function listRecentOpenPrs(
   const cutoff = now() - windowMinutes * 60_000;
   const prNumbers = entries
     .filter((e) => typeof e.number === "number")
-    // The autonomous loop may only inspect agent-owned branches. Treat a
-    // missing branch name as unsafe instead of allowing incomplete `gh` data
-    // to reach the auto-merge handler.
+    // Сужение до своих веток: имя ветки выбирает автор PR, поэтому это
+    // фильтр «на что цикл тратит прогон», а не проверка происхождения —
+    // происхождение проверяет validatePrChecklist (см. шапку). Пропавшее имя
+    // ветки считаем неподходящим: неполные данные gh не повод разбирать PR.
     .filter((e) => typeof e.headRefName === "string" && e.headRefName.startsWith("agent/"))
     .filter((e) => {
       const stamp = e.updatedAt ?? e.createdAt;

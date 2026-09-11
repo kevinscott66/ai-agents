@@ -263,6 +263,9 @@ describe("оба пути автомержа согласованы в обе с
     "agent/characters/prompts/copy/story.md",
     "TASKS.md",
     "docs/x.md",
+    // Аудит 2026-09-11: ветка `docs/` в обоих списках была шире собственной
+    // подписи «Documentation» — сужена до markdown с обеих сторон.
+    "docs/deploy.sh",
     ".gitignore",
     "agent/memory/_team/log.md",
     "agent/memory/orchestrator/log.md",

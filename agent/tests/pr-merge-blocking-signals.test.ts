@@ -39,6 +39,7 @@ import { describe, test, expect } from "bun:test";
 import { handleReviewAndMergePr } from "../lib/dispatch/github.ts";
 import { runReviewMode } from "../orchestrator/review-mode.ts";
 import type { GhRunner, GhRunResult } from "../lib/dispatch/github.ts";
+import { TRUSTED_PR_IDENTITY } from "./helpers/pr-view-fixture.ts";
 
 const CTX = { agentKey: "orchestrator", chatId: 0 };
 
@@ -54,6 +55,7 @@ interface PrView {
 /** Чистый docs-only PR: зелёный, в белом списке путей, готов к автомержу. */
 function safePr(extra: PrView = {}): PrView {
   return {
+    ...TRUSTED_PR_IDENTITY,
     state: "OPEN",
     mergeable: "MERGEABLE",
     changedFiles: 1,

@@ -18,6 +18,7 @@
  */
 import { describe, test, expect } from "bun:test";
 import { isRiskyPath, handleReviewAndMergePr, type GhRunner } from "../lib/dispatch/github.ts";
+import { TRUSTED_PR_IDENTITY } from "./helpers/pr-view-fixture.ts";
 
 describe("инфраструктура рискованна", () => {
   for (const f of [
@@ -90,6 +91,7 @@ function fakeGh(path: string): { runGh: GhRunner; calls: string[][] } {
       return {
         stdout: JSON.stringify({
           files: [{ path }],
+          ...TRUSTED_PR_IDENTITY,
           state: "OPEN",
           mergeable: "MERGEABLE",
           changedFiles: 1,
