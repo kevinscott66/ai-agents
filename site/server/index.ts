@@ -477,26 +477,13 @@ function serveStatic(pathname: string, spaFallback = true): Response | null {
     return null;
   }
 
-  // Resolve & guard against path traversal.
-  const dist = webDist();
-  const rel = normalize(pathname).replace(/^(\.\.[/\\])+/, "");
-  let filePath = join(dist, rel);
-  if (!filePath.startsWith(dist + sep) && filePath !== dist) {
-    filePath = dist;
-  }
-
-  if (existsSync(filePath) && statSync(filePath).isFile()) {
-    return fileResponse(filePath);
-  }
+  const filePath = distFilePath(pathname);
+  if (filePath) return fileResponse(filePath);
 
   // Отсутствующий ассет (хешированный бандл, картинка, шрифт) обязан отдавать
   // 404: index.html вместо него маскирует протухший кэш после редеплоя под
   // MIME-ошибку в консоли.
-  const relNoSlash = rel.replace(/^[/\\]+/, "");
-  if (
-    relNoSlash.startsWith(`assets${sep}`) ||
-    MIME[extname(relNoSlash).toLowerCase()]
-  ) {
+  if (hasBuildFileShape(pathname)) {
     return null;
   }
 
@@ -513,19 +500,56 @@ function serveStatic(pathname: string, spaFallback = true): Response | null {
 }
 
 /**
- * Путь ведёт к файлу сборки, а не к оболочке.
+ * Путь ВЫГЛЯДИТ файлом сборки: каталог ассетов или известное расширение.
  *
- * Та же мерка, что у отказа выше: каталог ассетов или известное расширение.
- * Нужна отдельно, потому что по ней решается ещё и лимитирование: оболочка
- * стоит чтения `index.html`, ассет отдаётся ядром.
+ * Это мерка формы, а не наличия. Она решает, чем отвечать на промах: тегу
+ * `<img>` и тегу `<script>` оболочка не нужна — им нужен код ответа, поэтому
+ * такой промах отдаёт короткий 404, а не страницу.
  */
-function looksLikeAsset(pathname: string): boolean {
-  const rel = pathname.replace(/^[/\\]+/, "");
+function hasBuildFileShape(pathname: string): boolean {
+  const rel = normalize(pathname).replace(/^(\.\.[/\\])+/, "").replace(/^[/\\]+/, "");
   return (
     rel.startsWith(`assets${sep}`) ||
     rel.startsWith("assets/") ||
     MIME[extname(rel).toLowerCase()] !== undefined
   );
+}
+
+/**
+ * Путь к СУЩЕСТВУЮЩЕМУ файлу внутри каталога сборки, иначе null.
+ *
+ * Здесь же защита от выхода за каталог: нормализуем, срезаем ведущие `../` и
+ * требуем, чтобы результат лежал внутри `dist`.
+ */
+function distFilePath(pathname: string): string | null {
+  const dist = webDist();
+  if (!existsSync(dist)) return null;
+  const rel = normalize(pathname).replace(/^(\.\.[/\\])+/, "");
+  let filePath = join(dist, rel);
+  if (!filePath.startsWith(dist + sep) && filePath !== dist) {
+    filePath = dist;
+  }
+  if (!existsSync(filePath) || !statSync(filePath).isFile()) return null;
+  return filePath;
+}
+
+/**
+ * Запрос, который обслуживает ядро, а не мы: его ведро не считает.
+ *
+ * Аудит 2026-09-11 (круг 17): здесь стояла мерка ФОРМЫ — каталог `assets/`
+ * или известное расширение. Обоснование у освобождения ровно одно: страница
+ * тянет файлы сборки пачкой, и общий бюджет её бы задушил. Для файла,
+ * которого на диске нет, это обоснование не работает, а мерка его всё равно
+ * освобождала — достаточно было приписать к адресу `.png`. `/digest/x.png`
+ * подходил и под освобождение, и под `digestIdFromPath`, то есть ходил в
+ * SQLite бесплатно; `/1.png` бесплатно получал целую оболочку.
+ *
+ * Мерка теперь — наличие файла. Оболочку по прямому адресу `/index.html`
+ * исключаем отдельно: файл есть, но он стоит чтения и отдаётся с no-cache.
+ */
+function servedByKernel(pathname: string): boolean {
+  if (extname(pathname).toLowerCase() === ".html") return false;
+  return distFilePath(pathname) !== null;
 }
 
 /**
@@ -2283,7 +2307,7 @@ export function makeFetchHandler() {
       // читать index.html на каждый запрос. Перечислять больше нечего:
       // лимитируем всё, что стоит оболочки, то есть всё, кроме файлов
       // сборки. Ассеты по-прежнему мимо ведра — страница тянет их пачкой.
-      !looksLikeAsset(url.pathname);
+      !servedByKernel(url.pathname);
     if (rateLimitedNonApi && !rateLimitOk(clientIp(req, server))) {
       return withSecurityHeaders(
         new Response("Too Many Requests", {
@@ -2369,6 +2393,12 @@ export function makeFetchHandler() {
     const known = isKnownSpaRoute(url.pathname);
     const res = serveStatic(url.pathname, known);
     if (res) return withSecurityHeaders(res);
+    // Промах по адресу формы файла сборки: отвечаем коротко. Оболочка тут не
+    // читатель, а тег — целая страница в ответ на отсутствующую картинку это
+    // килобайты с `no-cache` вместо девяти байт.
+    if (hasBuildFileShape(url.pathname)) {
+      return withSecurityHeaders(new Response("Not Found", { status: 404 }));
+    }
     const missing = known ? null : notFoundShellResponse();
     return withSecurityHeaders(missing ?? new Response("Not Found", { status: 404 }));
   };
