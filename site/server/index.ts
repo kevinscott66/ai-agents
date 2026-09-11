@@ -346,6 +346,21 @@ function claimedIpKey(addr: string): string {
  * За Cloudflare владелец ставит `cf-connecting-ip` (его CF перезаписывает сам,
  * подделать снаружи нельзя). Пустое значение сохраняет прежнее поведение —
  * последний элемент X-Forwarded-For.
+ *
+ * Аудит 2026-09-11: значение этого заголовка бралось с ЛЕВОГО конца
+ * (`split(",")[0]`) — с того самого, который в ветке XFF десятью строками ниже
+ * объявлен подконтрольным клиенту. Оправданием служила оговорка про «ровно
+ * один адрес», но значение переменной — строка в .env, а не тип. Владелец,
+ * выписавший явно то, что абзац выше называет прежним поведением
+ * (`SITE_CLIENT_IP_HEADER=x-forwarded-for`), разворачивал доверие на 180°:
+ * ключом лимитера становился адрес, который клиент выбирает сам и меняет на
+ * каждый запрос. Тот же разворот выходил и при дубле заголовка от клиента —
+ * `Headers.get` склеивает одноимённые заголовки через запятую.
+ *
+ * Теперь оба источника читаются одним `trustedHop` — с правого конца и с тем
+ * же SITE_TRUSTED_PROXY_HOPS. Для однозначного `cf-connecting-ip` концы
+ * совпадают, то есть рабочая конфигурация не меняется ничем. Держит
+ * audit-2026-09-11-client-ip-header-first-hop.test.ts.
  */
 export function clientIpKey(
   xff: string | null | undefined,
@@ -354,22 +369,38 @@ export function clientIpKey(
   trustedHops: number = trustedProxyHops(),
 ): string {
   if (peer !== null && LOOPBACK_PEERS.has(peer)) {
-    // Заданный владельцем заголовок содержит ровно один адрес — берём как есть.
+    // Оба источника разбираются одинаково: см. trustedHop ниже. Раньше здесь
+    // стояло `direct.split(",")[0]` под оговоркой «заголовок владельца содержит
+    // ровно один адрес» — см. аудит 2026-09-11 в докблоке.
     const direct = trustedHeaderValue?.trim();
-    if (direct) return claimedIpKey(direct.split(",")[0]!.trim());
+    if (direct) {
+      const candidate = trustedHop(direct, trustedHops);
+      if (candidate) return claimedIpKey(candidate);
+    }
     if (xff) {
-      const hops = xff.split(",").map((s) => s.trim()).filter(Boolean);
-      // Отсчёт с конца: последний элемент дописал наш ближайший прокси, и он
-      // единственный, кому мы верим по умолчанию. Если между клиентом и нами
-      // стоит ещё один свой слой (CDN → nginx → сюда), в SITE_TRUSTED_PROXY_HOPS
-      // ставится 2, и берётся предпоследний. Всё, что левее доверенных хопов,
-      // прислал клиент — и подделать может любое значение.
-      const idx = hops.length - Math.max(1, trustedHops);
-      const candidate = hops[idx] ?? hops[0];
+      const candidate = trustedHop(xff, trustedHops);
       if (candidate) return claimedIpKey(candidate);
     }
   }
   return `ip:${peer ?? "unknown"}`;
+}
+
+/**
+ * Адрес из списка «через запятую», отсчитанный с ПРАВОГО конца.
+ *
+ * Последний элемент дописал наш ближайший прокси, и он единственный, кому мы
+ * верим по умолчанию. Если между клиентом и нами стоит ещё один свой слой
+ * (CDN → nginx → сюда), в SITE_TRUSTED_PROXY_HOPS ставится 2, и берётся
+ * предпоследний. Всё, что левее доверенных хопов, прислал клиент — и подделать
+ * может любое значение.
+ *
+ * Список короче, чем доверенных хопов, — это не «значит, всё своё»: берём
+ * самый левый, он в таком списке и есть ближайший к нам.
+ */
+function trustedHop(value: string, trustedHops: number): string | undefined {
+  const hops = value.split(",").map((s) => s.trim()).filter(Boolean);
+  const idx = hops.length - Math.max(1, trustedHops);
+  return hops[idx] ?? hops[0];
 }
 
 /**
