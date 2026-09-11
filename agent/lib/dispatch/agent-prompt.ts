@@ -92,9 +92,14 @@ interface VersionRow {
  *
  * `approvalId` — заявка, которая эту версию решает (миграция 050). Передаётся
  * всегда, когда известна: по ней строку закрывают истечение TTL и провал
- * исполнения, у которых на руках нет ни текста промпта, ни причины. У ветки
- * «строки не нашлось, вставляем применённой» заявки нет по построению —
- * там NULL.
+ * исполнения, у которых на руках нет ни текста промпта, ни причины.
+ *
+ * Аудит 2026-09-11: здесь стояло «у ветки „строки не нашлось, вставляем
+ * применённой“ заявки нет по построению — там NULL». Заявка там как раз
+ * есть: эта ветка живёт в обработчике ОДОБРЕННОГО действия, то есть после
+ * cmdApprove, и `ctx.approvalId` в ней заполнен. Отсутствовала не заявка, а
+ * её передача — и связь «версия ↔ заявка», ради которой заведена колонка,
+ * рвалась ровно на аварийном пути, где разбирательство и нужно.
  */
 export function insertPendingAgentPrompt(
   payload: UpdateAgentPromptPayload,
@@ -179,7 +184,9 @@ export function closeAgentPromptProposals(
 /**
  * Called from dispatchAction's UPDATE_AGENT_PROMPT case (runs only after
  * cmdApprove). Finds the matching pending agent_prompts row (by
- * agent_key + prompt + reason, applied_at IS NULL, latest version) and
+ * agent_key + prompt + reason, applied_at IS NULL, EARLIEST version —
+ * `ORDER BY version ASC`, see the audit note below: `DESC` was the bug, it
+ * stamped a later twin request on approval of an earlier one) and
  * sets applied_at. Fallback: if no pending row found (shouldn't happen in
  * normal flow), insert one and mark it applied immediately.
  *
@@ -292,7 +299,12 @@ export function handleUpdateAgentPromptApproved(
         });
       }
     } else {
-      const inserted = insertPendingAgentPrompt(payload, ctx.agentKey);
+      const inserted = insertPendingAgentPrompt(
+        payload,
+        ctx.agentKey,
+        db,
+        ctx.approvalId ?? null,
+      );
       rowId = inserted.id;
       version = inserted.version;
       db.prepare(`UPDATE agent_prompts SET applied_at = ? WHERE id = ?`).run(
@@ -343,9 +355,15 @@ export function handleUpdateAgentPromptApproved(
 }
 
 /**
- * Called from cmdReject when the action is UPDATE_AGENT_PROMPT. Leaves
- * agent_prompts.applied_at = NULL (the marker that this version was never
- * applied) and writes an audit_logs row for human-readable trail.
+ * Called from cmdReject when the action is UPDATE_AGENT_PROMPT. Stamps
+ * agent_prompts.rejected_at and writes an audit_logs row for human-readable
+ * trail.
+ *
+ * NOT «leaves applied_at = NULL»: that was the 2026-08-27 bug this file's
+ * header describes. `applied_at IS NULL` cannot tell «not decided yet» from
+ * «rejected», so a rejected request stayed pending forever; migration 048
+ * added `rejected_at` precisely to separate them. A «pending requests» query
+ * written from the old wording (`WHERE applied_at IS NULL`) reintroduces it.
  */
 export function handleUpdateAgentPromptRejected(args: {
   payload: UpdateAgentPromptPayload;

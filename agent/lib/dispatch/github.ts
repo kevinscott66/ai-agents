@@ -215,14 +215,17 @@ export function isRiskyPath(f: string): boolean {
  * Метки, которыми человек говорит «не вливать», не закрывая PR.
  *
  * Аудит 2026-08-21: набор сверялся точным именем, а метка, которой автономный
- * цикл помечает КАЖДЫЙ свой PR (`deploy/agents-loop.sh:76` —
- * `--label needs-human-review`), длиннее той, что лежала в наборе. Замер на
+ * цикл помечает КАЖДЫЙ свой PR (`--add-label needs-human-review` в
+ * deploy/vps-autonomous/autonomous-cycle.sh), длиннее той, что лежала в
+ * наборе. Прежняя редакция этого абзаца слала за той же меткой в
+ * `deploy/agents-loop.sh` — файл с тех пор стал надгробием на десять строк,
+ * и слова `needs-human` в нём нет вовсе. Замер на
  * docs-only PR в белом списке путей: `needs-human` — skipped, а
  * `needs-human-review` — `pr merge` вызван, action=merged. То есть
  * единственная метка, которая тут реально ставится, гейт не останавливала.
  *
- * Второй автомерж это уже прошёл: `.github/scripts/automerge-filter.sh:75-79`
- * сравнивает `startswith("needs-human")` — правку 2026-08-12 просто не
+ * Второй автомерж это уже прошёл: jq-фильтр в
+ * .github/scripts/automerge-filter.sh сравнивает `startswith("needs-human")` — правку 2026-08-12 просто не
  * перенесли сюда, хотя комментарий обещал общий список. Держим то же правило:
  * точное имя для трёх меток и префикс для семейства `needs-human*`.
  */
@@ -237,8 +240,9 @@ export function isBlockingLabel(name: string): boolean {
 /**
  * Метка семейства `needs-human*` — просьба к человеку, а не запрет боту смотреть.
  *
- * Аудит 2026-08-28: `deploy/vps-autonomous/autonomous-cycle.sh:540` вешает
- * `needs-human-review` на КАЖДЫЙ свой PR сразу после `gh pr create`, а
+ * Аудит 2026-08-28: `gh pr edit --add-label needs-human-review` в
+ * deploy/vps-autonomous/autonomous-cycle.sh вешает метку на КАЖДЫЙ свой PR
+ * сразу после `gh pr create`, а
  * `listRecentOpenPrs` пропускает в review-mode только ветки `agent/*` — то есть
  * ровно эти PR и никакие другие. Гейт блокирующих меток стоит до чеклиста,
  * поэтому control-loop на каждом своём PR возвращал `{action:"skipped"}` без
@@ -427,7 +431,14 @@ async function validatePrChecklist(
   return { passed: issues.length === 0, issues, filesChanged, risky, headSha };
 }
 
-/** Post a comment on the PR; swallow errors (commenting is best-effort). */
+/**
+ * Post a comment on the PR. Never throws — a failed comment must not abort the
+ * review — but the outcome is NOT swallowed: it comes back as the return
+ * value, and three of the four call sites branch on it, reporting
+ * `comment_failed` / `validation_failed` instead of claiming the PR was
+ * commented. The fourth (merge failed) drops it on purpose: that branch
+ * already returns an error, and a missing comment adds nothing to it.
+ */
 async function comment(prNumber: number, body: string, runGh: GhRunner): Promise<boolean> {
   const res = await runGh(["pr", "comment", String(prNumber), "--repo", REPO, "--body", body]);
   return res.exitCode === 0;

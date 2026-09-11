@@ -186,7 +186,7 @@ export async function handlePublishToChannel(
     // публикация с картинкой. В логе VPS запись есть, у модели — нет: она
     // отчитывалась «пост с обложкой опубликован», обложку никто не чинил, и
     // следующий пост падал так же. Ровно как `truncated` ниже и
-    // `fallback_from`/`fallback_reason` в media.ts:188 — расхождение
+    // `fallback_from`/`fallback_reason` в media.ts — расхождение
     // «просили / получилось» обязано доехать до вызывающего.
     let coverDropped: string | undefined;
     // Аудит 2026-08-28: цепочка обложки ниже смотрела на `photoUrl` только в

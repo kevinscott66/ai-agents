@@ -174,9 +174,10 @@ export function handleAssignTask(
   // Уточнение того же аудита, вечером: первая редакция этого комментария
   // обосновывала вынос тем, что исключение из `lib/tasks.ts` приходит к модели
   // как `dispatch/audit failed: …`. Это неверно. `dispatchAction` ловит всё
-  // сам (action-dispatch.ts:1013) и возвращает обычный `{ok:false, error}`;
+  // сам (хвостовой `catch` в `dispatchAction`) и возвращает обычный
+  // `{ok:false, error}`;
   // префикс `dispatch/audit failed:` ставится ровно в одном месте
-  // (action-dispatch.ts:1877) и только когда бросает сам `dispatchAndAudit`,
+  // (`catch` в `gateOrDispatch`) и только когда бросает сам `dispatchAndAudit`,
   // то есть на записи строки аудита. По ФОРМЕ ответа отказ от броска не
   // отличить.
   //
@@ -227,13 +228,14 @@ export function handleAssignTask(
  * в упор: `listPendingDiagTasks` берёт строго `status='pending'`
  * (self-diag.ts), подборщик осиротевших — строго `status='running'`
  * (там же), а `processDiagTask` пишет терминал сам, каждым UPDATE'ом
- * с `AND status='running'` (:430, :442, :461, :476).
+ * с `AND status='running'` — все четыре UPDATE в self-diag.ts.
  *
  * Что ломалось. Пока задача в `running` (поллер поставил его ДО вызова
  * модели), любая роль с той же доски могла увести её в сторону: REQUEST_REVIEW
  * → `awaiting_review`, UPDATE_TASK_STATUS → `done`. После этого её не видит
  * никто: поллер ждёт `pending`, подборщик — `running`, а `gcStaleTasks`
- * `awaiting_review` не трогает НАМЕРЕННО (это ожидание человека, tasks.ts:70).
+ * `awaiting_review` не трогает НАМЕРЕННО (это ожидание человека — см. разбор
+ * над `OPEN_TASK_STATUSES` в lib/tasks.ts).
  * Единственный разрешённый ретрай упавшего действия сгорал, не состоявшись,
  * и следа об этом не оставалось нигде — ровно тот исход, который аудит
  * 2026-08-21 закрыл для убитого процесса, только дверь другая и открыть её

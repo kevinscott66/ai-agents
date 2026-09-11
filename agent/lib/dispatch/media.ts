@@ -98,7 +98,8 @@ export async function generateCoverPng(
     // получали ИМЕННО ТО, что фикс 2026-08-13 закрывал, только нарисованное
     // Claude вместо OpenAI. Гейт был декоративным.
     //
-    // Отказ здесь не роняет публикацию: вызывающий (action-dispatch.ts:606)
+    // Отказ здесь не роняет публикацию: вызывающий — `handlePublishToChannel`
+    // в dispatch/publish.ts, единственное место, зовущее `generateCoverPng` —
     // ловит исключение обложки, логирует роль и постит текстом — см. разбор
     // аудита 2026-08-11 там же.
     if (!isToolExposedToRole("GENERATE_SVG_IMAGE", agentKey)) {

@@ -21,7 +21,7 @@
  * creating a task is not an external side-effect. NOT in ALWAYS_APPROVE_ACTIONS
  * nor CALLER_RESTRICTED.
  *
- * Recursion / cascade safety mirrors self-diag.ts:192-239:
+ * Recursion / cascade safety mirrors `shouldSkipSelfDiag` (lib/diagnostic.ts):
  *   - never diagnose a diagnostic action or a CREATE_TASK (loop guard);
  *   - skip when the failed action was approval-gated (belongs in approvals);
  *   - skip transient errors — rate-limit (retried by anthropic-client /
