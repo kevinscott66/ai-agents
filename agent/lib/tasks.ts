@@ -14,10 +14,16 @@
  * удалена аудитом 2026-08-12 именно потому, что проверок не делала —
  * см. tests/no-dead-task-facade.test.ts.
  */
-import { TASK_TRANSITIONS, type TaskStatus } from "./task-fsm.ts";
+import {
+  TASK_TRANSITIONS,
+  isSpawnRoleTaskInput,
+  nextStatuses,
+  type TaskStatus,
+} from "./task-fsm.ts";
+export { isSpawnRoleTaskInput };
 import { getErrorMessage } from "./errors.ts";
 import { db } from "./db.ts";
-import { log } from "./log.ts";
+import { log, scrubSecretString, scrubSecretsDeep } from "./log.ts";
 
 export type { TaskStatus };
 
@@ -93,25 +99,61 @@ function parseJSON(v: string | null): unknown | null {
 }
 
 /**
- * Задача-«роль» из очереди рантайма (`SPAWN_ROLE`).
- *
- * Аудит 2026-09-10. Такая задача — не узел плана, а вторая половина строки
- * `role_runtime_queue`: id у них общий (role-runtime.ts:230-285 вставляет обе
- * в одной транзакции), а статусом её двигает только воркер, и каждый его
- * UPDATE обусловлен `AND status='running'` / `AND state='running'`
- * (role-runtime.ts:343-395, :552, :578). Признак `_spawn_role` в `input`
- * ставит он же; по нему её нашла и миграция, заводившая очередь задним числом
- * (migrations.ts:999). Отличать её от обычной задачи нужно ровно затем, чтобы
- * логика набора детей не переписывала итог чужого прогона — см. `createTask`.
+ * Предел текста ошибки в `tasks.error`. Взят у прежнего единственного места,
+ * где обрезка была явной (`failRoleTask` в role-runtime.ts).
  */
-export function isSpawnRoleTaskInput(input: unknown): boolean {
-  return (
-    typeof input === "object" &&
-    input !== null &&
-    (input as { _spawn_role?: unknown })._spawn_role === true
-  );
+export const TASK_ERROR_MAX = 4000;
+
+/**
+ * Единственное определение «что кладётся в свободные текстовые колонки
+ * `tasks`»: `error`, `description`, `input`.
+ *
+ * Аудит 2026-09-11, круг 51. Тем же кругом скраб секретов поставили на границу
+ * записи в `agent_actions` (`lib/audit.ts`) — потому что чинить каждого
+ * вызывающего по отдельности значит чинить только известных, а следующего
+ * писателя не чинит никто. В `tasks` ровно та же дыра и ровно тот же выход
+ * наружу: доску задач отдаёт Mini App (`/api/tasks`), а список — сама модель
+ * через LIST_TASKS. Течёт сюда то же самое, что текло в аудит: при падении
+ * действия `action-dispatch.ts` копирует `res.error` В ДВА поля разом —
+ * `description` и `input.error`, — а `failRoleTask` кладёт в `error` текст
+ * исключения прогона роли. Оба источника содержат то, что вернул упавший
+ * HTTP-вызов, вместе с URL и заголовком.
+ *
+ * Скраб ПЕРЕД обрезкой, а не после: обрезанный секрет перестаёт совпадать с
+ * правилом, и наружу уходит его начало нетронутым (та же каверза, что у
+ * `scrubbedHead` в lib/log.ts и у `closeGatedActionRow` в lib/audit.ts).
+ *
+ * Не все писатели `tasks.error` идут сюда, и это осознанно: константные тексты
+ * санитаров (`gc_stale` в db-maint.ts, «lease expired» в role-runtime.ts, пять
+ * сообщений self-diag.ts) собираются на месте из литералов, недоверенного в
+ * них нет по построению. Сторож
+ * (`tests/audit-2026-09-11-tasks-scrub-boundary.test.ts`) держит границу
+ * именно так: через помощник обязаны идти те три места, где текст приходит
+ * снаружи.
+ */
+export function taskErrorValue(error: string): string {
+  return scrubSecretString(error).slice(0, TASK_ERROR_MAX);
 }
 
+/**
+ * Аудит 2026-09-11: сам предикат переехал в lib/task-fsm.ts и реэкспортирован
+ * выше. Он нужен обеим сторонам — серверу и Mini App, — а этот модуль тянет
+ * SQLite и в браузерный бандл не поедет. Здесь остаётся только обёртка над
+ * задачей целиком.
+ *
+ * Зачем отличать: такая задача — не узел плана, а вторая половина строки
+ * `role_runtime_queue`: id у них общий (`enqueueRoleTask` в role-runtime.ts
+ * вставляет обе в одной транзакции), и статус ей пишет воркер — каждым UPDATE'ом
+ * в паре с очередью и под условием `AND status='running'` / `AND state='running'`.
+ * Единственный писатель снаружи этой пары — санитар `gcStaleTasks`
+ * (lib/db-maint.ts): задачу, не двигавшуюся сутки, он метит `failed` без оглядки
+ * на `_spawn_role`. Расхождения это не оставляет — осиротевшую строку очереди
+ * добирает `claimNextRoleTask` веткой `state='running' AND tasks.status <>
+ * 'running'`, — но «двигает только воркер» читать как инвариант нельзя.
+ * По признаку `_spawn_role` её нашла и миграция, заводившая очередь задним
+ * числом (`role_runtime_queue` в migrations.ts). Логика набора детей не должна
+ * переписывать итог чужого прогона — см. `createTask`.
+ */
 function isSpawnRoleTask(task: Task): boolean {
   return isSpawnRoleTaskInput(task.input);
 }
@@ -177,8 +219,9 @@ export function createTask(input: CreateTaskInput): Task {
     // Аудит 2026-09-10: `_spawn_role` не переоткрываем — ни прямого родителя,
     // ни предка. Обоснование переоткрытия — «новый ребёнок опровергает вывод
     // КОДА о полноте набора»; у задачи-роли статус выведен не из набора детей
-    // вообще, а из прогона: его пишет воркер (role-runtime.ts:552, :578) и
-    // пишет в паре со строкой `role_runtime_queue`. Дети у неё есть только
+    // вообще, а из прогона: его пишет воркер (`completeRoleTask`,
+    // `failRoleTask` в role-runtime.ts) и пишет в паре со строкой
+    // `role_runtime_queue`. Дети у неё есть только
     // потому, что модель внутри роли имеет право на CREATE_TASK{parentId} —
     // это её работа, а не её план.
     //
@@ -210,8 +253,9 @@ export function createTask(input: CreateTaskInput): Task {
       // переоткрытия — «новый ребёнок опровергает вывод кода о полноте
       // набора»; `done`/`failed` предок и получил РОВНО таким выводом
       // (rollupParent). `cancelled` выводом не бывает: rollupParent его не
-      // ставит, в него ведут только кнопки Mini App (task-fsm.ts:41,43) —
-      // это решение человека, и появление внука его не опровергает.
+      // ставит, в него ведут только кнопки Mini App (строки `pending` и
+      // `awaiting_approval` в `TASK_TRANSITIONS`) — это решение человека, и
+      // появление внука его не опровергает.
       // Аудит 2026-08-21 закрыл ту же дыру на прямом родителе, но со стороны
       // входов модели; цепочку предков, добавленную днём раньше, это не
       // покрыло: замер показывал «дед cancelled → running (error=NULL) →
@@ -239,9 +283,19 @@ export function createTask(input: CreateTaskInput): Task {
           cancelled_ancestor: anc.id,
           reopened: reopenChain.map((t) => t.id),
         });
-      } else if (anc && isSpawnRoleTask(anc)) {
+      } else if (anc && FSM[anc.status].length === 0 && isSpawnRoleTask(anc)) {
         log.warn("[tasks] предок — завершённый прогон роли, подъём остановлен", {
           spawn_role_ancestor: anc.id,
+          reopened: reopenChain.map((t) => t.id),
+        });
+      } else if (anc && reopenChain.length > MAX_DEPTH && FSM[anc.status].length === 0) {
+        // Аудит 2026-09-11: выход по ограничителю не логировался вовсе, а это
+        // тот самый случай, ради которого ограничитель и заведён, — битая
+        // цепочка parent_id. Цепочка молча усекалась, и часть предков
+        // оставалась незакрытой без единой строки в логе.
+        log.warn("[tasks] цепочка предков длиннее предела — подъём усечён", {
+          stopped_at: anc.id,
+          limit: MAX_DEPTH,
           reopened: reopenChain.map((t) => t.id),
         });
       }
@@ -288,10 +342,17 @@ export function createTask(input: CreateTaskInput): Task {
       input.createdBy,
       input.assignedTo ?? null,
       input.title,
-      input.description ?? null,
+      // `title` не чистим: его собирает код из имени действия («Tool error:
+      // SEND_MESSAGE»), свободного текста в нём нет. `description` и
+      // `input` — свободные, см. докблок `taskErrorValue`.
+      input.description === undefined || input.description === null
+        ? null
+        : taskErrorValue(input.description),
       input.priority ?? 0,
       input.deadline ?? null,
-      input.inputPayload === undefined ? null : JSON.stringify(input.inputPayload),
+      input.inputPayload === undefined
+        ? null
+        : JSON.stringify(scrubSecretsDeep(input.inputPayload)),
       now,
       now,
     );
@@ -323,17 +384,18 @@ export function createTask(input: CreateTaskInput): Task {
       // Аудит 2026-08-29: снятие маркера стояло ВНУТРИ ветки переоткрытия, то
       // есть срабатывало только когда родитель уже терминален. А маркер пишется
       // и на живом родителе: `reconcileExpectedChildren` кладёт его в ветке
-      // `actual > 0` (tasks.ts:577), где `rollupParent` выходит на
+      // `actual > 0` (там же), где `rollupParent` выходит на
       // незавершённых детях и родитель остаётся `running`. Достаточно, чтобы
       // владелец успел аппрувить отставшую роль ДО того, как доработают
       // остальные: сплит backend+frontend+qa, из них manual только qa; qa
       // возвращает `pending_approval:<id>` и строки не создаёт; аппрув приходит
       // раньше финиша двух других — `createTask` видит нетерминального
       // родителя, `reopenChain` пуст, маркер остаётся. Дальше все трое `done`,
-      // а rollupParent форсит `failed` (tasks.ts:664) и каскадит эту ложь на
-      // всех предков. Прежний регрессионный тест
-      // (task-lifecycle-audit-2026-08-13.test.ts:139) покрывал только обратный
-      // порядок — аппрув после финиша, — где родитель уже терминален.
+      // а `rollupParent` форсит `failed` и каскадит эту ложь на всех предков.
+      // Прежний регрессионный тест — «догнавшее делегирование доводит сплит до
+      // done, а не оставляет failed» в
+      // tests/task-lifecycle-audit-2026-08-13.test.ts — покрывал только
+      // обратный порядок, аппрув после финиша, где родитель уже терминален.
       //
       // Появление ребёнка — то же доказательство, что и для самого reopen:
       // делегирование всё-таки доставлено, прошлый вывод о наборе был
@@ -344,7 +406,7 @@ export function createTask(input: CreateTaskInput): Task {
       //
       // Сверять роль нового ребёнка с ролями, названными в маркере, заманчиво,
       // но нельзя: `joinDelegationErrors` при обрезке выбрасывает сегменты
-      // целиком, заменяя их счётчиком (diagnostic.ts:165), — на сплите от шести
+      // целиком, заменяя их счётчиком (diagnostic.ts), — на сплите от шести
       // ролей роль отставшего в тексте может отсутствовать. Промах такой сверки
       // возвращал бы ровно исходную ошибку: вечный ложный `failed` с каскадом.
       // Из двух неточностей выбираем ту, что теряет сигнал, а не ту, что
@@ -453,11 +515,20 @@ export function assignTask(id: string, assignedTo: string): Task {
 }
 
 /**
- * Кому адресована задача самопочинки. Строка одна и та же в трёх местах —
- * здесь, в C15-петле (`action-dispatch.ts`) и в запросе поллера
- * (`self-diag.ts`); импортировать её оттуда нельзя, не заводя цикл, поэтому
- * связь держится этим комментарием и тестом
- * `tests/audit-2026-09-10-assign-task-guards.test.ts`.
+ * Кому адресована задача самопочинки. Единственное место, где это имя записано.
+ *
+ * Аудит 2026-09-11: прежняя редакция говорила, что остальные места «не могут
+ * импортировать её, не заводя цикл», и что их пять. Ни то, ни другое не было
+ * правдой. Цикла нет и быть не может: `tasks.ts` импортирует только
+ * task-fsm/errors/db/log, а `self-diag.ts` импортирует `tasks.ts` уже давно.
+ * Копий было три, а не пять: два SQL поллера в `self-diag.ts` (подбор
+ * осиротевших и выборка pending) и дефолт параметра `assignedTo` у
+ * `isDiagTaskThrottled` (`fix-chain.ts`).
+ *
+ * Копия правила — это правило, действующее на N−1 из N мест, поэтому копий
+ * больше нет: оба запроса связывают имя параметром `?`, троттл берёт дефолт
+ * отсюда. Сверку держит `tests/audit-2026-09-11-diag-assignee-single-source.test.ts`,
+ * запрет на переадресацию — `tests/audit-2026-09-10-assign-task-guards.test.ts`.
  */
 export const DIAG_ASSIGNEE = "aieng";
 
@@ -493,16 +564,23 @@ export function updateTaskStatus(
   // прогон мимо `failRoleTask`.
   //
   // Отсюда запрет в самом узком месте: воркер сюда не ходит вовсе (свои
-  // UPDATE'ы с `AND status='running'`, role-runtime.ts:356-591), значит любой
-  // приход СЮДА с задачей-ролью — это посторонний, и ему отказывают.
-  if (isSpawnRoleTask(t)) {
-    throw new Error(
-      `cannot change status of task ${id}: это прогон временной роли, его ` +
-        `статусом управляет воркер вместе со строкой очереди.`,
-    );
-  }
-  const allowed = FSM[t.status];
-  if (!allowed || !allowed.includes(status)) {
+  // UPDATE'ы с `AND status='running'`), значит любой приход СЮДА с
+  // задачей-ролью — это посторонний, и ему отказывают.
+  //
+  // Аудит 2026-09-11 (круг 24): запрет спрашивается у `nextStatuses`, а не
+  // проверяется здесь отдельной веткой. Пока он стоял тут, знал о нём только
+  // сервер, и Mini App честно рисовал прогону роли кнопки «→ done» по
+  // `TASK_TRANSITIONS` — то есть ровно то расхождение, ради устранения
+  // которого lib/task-fsm.ts и заведён. Теперь на вопрос «куда можно» обе
+  // стороны отвечают одной функцией; ветка ниже только переводит отказ в текст.
+  const allowed = nextStatuses(t);
+  if (!allowed.includes(status)) {
+    if (isSpawnRoleTask(t)) {
+      throw new Error(
+        `cannot change status of task ${id}: это прогон временной роли, его ` +
+          `статусом управляет воркер вместе со строкой очереди.`,
+      );
+    }
     throw new Error(
       `invalid status transition: ${t.status} → ${status} (task ${id})`,
     );
@@ -592,10 +670,12 @@ function undeliveredDelegation(parent: Task): string | null {
 }
 
 /**
- * Кратчайший путь по таблице переходов FSM: список промежуточных статусов,
- * которыми `from` можно довести до `to`, или null, если пути нет. Пустой
- * массив — «уже там». Нужен `forceTerminalStatus` ниже: голый UPDATE обязан
- * оставить в истории задачи те же переходы, что оставил бы обычный путь.
+ * Кратчайший путь по таблице переходов FSM: статусы, через которые `from`
+ * доходит до `to`, ВКЛЮЧАЯ сам `to` последним элементом, или null, если пути
+ * нет. Пустой массив — «уже там». Нужен `forceTerminalStatus` ниже: голый
+ * UPDATE обязан оставить в истории задачи те же переходы, что оставил бы
+ * обычный путь, — поэтому там путь берут с `.slice(0, -1)`: конечный статус
+ * пишется самим UPDATE'ом, и мост не должен проставить его дважды.
  *
  * Аудит 2026-08-28: над этой функцией лежали ЧУЖИЕ докблоки — от
  * `reconcileExpectedChildren` и `forceTerminalStatus`, обе объявлены ниже.
@@ -634,14 +714,16 @@ class StaleTaskStatus extends Error {
 /**
  * Проставить терминальный статус в обход FSM — но не в обход его смысла.
  *
- * Оба места, где статус пишется голым UPDATE'ом (rollupParent по набору детей
- * и нулевая ветка reconcileExpectedChildren), знают о задаче больше таблицы
- * переходов: согласованность детей там уже проверена. Но `pending → failed`
- * FSM запрещает не из педантизма — история задачи читается по этим переходам,
- * и запись, которой в FSM нет, ломает любого читателя. rollupParent мостил
- * pending → running → target, а ветка «ни одного ребёнка не создалось» — нет,
- * и родитель сплита, у которого провалились все делегирования, прыгал прямо
- * pending → failed. Мост теперь один на оба вызова.
+ * Места, где статус пишется голым UPDATE'ом — тогда их было два, `rollupParent` по
+ * набору детей и нулевая ветка `reconcileExpectedChildren`, — знают о задаче больше
+ * таблицы переходов: согласованность детей там уже проверена. Но `pending → failed` FSM
+ * запрещает не из педантизма — история задачи читается по этим переходам, и запись,
+ * которой в FSM нет, ломает любого читателя. rollupParent мостил
+ * pending → running → target, а ветка «ни одного ребёнка не создалось» — нет, и
+ * родитель сплита, у которого провалились все делегирования, прыгал прямо
+ * pending → failed. Мост теперь один на все вызовы: счётом их с тех пор стало больше
+ * (третьим пришёл `failTask`), и закрывать этот список числом нельзя — именно так он и
+ * соврал в круге 29.
  *
  * Аудит 2026-08-10: мост был зашит в `running` с обоснованием «running достижим
  * из каждого нетерминального статуса». Проверена не та половина: важно не то,
@@ -658,8 +740,9 @@ function forceTerminalStatus(
   error?: string | null,
 ): void {
   // Уже терминальный: перезаписать один терминал другим FSM не позволяет
-  // никому, и «мы проверили детей» тут не аргумент. Оба вызывающих отсекают
-  // такую задачу раньше — это страховка, а не рабочая ветка.
+  // никому, и «мы проверили детей» тут не аргумент. Все три вызывающих —
+  // `failTask`, `reconcileExpectedChildren`, `rollupParent` — отсекают такую
+  // задачу раньше, это страховка, а не рабочая ветка.
   if (FSM[task.status].length === 0) return;
   const now = Date.now();
   // Все шаги пути, кроме последнего: последний — сама запись терминала ниже,
@@ -671,7 +754,9 @@ function forceTerminalStatus(
   let sql = `UPDATE tasks SET status=?, updated_at=?`;
   if (error != null) {
     sql += `, error=?`;
-    vals.push(error);
+    // Единственная запись `tasks.error` из tasks.ts — и она же путь `failTask`,
+    // которым закрываются упавшие задачи. См. докблок `taskErrorValue`.
+    vals.push(taskErrorValue(error));
   }
   // `AND status=?` — CAS, см. комментарий у транзакции ниже. Ожидаемое
   // значение подставляется на вызове: для первого шага это снимок вызывающего,
@@ -696,8 +781,9 @@ function forceTerminalStatus(
   // SAVEPOINT, так что вызов изнутри чужой транзакции безопасен.
   //
   // Аудит 2026-09-10: шаги писались голым `WHERE id=?`, то есть каждый UPDATE
-  // верил снимку `task`, прочитанному вызывающим ДО транзакции. Оба
-  // вызывающих — реконсиляторы (rollupParent по финишу ребёнка и failTask),
+  // верил снимку `task`, прочитанному вызывающим ДО транзакции. Все три
+  // вызывающих — реконсиляторы (`rollupParent` по финишу ребёнка,
+  // `reconcileExpectedChildren` по недобору и `failTask`),
   // они читают задачу, считают детей и только потом пишут; между чтением и
   // записью статус успевает измениться — параллельным финишем второго ребёнка,
   // отменой из Mini App, воркером. Мост при этом проходил ПО СТАРОМУ пути:
@@ -711,8 +797,8 @@ function forceTerminalStatus(
   // первый — снимок вызывающего, каждый следующий — результат предыдущего.
   // Не совпало — вся запись откатывается (мост и терминал по-прежнему одна
   // запись) и не повторяется: победил чужой переход, и наш вывод о детях
-  // построен на устаревшем чтении. Обоим вызывающим это ровно то, что нужно —
-  // они best-effort, бросать наверх нечего, поэтому наружу уходит WARN, а не
+  // построен на устаревшем чтении. Всем трём вызывающим это ровно то, что
+  // нужно — они best-effort, бросать наверх нечего, поэтому наружу уходит WARN, а не
   // исключение.
   try {
     db.transaction(() => {
@@ -765,12 +851,45 @@ function forceTerminalStatus(
  *
  * Возвращает статус, в котором задача осталась, — вызывающему это единственный
  * способ отличить «пометили» от «уже было решено без нас».
+ *
+ * Аудит 2026-09-11: это обещание тут же и нарушалось — `return "failed"` стоял
+ * безусловно. `forceTerminalStatus` при проигранном CAS ловит `StaleTaskStatus`,
+ * пишет WARN и возвращается, НЕ записав ничего (см. её хвост), а разницы между
+ * «записали» и «под нами отменили» здесь не было. То есть единственный способ
+ * отличить одно от другого отвечал «пометили» ровно в том случае, ради которого
+ * заведён: поллер self-diag валит задачу, владелец в это же окно отменяет её из
+ * Mini App, задача остаётся `cancelled` — а вызывающий слышит «failed».
+ *
+ * Гонка запинена в tests/audit-2026-09-10-force-terminal-cas.test.ts по
+ * состоянию БД; возвращаемое значение там не проверялось, поэтому расхождение
+ * и дожило. Теперь статус перечитывается после записи.
+ *
+ * Задача-роль сюда не ходит (вызывающие — только `lib/self-diag.ts`, только по
+ * задачам с `_diag`), но соседи-писатели терминала закрыты от неё поимённо:
+ * `updateTaskStatus`, `rollupParent`, `reconcileExpectedChildren`. Четвёртой
+ * дверью останется эта, если её не закрыть здесь же. Отказ — возвратом, а не
+ * исключением: все вызывающие best-effort, а контракт функции и так возвратный.
+ *
+ * Список закрытых дверей — про этот модуль, а не про базу: пятая, `gcStaleTasks`
+ * в lib/db-maint.ts, пишет `status='failed', error='gc_stale'` без проверки на
+ * `_spawn_role` и закрыта не будет. Там это и не нужно — санитар берёт только
+ * задачи, сутки не двигавшиеся, а живой прогон каждые несколько секунд обновляет
+ * `updated_at` (`heartbeatRoleTask`); мёртвому же терминал и полагается, а
+ * оставшуюся строку очереди добирает `claimNextRoleTask`.
  */
 export function failTask(id: string, error: string): TaskStatus {
   const t = getTask(id);
   if (!t) throw new Error(`task not found: ${id}`);
   if (FSM[t.status].length === 0) return t.status;
+  if (isSpawnRoleTask(t)) {
+    log.warn("[tasks] failTask по прогону роли — отказ, статусом владеет воркер", {
+      task_id: t.id,
+      status: t.status,
+    });
+    return t.status;
+  }
   forceTerminalStatus(t, "failed", error);
+  const after = getTask(id)?.status ?? t.status;
   if (t.parent_id) {
     try {
       rollupParent(t.parent_id);
@@ -778,7 +897,7 @@ export function failTask(id: string, error: string): TaskStatus {
       log.error("[tasks] rollupParent error", { error: getErrorMessage(e) });
     }
   }
-  return "failed";
+  return after;
 }
 
 /**
@@ -852,8 +971,8 @@ export function reconcileExpectedChildren(
       rollupParent(parent.parent_id);
     } catch (e) {
       // Аудит 2026-08-20: было `log.debug`, а в проде уровень — `info`
-      // (log.ts:91), то есть сбой не печатался вовсе и функция возвращала
-      // успех. Дед остаётся pending/running без единого признака, через сутки
+      // (`resolveLogLevel` в log.ts), то есть сбой не печатался вовсе и
+      // функция возвращала успех. Дед остаётся pending/running без единого признака, через сутки
       // его подбирает gcStaleTasks и переписывает в failed с `error=gc_stale`:
       // успешно завершённое дерево получает ложную причину провала. Соседний
       // catch на том же классе ошибки (updateTaskStatus) пишет error.
@@ -866,9 +985,25 @@ export function reconcileExpectedChildren(
 }
 
 /**
- * C29: if the parent task is still pending/running and all its children have
- * terminal status, transition it: done if all children done, failed if any
- * child failed (first child error wins).
+ * C29: досчитывает родителя по завершившимся детям.
+ *
+ * Кого НЕ трогает (три двери, и первая шире, чем «pending/running»): уже
+ * терминального — `done`, `failed`, `cancelled`; прогон временной роли
+ * (`isSpawnRoleTask`, разбор ниже); родителя, чей набор детей ещё не полон —
+ * пуст, короче объявленного `expectedChildren` или содержит незавершённого
+ * ребёнка. Родитель в `awaiting_review` / `awaiting_approval` под запрет НЕ
+ * попадает и досчитывается наравне с живым: это ожидание человека по САМОЙ
+ * задаче, а не признак незакрытого набора.
+ *
+ * Куда переводит — три исхода, а не два. `failed`, если провалился хоть один
+ * ребёнок (побеждает ошибка первого) ИЛИ на родителе висит отметка
+ * недоставленного делегирования (`undeliveredDelegation`) — вторая причина
+ * важна ровно потому, что такого ребёнка в наборе нет. Иначе `done`, если
+ * завершился успехом хоть один (`anyDone`, не «все»: набор из done и
+ * cancelled — это выполненная работа с отменённым хвостом). Иначе, то есть
+ * когда все дети отменены, — `cancelled`.
+ *
+ * Итог каскадится вверх по `parent_id`.
  */
 export function rollupParent(parentId: string): void {
   const parent = getTask(parentId);
@@ -914,14 +1049,16 @@ export function rollupParent(parentId: string): void {
   // ребёнка (3 роли, 2 провалились → «done»). Отсюда явный счётчик.
   //
   // Аудит 2026-08-10: счётчик закрывает ровно одного производителя детей из
-  // двух. Его ставит только SPLIT_TASK (action-dispatch.ts:870); CREATE_TASK
-  // принимает parentTaskId и не обещает ничего, так что при «expected === null»
+  // двух. Его ставит только SPLIT_TASK (`expectedChildren: roles.length` в
+  // action-dispatch.ts); CREATE_TASK принимает parentTaskId и не обещает
+  // ничего, так что при «expected === null»
   // первый же закрывшийся ребёнок считает набор полным. Закрывать этот путь
   // здесь нельзя — по неизвестному набору автозакрытие как раз и является
   // документированным поведением (см. c29-redistribution, tasks-rollup-cancel),
   // и запрет на него отнял бы работающую возможность ради одного сценария.
   // Поэтому чинится вторая половина: поздний ребёнок переоткрывает уже
-  // закрытого родителя — см. reopenParentForLateChild в createTask.
+  // закрытого родителя — см. ветку переоткрытия терминальных предков в
+  // `createTask` (отдельной функции у неё нет).
   const expected = expectedChildCount(parent);
   if (expected !== null && children.length < expected) return;
   const allTerminal = children.every(
@@ -968,9 +1105,17 @@ export function rollupParent(parentId: string): void {
 }
 
 /**
- * `limit` не косметика. Таблица tasks не архивируется (db-maint трогает только
- * agent_actions/audit_logs/messages, DELETE FROM tasks нет нигде), то есть
- * растёт всю жизнь деплоя. HTTP-ручка GET /api/tasks?assignee=X отдаёт
+ * `limit` не косметика. Таблица tasks не архивируется и не чистится: суточный
+ * прогон db-maint её не касается, а `DELETE FROM tasks` нет ни в одном
+ * рабочем пути. То есть она растёт всю жизнь деплоя.
+ *
+ * Список архивируемых таблиц здесь намеренно не повторяется. Прежде тут стояло
+ * «db-maint трогает только agent_actions/audit_logs/messages» — перечень,
+ * который к моменту правки уже разошёлся с кодом на две таблицы (`approvals`,
+ * миграция 042, и `role_runtime_queue`, 046), потому что растили его в
+ * db-maint.ts, а сюда не заглядывали. Полный перечень — в шапке lib/db-maint.ts,
+ * где о нём же сказано «Список имён держать полным обязательно»; довод ниже от
+ * него не зависит — ему нужно ровно одно: `tasks` в этом перечне нет. HTTP-ручка GET /api/tasks?assignee=X отдаёт
  * не больше 200 строк, но раньше резала их в JS уже ПОСЛЕ того, как весь
  * результат оказывался в памяти и каждая строка проходила через JSON.parse
  * колонок input/output. Bun.serve однопоточный и делит поток с SQLite, так

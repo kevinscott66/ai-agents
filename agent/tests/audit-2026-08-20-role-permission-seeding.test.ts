@@ -11,7 +11,7 @@
  *
  *  - на ПРОДЕ все четырнадцать сидов уже отмечены в `schema_migrations` и
  *    больше не запустятся никогда. Новая роль не получит НИ ОДНОЙ строки в
- *    `permissions`, а `getPermission` (`lib/permissions.ts:332`) на отсутствие
+ *    `permissions`, а `getPermission` (`lib/permissions.ts`) на отсутствие
  *    строки возвращает `{allowed:false}`. Роль отказывает себе во всём, включая
  *    SEND_MESSAGE, — то есть бот поднимается и молчит;
  *  - на ЧИСТОЙ базе (CI, `tests/migrations-bootstrap.test.ts`) те же миграции
@@ -19,7 +19,7 @@
  *    по построению — ровно в том случае, который на проде сломан.
  *
  * Существующий сторож эту дыру не видит: `unseededActionTypes()`
- * (`permissions.ts:365-371`) делает `SELECT DISTINCT action_type` и считает
+ * (`permissions.ts`) делает `SELECT DISTINCT action_type` и считает
  * покрытие по типам действий, а не по парам `(agent_key, action_type)`. Пока
  * хоть одна роль имеет SEND_MESSAGE, тип считается засеянным.
  *

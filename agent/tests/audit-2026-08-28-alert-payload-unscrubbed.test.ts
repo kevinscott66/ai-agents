@@ -9,8 +9,9 @@
  * Шапка lib/log.ts про скраббер говорит прямо: «ALWAYS on (unlike PII
  * redaction) — secrets must never log». Второй сток это обещание не исполнял.
  *
- * Сток не внутренний: `audit_logs` отдаёт наружу `/api/audit` Mini App
- * (lib/miniapp-server.ts:1599) и забирает архив холодного хранения. А текст в
+ * Сток не внутренний: `audit_logs` отдаёт наружу Mini App (ветка
+ * `/api/audit-logs` в lib/miniapp-server.ts) и забирает архив холодного
+ * хранения. А текст в
  * `data` — произвольный: `telegraf-patch.ts:140` кладёт туда message
  * необработанного исключения, `backup.ts:378` и db-maint — текст ошибки
  * стороннего вызова. Ровно те строки, ради которых скраббер и написан:

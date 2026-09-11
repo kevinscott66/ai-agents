@@ -27,7 +27,11 @@ import { join } from "node:path";
 const TMP = mkdtempSync(join(tmpdir(), "web3puls-shell-cache-"));
 const DIST = join(TMP, "dist");
 const INDEX = join(DIST, "index.html");
-mkdirSync(DIST, { recursive: true });
+mkdirSync(join(DIST, "assets"), { recursive: true });
+// Настоящий файл сборки: освобождение от ведра выдаётся по наличию файла
+// (аудит 2026-09-11, круг 17 — audit-2026-09-11-bucket-asset-shape.test.ts),
+// а не по расширению в адресе.
+writeFileSync(join(DIST, "assets", "app-abcdef.js"), "console.log(1)\n");
 
 function shell(marker: string): string {
   return `<!doctype html><html><head><title>${marker}</title></head><body><div id="app"></div></body></html>`;
@@ -124,7 +128,7 @@ describe("ведро считает всё, что стоит оболочки",
   test("файлы сборки идут мимо ведра: страница тянет их пачкой", async () => {
     for (let i = 0; i < 80; i++) {
       const res = await get("/assets/app-abcdef.js", "10.1.0.3");
-      expect(res.status).not.toBe(429);
+      expect(res.status).toBe(200);
     }
   });
 

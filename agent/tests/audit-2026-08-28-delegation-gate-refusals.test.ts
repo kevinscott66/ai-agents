@@ -4,9 +4,12 @@
  * `DELEGATION_REFUSALS` перечислял отказы уровня самой воронки (цикл, сам
  * себе, остановленные политикой кандидаты, `delegate_skipped:`) — и ни одного
  * исхода ГЕЙТА. А фан-аут SPLIT_TASK ходит через `gateOrDispatch`, то есть
- * ровно эти исходы и получает: `gateRefusalText` (action-dispatch.ts:1390)
- * склеивает `forbidden:`, `pending_approval:` и `rate_limited:`, а вызывающий
- * кладёт их в `errors` как `<role>: <текст>` (:864).
+ * ровно эти исходы и получает: `gateRefusalText` (action-dispatch.ts)
+ * склеивает `forbidden:`, `pending_approval:` и `rate_limited:`, а исход
+ * делегирования с этим текстом уезжает в `foldFanoutOutcomes`
+ * (lib/dispatch/split-fanout.ts), где и становится строкой `<role>: <текст>`.
+ * Круг 31: сборка сегмента переехала туда из диспетчера, и сторож ниже
+ * переехал за ней — сторож, отвечающий про НЕ ТОТ файл, хуже отсутствующего.
  *
  * Больнее всего `pending_approval:`. При `autonomy=manual` его возвращает
  * КАЖДОЕ делегирование: DELEGATE_TO_ROLE не входит в LOW_FRICTION_ACTIONS, а
@@ -20,8 +23,8 @@
  * `categorizeError` видит «forbidden» и раскладывает в permission_denied.
  *
  * Отдельно — прямое делегирование под отменённого родителя
- * (action-dispatch.ts:568). Текст сам объясняет агенту, что делать вместо
- * этого; чинить в нём нечего.
+ * (отказ `parent task is cancelled` в action-dispatch.ts). Текст сам
+ * объясняет агенту, что делать вместо этого; чинить в нём нечего.
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -37,6 +40,10 @@ const DISPATCH_SRC = readFileSync(
   new URL("../lib/action-dispatch.ts", import.meta.url),
   "utf8",
 );
+const FANOUT_SRC = readFileSync(
+  new URL("../lib/dispatch/split-fanout.ts", import.meta.url),
+  "utf8",
+);
 const PERM_SRC = readFileSync(new URL("../lib/permissions.ts", import.meta.url), "utf8");
 
 const split = (...reasons: string[]) =>
@@ -50,7 +57,10 @@ describe("предпосылки: эти тексты действительно
   });
 
   test("фан-аут сплита кладёт их в errors как `<role>: <текст>`", () => {
-    expect(DISPATCH_SRC).toContain("errors.push(`${role}: ${gateRefusalText(r)}`);");
+    // Две половины одной дороги. Диспетчер отдаёт текст гейта исходом...
+    expect(DISPATCH_SRC).toContain("{ role, refusal: gateRefusalText(r) }");
+    // ...а сегмент из него собирает fold — там же, где живут остальные исходы.
+    expect(FANOUT_SRC).toContain("errors.push(`${o.role}: ${o.refusal}`);");
   });
 
   test("под manual одобрения требует каждое делегирование", () => {

@@ -2,7 +2,7 @@
  * Аудит 2026-08-12: «ход без тулзов» на SDK-пути всё равно приходил с
  * WebSearch/WebFetch.
  *
- * C7 (анти-дубль) в orchestrator/message-handler.ts:505 отключает инструменты
+ * C7 (анти-дубль) в orchestrator/message-handler.ts отключает инструменты
  * на ход явным пустым списком:
  *
  *   ...(allowTools ? {} : { allowedTools: [] as string[] }),

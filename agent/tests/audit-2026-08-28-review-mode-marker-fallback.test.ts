@@ -21,12 +21,14 @@
 import { describe, expect, it } from "bun:test";
 import { runReviewMode } from "../orchestrator/review-mode.ts";
 import { CONTROL_REVIEW_MARKER, controlReviewMarker } from "../lib/dispatch/github.ts";
+import { TRUSTED_PR_IDENTITY } from "./helpers/pr-view-fixture.ts";
 
 const NOW = Date.parse("2026-08-28T12:00:00Z");
 const now = () => NOW;
 const minsAgo = (m: number) => new Date(NOW - m * 60_000).toISOString();
 
 const OPEN_SAFE_PR = JSON.stringify({
+  ...TRUSTED_PR_IDENTITY,
   state: "OPEN",
   mergeable: "MERGEABLE",
   files: [{ path: "docs/readme.md" }],

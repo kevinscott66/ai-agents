@@ -4,7 +4,7 @@
  * `deriveTitle` (`lib/site-ingest.ts`) искал первый `**bold**` по ВСЕМУ тексту
  * поста. Фолбэк тремя строками ниже футер отфильтровывает явно
  * (`!isFooterLine(l)`), ветка с bold — нет. А футер у нас программный:
- * `ensureChannelFooter` (`action-dispatch.ts:549`) приклеивает канонический
+ * `ensureChannelFooter` (`action-dispatch.ts`) приклеивает канонический
  * `CHANNEL_FOOTER`, который заканчивается на
  * `**© Copyright 2023-2026 [DeLabs](…)**`. Подставляется он не безусловно —
  * `ensureChannelFooter` выходит через `if (!removed) return text`, если футера
@@ -17,7 +17,8 @@
  *   title: "Copyright 2023-2026 [DeLabs](https://t.me/+GlWhq7pcZFkNjc6)"
  *
  * Это не косметика: все четыре выхода PUBLISH_TO_CHANNEL зовут
- * `ingestDigestToSite(fullText, …)` (`action-dispatch.ts:669,733,741,763`),
+ * `ingestDigestToSite(fullText, …)` (`handlePublishToChannel`,
+ * lib/dispatch/publish.ts),
  * страница уходит на delabs.space вместе с записью в RSS, и снять её обратно
  * нельзя — ровно класс инцидента T-743.
  *

@@ -13,7 +13,6 @@
 // Network & Ports
 // ========================================
 
-/** Default port for the Mini App HTTP server / API endpoints. */
 /**
  * Потолок задержки таймера: setTimeout/setInterval держат её в 32-битном
  * знаковом int. Больше — Bun печатает одну строку TimeoutOverflowWarning в
@@ -34,6 +33,7 @@
  */
 export const MAX_TIMER_MS = 2_147_483_647;
 
+/** Default port for the Mini App HTTP server / API endpoints. */
 export const DEFAULT_MINIAPP_PORT = 8787;
 
 /** Default port for the Mac Bridge WebSocket server.
@@ -132,8 +132,8 @@ export const MAX_CALLS_PER_TOOL_PER_RESPONSE = 2;
  * Статусы `ok:false`, которые НЕ являются провалом инструмента.
  *
  * `pending_approval` — действие поставлено на согласование, строка в
- * `approvals` уже закоммичена (`action-dispatch.ts:1528`). `rate_limited` —
- * действие отложено, есть `retryInMs`, ждать надо, а не чинить. Если отдать
+ * `approvals` уже закоммичена (ветка `pending_approval` в `gateOrDispatch`).
+ * `rate_limited` — действие отложено, есть `retryInMs`, ждать надо, а не чинить. Если отдать
  * их модели как ошибку, она читает это как провал и зовёт тот же инструмент
  * снова: MAX_CALLS_PER_TOOL_PER_RESPONSE не мешает (вызов в каждом ответе
  * один), так что до MAX_CALLS_PER_TOOL_PER_RUN набегает до восьми карточек
@@ -157,6 +157,10 @@ export const CONTROL_TOOL_STATUSES: ReadonlySet<string> = new Set([
  * Инструменты, которые диспатчер исполняет сам, не уходя в action-dispatch:
  * чтение без побочных эффектов (плюс CANCEL_SCHEDULED_POST — единственная
  * мутация в этом блоке, SEC-audit 2026-06-10 F1).
+ *
+ * Держим списком, а не выводим из диспатчера, чтобы тест мог утверждать
+ * TOOLS = TOOL_NAMES ∪ INLINE_TOOL_NAMES — иначе новый инструмент снова молча
+ * провалится в «unknown tool».
  *
  * Список живёт здесь, а не в tools-schema.ts, ради круга импортов: этот файл —
  * лист, его ни от кого не тянет. Аудит 2026-08-29: пока набор объявлялся в

@@ -21,7 +21,7 @@
  * creating a task is not an external side-effect. NOT in ALWAYS_APPROVE_ACTIONS
  * nor CALLER_RESTRICTED.
  *
- * Recursion / cascade safety mirrors self-diag.ts:192-239:
+ * Recursion / cascade safety mirrors `shouldSkipSelfDiag` (lib/diagnostic.ts):
  *   - never diagnose a diagnostic action or a CREATE_TASK (loop guard);
  *   - skip when the failed action was approval-gated (belongs in approvals);
  *   - skip transient errors — rate-limit (retried by anthropic-client /
@@ -278,7 +278,8 @@ export function handleCreateDiagnosticTask(
   // ровно тот таск, ради которого расследование и заводят. Действие упало →
   // его таск T закрылся как `failed` с текстом ошибки. Владелец просит
   // «разберись, почему упало» → createTask видит терминального родителя,
-  // отрабатывает reopenParentForLateChild (tasks.ts) и голым UPDATE'ом ставит
+  // отрабатывает ветку переоткрытия терминальных предков (`createTask` в
+  // tasks.ts) и голым UPDATE'ом ставит
   // T в `running`, **стирая error**. Настоящая причина провала исчезает
   // безвозвратно. Дальше диагностика завершается, rollupParent пересчитывает T
   // по единственному ребёнку (у не-SPLIT родителя `expectedChildren` — null,

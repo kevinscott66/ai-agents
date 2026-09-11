@@ -178,14 +178,24 @@ export type MacHandlerResult = HandlerResult;
  *     `failAllPending` только чистит карту ожиданий. Отменить прогон нечем:
  *     сокет уже мёртв (обрыв связи, остановка моста) либо `activeSocket` уже
  *     указывает на НОВЫЙ демон (замена клиента), и `cancel` со старым id ушёл
- *     бы не туда. Процесс `claude` в режиме `bypass` продолжает работать в том
- *     же проекте на машине владельца, но в `pending` его больше нет — значит,
- *     он не считается и в `MAC_MAX_CONCURRENT_RUNS`. Рефанд плюс повтор дают
- *     второй `claude` поверх первого, оба пишут в один рабочий каталог.
+ *     бы не туда.
  *
- * Поэтому третья группа помечается `sideEffect`: след снаружи уже оставлен —
- * буквально запущенный и не убитый процесс, — и рефандить его нельзя по тому
- * же правилу, что и частичную доставку в чат (см. action-dispatch.ts).
+ * Аудит 2026-09-11: здесь стояло «процесс `claude` продолжает работать в том
+ * же проекте на машине владельца». Для двух случаев из трёх это неправда:
+ * `mac_replaced` закрывает старый сокет (`activeSocket.close()`),
+ * `mac_bridge_stopped` — весь сервер (`server.stop(true)`), а у демона на
+ * `close` висит `killAllChildren()` с SIGINT→SIGKILL. Дети умирают.
+ * Настоящее окно — `mac_disconnected` при обрыве сети: демон узнаёт о нём
+ * только своим watchdog'ом (`STALE_MS`, 2.5 пинга), и до тех пор процесс жив
+ * и пишет в рабочий каталог.
+ *
+ * Классификацию это не двигает, а обосновывает иначе: в `pending` прогона
+ * больше нет, значит он не считается и в `MAC_MAX_CONCURRENT_RUNS`, а
+ * отличить «убили сразу» от «убьют через STALE_MS» отсюда нечем. Поэтому
+ * третья группа помечается `sideEffect`: возможный след снаружи — буквально
+ * работающий процесс, — и рефанд плюс повтор дали бы второй `claude` поверх
+ * первого в том же каталоге. Рефандить нельзя по тому же правилу, что и
+ * частичную доставку в чат (см. action-dispatch.ts).
  */
 export function macFailureLeavesRunAlive(error: string): boolean {
   return (
@@ -270,7 +280,12 @@ export async function handleMacRunClaude(
   }
   const chatId = ctx.chatId;
   const tg = ctx.telegram;
-  // Periodic system progress updates every 10s while the run is in flight.
+  // Уведомление о прогрессе — НЕ heartbeat. Оно уходит не чаще раза в десять
+  // секунд И только если вывод с прошлого раза вырос: молчащий прогон
+  // (компиляция, долгий сетевой вызов, ожидание ввода) не шлёт в чат ничего.
+  // Аудит 2026-09-11: здесь было написано «every 10s», и это ровно то
+  // обещание, на которое опереться нельзя — по отсутствию сообщений нельзя
+  // заключить, что прогон умер.
   let lastNoticeAt = Date.now();
   let lastLen = 0;
   const onProgress = (snap: {
@@ -290,7 +305,10 @@ export async function handleMacRunClaude(
       lastLen = totalLen;
       tgSendMessage(tg, {
         chatId,
-        text: `[mac] running… ${totalLen}B streamed`,
+        // `stdoutLen`/`stderrLen` копятся как `data.length`, то есть в code
+        // units UTF-16, а не в байтах: на русском тексте и эмодзи «B» врало
+        // бы рядом с `MAC_STREAM_TAIL_BYTES`, который байты настоящие.
+        text: `[mac] running… ${totalLen} симв. получено`,
       }).catch(() => {});
     }
   };

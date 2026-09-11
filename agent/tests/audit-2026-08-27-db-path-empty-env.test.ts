@@ -4,9 +4,9 @@
  * PR #... от 2026-08-20 научил `lib/db.ts` не верить `??` и падать на дефолт
  * при пустом значении, но три ДРУГИХ места читали переменную по-старому:
  *
- *   lib/backup.ts:364              `?? join(dataDir, "memory.db")`
- *   lib/db-maint.ts:850            `?? "data/memory.db"`
- *   orchestrator/services.ts:219   `?? "data/memory.db"`
+ *   lib/backup.ts, источник снапшота БД   `?? join(dataDir, "memory.db")`
+ *   lib/db-maint.ts, замер размера файла   `?? "data/memory.db"`
+ *   orchestrator/services.ts, `dbPath`     `?? "data/memory.db"`
  *
  * `??` срабатывает только на ОТСУТСТВУЮЩУЮ переменную, а `agent/.env.example`
  * строка 55 — `MEMORY_DB_PATH=` без значения, и весь файл написан в этом стиле.

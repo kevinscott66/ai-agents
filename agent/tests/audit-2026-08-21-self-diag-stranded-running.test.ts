@@ -2,7 +2,7 @@
  * Аудит 2026-08-21: рестарт в окне «running → ответ aieng» хоронил
  * diag-задачу навсегда.
  *
- * `processDiagTask` (self-diag.ts:404) переводит задачу в `running` ДО вызова
+ * `processDiagTask` (self-diag.ts) переводит задачу в `running` ДО вызова
  * модели, а `listPendingDiagTasks` (:242) выбирает строго `status='pending'`.
  * Пока процесс жив, дыры нет — тик сериализован флагом, каждый выход пишет
  * терминальный статус. Kill процесса ровно в этом окне (OOM, `systemctl

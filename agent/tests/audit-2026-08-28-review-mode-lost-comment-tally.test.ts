@@ -2,7 +2,7 @@
  * Аудит 2026-08-28: потерянный комментарий отчитывался как разбор.
  *
  * `countReviewOutcomes` сгребала в `reviewed` все успешные исходы, кроме
- * `skipped`. Но `GithubOperationResult.action` (lib/dispatch/github.ts:46)
+ * `skipped`. Но `GithubOperationResult.action` (lib/dispatch/github.ts)
  * включает `comment_failed` и `validation_failed` — это ровно «проверка
  * отработала, но комментарий до PR не доехал». Комментарий и есть
  * ЕДИНСТВЕННЫЙ внешний след того, что PR разобран и ждёт человека: нет

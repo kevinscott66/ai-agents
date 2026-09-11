@@ -5,25 +5,28 @@
  *
  * Что измерено по файлам репо (git ls-files, без запуска на хосте):
  *
- * 1. `deploy/staged-deploy.sh:147` переписывал юнит-файл НАСОВСЕМ:
+ * 1. `deploy/staged-deploy.sh` переписывал юнит-файл НАСОВСЕМ (шаг с `sed`
+ *    по `MINIAPP_PORT`; сегодня от него остался только след в шапке скрипта):
  *
  *      sed 's/MINIAPP_PORT=8788/MINIAPP_PORT=8787/' \
  *        /etc/systemd/system/agent-team-green.service > /tmp/…-prod.service
  *      cp /tmp/…-prod.service /etc/systemd/system/agent-team-green.service
  *
  *    После первого же успешного цикла green навсегда объявлен на 8787. А
- *    `get_service_port` в том же скрипте (строки 51-58) продолжает возвращать
- *    для green 8788 — по таблице, не по файлу. Следующий прогон: активен green
+ *    таблица «цвет → порт» в том же скрипте продолжала возвращать для green
+ *    8788 — по таблице, не по файлу. (Функция, которая её читала, с тех пор
+ *    удалена: порт стал свойством роли, а не цвета. Имя её здесь не названо —
+ *    искать в скрипте нечего.) Следующий прогон: активен green
  *    (8787), staging = blue (тоже 8787) → `systemctl start blue` упирается в
  *    занятый порт, а health_check стучится в 8788, где уже никого нет. То есть
  *    второй деплой этим скриптом не проходит никогда, и это не «упало и
  *    откатились», а «откат тоже проверяет не тот порт».
  *
  * 2. Оба юнита — `ProtectSystem=strict` + ReadWritePaths только на
- *    `data`, `backups`, `/tmp`. Но `agent/lib/memory.ts:33` пишет вики в
+ *    `data`, `backups`, `/tmp`. Но `agent/lib/memory.ts` пишет вики в
  *    `MEMORY_DIR ?? "memory"` ОТНОСИТЕЛЬНО cwd, а cwd юнита —
- *    `WorkingDirectory=/opt/agent-team`. То же самое написано и в шапке
- *    `deploy/deploy.sh:46-47`, где `memory/` исключён из rsync как рантайм.
+ *    `WorkingDirectory=/opt/agent-team`. То же самое написано и в
+ *    `deploy/deploy.sh`, где `memory` исключён из rsync как рантайм.
  *    Под strict это read-only: любая запись в вики падает на EROFS, а
  *    health-check `/api/health` этого не видит — деплой отчитается успехом.
  *

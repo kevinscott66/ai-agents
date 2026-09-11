@@ -4,9 +4,31 @@
  * Runs the orchestrator in a one-shot "review-only" pass: it lists the PRs that
  * were opened/updated recently and runs each one through the pre-push checklist
  * by reusing the T-511 `REVIEW_AND_MERGE_PR` handler (`handleReviewAndMergePr`).
- * Every PR gets a validation comment and is left for a human. The control-loop
- * authority cannot reach the merge command. The pass then prints a summary for
- * the internal supervisor/status collector ("Control loop" section).
+ * Разбор НИЧЕГО не мержит — merge закрыт для полномочия `control-loop` ранним
+ * возвратом в lib/dispatch/github.ts — и оставляет PR человеку. Список
+ * сужается префиксом ветки `agent/` (`headRefName` в `listRecentOpenPrs`):
+ * цикл смотрит свои PR, а не все подряд.
+ *
+ * Аудит 2026-09-11, круг 50: здесь стояло «в разбор попадают только свои
+ * ветки… и это граница безопасности автономного цикла, а не оптимизация».
+ * Границей этот фильтр быть не может: у PR из форка `headRefName` — имя ветки
+ * В ФОРКЕ, то есть строка, которую целиком выбирает посторонний, и ветка
+ * `agent/whatever` попадает в список ровно так же, как своя. Запрос здесь тоже
+ * не берёт `isCrossRepository`. Граница — в другом месте и в двух: merge
+ * закрыт для `control-loop` ранним возвратом, а личность автора с того же
+ * круга проверяет `validatePrChecklist` (форк и незнакомый автор — `skipped`,
+ * без комментария). Цена прежней формулировки — не дыра, а ложное чувство
+ * периметра: читатель мерил риск этого фильтра как проверку происхождения PR.
+ *
+ * Итог печатается для внутреннего наблюдателя (раздел «Control loop»).
+ *
+ * Аудит 2026-09-11: здесь стояло «Every PR gets a validation comment». Это
+ * неправда в трёх ветках, и файл опровергает себя двадцатью строками ниже, в
+ * разборе `COMMENT_LOST`: «уже рассмотрен» выходит через `skipped` без
+ * комментария; `comment_failed`/`validation_failed` — это «проверка
+ * отработала, но до PR не доехала»; придержанный человеком PR тоже уходит
+ * `skipped`. Цена — мониторинг, построенный на «PR без комментария = цикл не
+ * работал»: токен, потерявший право писать, читается как «PR-ов не было».
  *
  * Fully hermetic: all GitHub access goes through an injectable {@link GhRunner},
  * so unit tests pass a fake runner and never touch the network or real PRs.
@@ -60,13 +82,38 @@ export interface ReviewModeResult {
    * строят результат вручную и про обрезку ничего не знают.
    */
   truncated?: boolean;
-  /** PR numbers reviewed, in list order. */
+  /**
+   * Номера PR, которые прогон ВЗЯЛ в работу, в порядке выдачи `gh pr list`, —
+   * то есть поимённая версия `scanned`, а не «разобранные». Сколько из них
+   * дошло до комментария, знают только `results` и {@link countReviewOutcomes};
+   * путать эти два списка — ровно та ошибка, из-за которой заведено поле
+   * `scanned` (абзац выше).
+   */
   pr_numbers: number[];
-  /** Per-PR review outcome (merged / commented / failed). */
+  /**
+   * Исход разбора каждого PR.
+   *
+   * Встречаются пять: `commented`, `skipped` (уже рассмотрен, либо придержан
+   * человеком), `comment_failed`, `validation_failed` — и `merged`, которого
+   * ЭТОТ режим не достигает никогда: merge закрыт для полномочия
+   * `control-loop` (lib/dispatch/github.ts).
+   *
+   * Аудит 2026-09-11: было «merged / commented / failed». Из трёх названных
+   * реально встречается одно, а `skipped` — самый частый исход спокойного
+   * прогона — не назван вовсе. Разбор, написанный по этой строке (`merged →
+   * … иначе провал`), схлопывает «нечего делать» в «сломалось» — ровно та
+   * ошибка, которую двадцатью строками ниже уже разбирал `COMMENT_LOST`.
+   */
   results: ReviewedPr[];
   /**
-   * Сколько PR разбор уронил (`outcome.ok === false`). Необязательное — как и
-   * `truncated`, старые вызовы `formatReviewSummary` строят результат вручную.
+   * Сколько PR прогон считает проваленными. Не то же, что `outcome.ok === false`:
+   * {@link countReviewOutcomes} добавляет сюда и потерянный комментарий
+   * (`COMMENT_LOST` — `comment_failed`, `validation_failed`), потому что разбор
+   * без внешнего следа неотличим от несделанного. Обоснование — у самого
+   * `COMMENT_LOST` ниже.
+   *
+   * Необязательное — как и `truncated`, старые вызовы `formatReviewSummary`
+   * строят результат вручную.
    */
   failed?: number;
 }
@@ -81,11 +128,11 @@ export interface ReviewModeResult {
  * Провал — это `ok === false` И потерянный комментарий. Аудит 2026-08-28: ветка
  * `else reviewed++` сгребала все успешные исходы, а среди них есть
  * `comment_failed` и `validation_failed` — «проверка отработала, но до PR не
- * доехала» (см. lib/dispatch/github.ts:452, 475, 494). Комментарий и есть
- * единственный внешний след разбора: нет его — нет и маркера, значит следующий
- * прогон разберёт тот же PR заново. Хуже того, fail-closed в agent.ts:70
- * считает по этой же разбивке: токен, потерявший право писать, давал
- * «Commented: 5 · failed: 0» и exit 0.
+ * доехала» (три ветки `posted ? "commented" : …` в lib/dispatch/github.ts).
+ * Комментарий и есть единственный внешний след разбора: нет его — нет и
+ * маркера, значит следующий прогон разберёт тот же PR заново. Хуже того, по
+ * этой же разбивке считает fail-closed в agent.ts — строка `nothingWorked`:
+ * токен, потерявший право писать, давал «Commented: 5 · failed: 0» и exit 0.
  */
 const COMMENT_LOST: ReadonlySet<string> = new Set(["comment_failed", "validation_failed"]);
 
@@ -174,9 +221,10 @@ export async function listRecentOpenPrs(
   const cutoff = now() - windowMinutes * 60_000;
   const prNumbers = entries
     .filter((e) => typeof e.number === "number")
-    // The autonomous loop may only inspect agent-owned branches. Treat a
-    // missing branch name as unsafe instead of allowing incomplete `gh` data
-    // to reach the auto-merge handler.
+    // Сужение до своих веток: имя ветки выбирает автор PR, поэтому это
+    // фильтр «на что цикл тратит прогон», а не проверка происхождения —
+    // происхождение проверяет validatePrChecklist (см. шапку). Пропавшее имя
+    // ветки считаем неподходящим: неполные данные gh не повод разбирать PR.
     .filter((e) => typeof e.headRefName === "string" && e.headRefName.startsWith("agent/"))
     .filter((e) => {
       const stamp = e.updatedAt ?? e.createdAt;
@@ -276,7 +324,15 @@ export async function runReviewMode(deps: ReviewModeDeps = {}): Promise<ReviewMo
   };
 }
 
-/** Renders a review pass as a Markdown block for the STATUS.md "Control loop" section. */
+/**
+ * Проход ревью как Markdown-блок.
+ *
+ * Аудит 2026-09-11, круг 51: здесь было сказано «for the STATUS.md "Control
+ * loop" section». Файла STATUS.md в дереве нет; единственный вызывающий —
+ * `agent.ts` в режиме review — печатает результат в stdout, откуда его
+ * забирает внешний сборщик статуса. Обещание «вот куда это попадёт» было
+ * ложным адресом: пошедший править вёрстку искал бы несуществующий файл.
+ */
 export function formatReviewSummary(result: ReviewModeResult, isoTimestamp: string): string {
   const lines: string[] = [];
   lines.push(`## Control loop — ${isoTimestamp}`);

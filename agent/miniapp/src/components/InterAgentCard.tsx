@@ -1,14 +1,7 @@
 import { useState } from "react";
 import { ellipsize } from "../lib/text";
 
-/**
- * Renders a structured summary for inter-agent mutating approval actions
- * (T-706b): GRANT_PERMISSION, UPDATE_AGENT_PROMPT, CHANGE_AGENT_STATUS.
- *
- * Pure presentational — caller decides whether to invoke based on action_type.
- * Falls back to `null` for unknown shapes so the parent can render a raw
- * JSON dump alongside.
- */
+/** Типы заявок, для которых карточка умеет строить сводку (T-706b). */
 export const INTER_AGENT_ACTION_TYPES = [
   "GRANT_PERMISSION",
   "UPDATE_AGENT_PROMPT",
@@ -155,6 +148,18 @@ function PromptPreview({ body }: { body: string }) {
   );
 }
 
+/**
+ * Человекочитаемая сводка по заявке на действие агента над агентом (T-706b):
+ * GRANT_PERMISSION, UPDATE_AGENT_PROMPT, CHANGE_AGENT_STATUS.
+ *
+ * Чистая разметка: решает вызывать или нет сама страница, по
+ * `isInterAgentAction(action_type)`. Три исхода, а не два. Payload вырезан
+ * или отсутствует — честная пустая карточка со словами, каких данных нет (см.
+ * `interAgentPayloadState`); payload есть и тип узнан — сводка; тип узнан, но
+ * ни одна ветка его не разобрала — `null`, и на экране остаётся только
+ * сырой JSON, который Approvals.tsx и так печатает рядом в свёрнутом
+ * `<details>` — он там всегда, а не «вместо» карточки.
+ */
 export function InterAgentCard({
   actionType,
   payload,

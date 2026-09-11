@@ -3,7 +3,10 @@
  *
  * `authOr401` verifies the Telegram initData taken ONLY from the
  * X-Telegram-Init-Data header, and checks the allow-list. Returns either a
- * typed MiniAppUser or a ready-to-send 401/403 Response.
+ * typed MiniAppUser or a ready-to-send 401/403/503 Response. The 503 is the
+ * fail-closed branch for a mutation called without a replay store: no live
+ * caller can reach it today (miniapp-server always passes one), and it exists
+ * so that a future caller cannot accidentally get an unprotected mutation.
  *
  * Audit 2026-09-11: this header advertised an `initData` query parameter "for
  * SSE" — a channel that no longer exists here and is contradicted twenty lines
@@ -41,7 +44,7 @@ export type AuthResult =
  * ключ ко всем /api/* в query-строке, которую пишет access-лог nginx. Теперь у
  * потока свой вход: одноразовый билет на 30 секунд (lib/sse-ticket.ts),
  * который выдаёт POST /api/sse-ticket — уже по заголовку. Параметра
- * `acceptQueryParam` больше нет специально: пока он существует, его снова
+ * acceptQueryParam больше нет специально: пока он существует, его снова
  * кто-нибудь включит.
  */
 export function authOr401(

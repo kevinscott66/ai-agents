@@ -14,7 +14,11 @@
  *  - approval-gated actions are skipped (those belong in the approvals queue).
  *  - rate-limited actions are skipped (anthropic-client retries those itself).
  *  - aieng response must be valid JSON; on parse failure → task = failed.
- *  - aieng call capped at max_tokens = 1024.
+ *  - the deprecated compat seam (`deps.callAnthropicImpl`) caps the call at
+ *    max_tokens = 1024. The production path does NOT: it goes through
+ *    `runTextViaAgentSdk`, which passes no token cap at all — the only bound
+ *    there is `maxTurns: 1` plus SELF_DIAG_LLM_TIMEOUT_MS. Sizing cost or
+ *    truncation of aieng output off «1024» is wrong by construction.
  */
 import { getErrorMessage } from "./errors.ts";
 import Anthropic from "@anthropic-ai/sdk";
@@ -24,6 +28,7 @@ import {
   createTask,
   failTask,
   updateTaskStatus,
+  DIAG_ASSIGNEE,
   type Task,
 } from "./tasks.ts";
 import { dispatchAndAudit } from "./action-dispatch.ts";
@@ -38,6 +43,7 @@ import {
   payloadForcesApproval,
   type ActionType,
   ACTION_TYPES,
+  DISPATCH_ONLY_ACTIONS,
 } from "./permissions.ts";
 import { callAnthropic } from "./anthropic-client.ts";
 import type { DispatchCtx } from "./action-dispatch.ts";
@@ -54,8 +60,10 @@ import { log, scrubbedHead } from "./log.ts";
  * subprocess останавливал весь self-heal бессрочно и без единой строки в лог:
  * следующий тик выходил по `if (running) return`.
  *
- * Пять минут — с запасом: запрос одношаговый (`maxTurns: 1`,
- * `max_tokens: 1024`), нормальный ответ приходит за секунды.
+ * Пять минут — с запасом: запрос одношаговый (`maxTurns: 1`), нормальный
+ * ответ приходит за секунды. Именно с запасом, а не впритык: потолка на длину
+ * ответа у продовой ветки нет — `max_tokens: 1024` стоит только в compat-сеаме
+ * `deps.callAnthropicImpl`, и этот дедлайн — единственная граница сверху.
  */
 export const SELF_DIAG_LLM_TIMEOUT_MS = 5 * 60_000;
 
@@ -100,6 +108,18 @@ const ACTION_TYPE_SET = new Set<string>(ACTION_TYPES);
  * списка есть, чтобы следующему было куда лечь: `_userId` дошёл сюда именно
  * потому, что закрывали его в одном месте (инструментальный путь), а входов в
  * диспатч два.
+ *
+ * Аудит 2026-09-11: приглашение «следующему есть куда лечь» верно ТОЛЬКО для
+ * имени с `_`-префиксом. Единственный потребитель списка ходит по результату
+ * `contextFieldsOf`, а тот оставляет исключительно `_`-ключи: поле без
+ * префикса дало бы `field in modelContext === false` (предупреждения не
+ * будет никогда) и `delete` по отсутствующему ключу (no-op). Молчаливый
+ * контракт стоило назвать вслух, иначе «закрыл дыру одной строкой» — это
+ * строка, которая ничего не делает.
+ *
+ * Поле полномочий БЕЗ префикса кладётся в `TRUSTED_ONLY_PAYLOAD_FIELDS` —
+ * там уже лежат `createdBy` и `inputPayload`, и режет их
+ * `stripTrustedOnlyFields`.
  */
 export const MODEL_FORBIDDEN_PAYLOAD_FIELDS = ["_userId"] as const;
 
@@ -147,16 +167,24 @@ export interface AiengFixResponse {
 /**
  * Поля, которые на санкционированном пути ставит доверенный код, а не модель.
  *
- * Аудит 2026-08-14: ретрай — единственная точка диспатча, минующая
- * `buildPayload`. Тулзовый путь собирает payload из ctx (`tools-schema.ts` →
+ * Аудит 2026-08-14: ретрай — единственная точка диспатча, где payload пишет
+ * МОДЕЛЬ. Тулзовый путь собирает его из ctx (`tools-schema.ts` →
  * `buildPayload`), путь апрувов переигрывает уже собранный. Здесь же в
  * `dispatchAndAudit` уходит объект, который целиком написала модель, а её
  * промпт содержит текст упавшего действия дословно. Три предыдущих аудита
  * закрыли гейт, личность исполнителя и лимиты — форму payload не закрыл никто.
  *
+ * Круг 42: до этой правки ретрай назывался тут единственным обходом
+ * `buildPayload` — а обходит сборщик и POST /api/mac/stop (miniapp-server.ts),
+ * который собирает `{ _userId }` руками. Порядок слов не случаен: сторож в
+ * tests/audit-2026-09-11-server-executes-after-all запрещает прежнюю формулу
+ * целиком и цитату от утверждения не отличает. Опасен, однако, не обход
+ * сборщика, а автор объекта: там тип действия и payload зафиксированы в коде,
+ * здесь их называет модель. Счёт был неверен, вывод — нет.
+ *
  * Что именно ломалось:
- *  - `createdBy` — `dispatch/tasks.ts:110` читает `payload.createdBy ??
- *    ctx.agentKey`, а `buildPayload` для CREATE_TASK жёстко ставит
+ *  - `createdBy` — `handleCreateTask` в dispatch/tasks.ts читает
+ *    `payload.createdBy ?? ctx.agentKey`, а `buildPayload` для CREATE_TASK ставит
  *    `createdBy: ctx.agentKey` и модели этого поля не отдаёт. Значит здесь
  *    модель назначала автора задачи. Дальше — отмывание полномочий: поллер
  *    берёт авторитет из `task.created_by` (см. gateFor ниже), и задача,
@@ -215,6 +243,11 @@ export function parseAiengResponse(text: string): AiengFixResponse | null {
     const r = obj as AiengFixResponse;
     if (r.giveup === true) return { giveup: true, reason: r.reason };
     if (!r.action || !ACTION_TYPE_SET.has(String(r.action))) return null;
+    // Аудит 2026-09-11: ретрай вправе называть только то, что модель могла
+    // позвать тулой сама. Иначе отчёт о починке — обход отсутствия тулы:
+    // dispatch-only действие уезжало в динамический dispatchAndAudit ниже.
+    // Подробности и проверки — tests/audit-2026-09-11-selfdiag-dispatch-only.test.ts.
+    if (DISPATCH_ONLY_ACTIONS[String(r.action)] !== undefined) return null;
     if (!r.payload || typeof r.payload !== "object") return null;
     return { action: r.action, payload: r.payload, reason: r.reason };
   } catch {
@@ -297,7 +330,7 @@ export interface SelfDiagPollerHandle {
  * Потолок, после которого diag-задача в `running` считается брошенной.
  *
  * Аудит 2026-08-21. `processDiagTask` переводит задачу в `running` ДО вызова
- * aieng (:404), а `listPendingDiagTasks` выбирает строго `status='pending'`.
+ * aieng, а `listPendingDiagTasks` выбирает строго `status='pending'`.
  * Пока процесс жив, дыры нет: тик сериализован флагом `running`, и каждый
  * выход из `processDiagTask` пишет терминальный статус. Но kill процесса или
  * рестарт systemd ровно в этом окне оставляет задачу в `running` НАВСЕГДА:
@@ -307,8 +340,8 @@ export interface SelfDiagPollerHandle {
  * таймауту» вместо «прервана рестартом». Замер до фикса: два тика подряд по
  * задаче в `running` — ноль вызовов aieng, статус не меняется.
  *
- * Тот же класс, что и мост статусов в tasks.ts:400-415, но там окно
- * схлопывается транзакцией, а здесь между `running` и терминалом стоит вызов
+ * Тот же класс, что и мост статусов (`forceTerminalStatus` в tasks.ts), но
+ * там окно схлопывается транзакцией, а здесь между `running` и терминалом стоит вызов
  * модели — атомарным его не сделать. Значит нужен подбор осиротевших.
  *
  * 15 минут — с запасом от любого честного тика: сам вызов одношаговый, а
@@ -394,13 +427,13 @@ export function recoverStrandedDiagTasks(
   const rows = db
     .prepare(
       `SELECT id, input FROM tasks
-       WHERE assigned_to = 'aieng' AND status = 'running'
+       WHERE assigned_to = ? AND status = 'running'
          AND input LIKE '%"_diag":true%'
          AND updated_at < ?
        ORDER BY updated_at ASC
        LIMIT 20`,
     )
-    .all(cutoff) as Array<{ id: string; input: string | null }>;
+    .all(DIAG_ASSIGNEE, cutoff) as Array<{ id: string; input: string | null }>;
 
   const out: RecoverStrandedResult = { requeued: [], failed: [] };
   for (const row of rows) {
@@ -489,12 +522,12 @@ function listPendingDiagTasks(limit = 5): Task[] {
   const rows = db
     .prepare(
       `SELECT * FROM tasks
-       WHERE assigned_to = 'aieng' AND status = 'pending'
+       WHERE assigned_to = ? AND status = 'pending'
          AND input LIKE '%"_diag":true%'
        ORDER BY priority DESC, created_at ASC, rowid ASC
        LIMIT ?`,
     )
-    .all(limit) as Array<{
+    .all(DIAG_ASSIGNEE, limit) as Array<{
       id: string;
       parent_id: string | null;
       depth: number;
@@ -531,11 +564,16 @@ function safeParse(s: string): unknown {
  * Разделение payload'а на «что делать» и «от чьего имени и на какой глубине».
  *
  * Соглашение по всему проекту: ключ с `_`-префиксом — контекст, который
- * подставляет вызывающий, а не участник диалога. `_userId`, `_depth`,
- * `_delegation_chain`, `_parent_*`, `_rerouted`, `_retry_count`, `_fix_chain`,
- * `_diag*`. Ни одно из них не описывает задачу — все описывают полномочия и
- * границы. Модель не должна их касаться; см. развёрнутый разбор у места
- * применения в `processDiagTask`.
+ * подставляет вызывающий, а не участник диалога. `_userId`,
+ * `_delegation_path`, `_parent_task_id`, `_rerouted_from`, `_retry_count`,
+ * `_fix_chain`, `_diag`. Ни одно из них не описывает задачу — все описывают
+ * полномочия и границы. Модель не должна их касаться; см. развёрнутый разбор у
+ * места применения в `processDiagTask`.
+ *
+ * Разделение идёт по префиксу, а не по этому списку: список — иллюстрация
+ * соглашения, и код ниже не сверяется с ним ни одной строкой. Поэтому он
+ * молча протухал — до 2026-09-11 тут стояли _depth и _delegation_chain,
+ * удалённое и никогда не существовавшее соответственно.
  *
  * Пара функций, а не одна с флагом: на месте вызова видно оба слагаемых и то,
  * в каком порядке они накладываются.
@@ -591,7 +629,7 @@ export async function processDiagTask(
   // строка в permissions, а часто её нет вовсе. (2) Источник истины:
   // ALWAYS_APPROVE_ACTIONS живёт в КОДЕ гейта, а не в таблице, и миграция 038
   // сеет PUBLISH_TO_CHANNEL как requires_approval=0 — то есть проверка
-  // пропускала публикацию в канал, для которой апрув обязателен. (2) Слои:
+  // пропускала публикацию в канал, для которой апрув обязателен. (3) Слои:
   // disabled-агент, CALLER_RESTRICTED, allowed=false и autonomy=locked не
   // проверялись вообще, потому что dispatchAndAudit гейт не зовёт.
   //
@@ -716,13 +754,14 @@ Return JSON only.`;
   // модели: это метаданные доверия и защиты от циклов, которые штатный путь
   // подставляет из контекста сам — `_userId` (его и только его проверяет
   // whitelist MAC_USER_IDS, `dispatch/mac.ts`; подставляется в
-  // `tools-schema.ts` из `ctx.triggerUserId`), `_depth` и `_delegation_chain`
-  // (анти-луп T-705), `_parent_*`, `_rerouted`, `_diag*`.
+  // `tools-schema.ts` из `ctx.triggerUserId`), `_delegation_path` (анти-луп
+  // C28/C13), `_parent_task_id`, `_rerouted_from`, `_diag`.
   //
   // А здесь payload брался из ответа модели целиком. То есть модель НАЗНАЧАЛА
   // сама себе личность и глубину: упавший payload печатается ей же на 30 строк
   // выше вместе с `_userId` владельца, так что подставить валидный id — не
-  // угадывание, а копия; `_depth: 0` в ответе обнуляет счётчик анти-лупа.
+  // угадывание, а копия; пустой `_delegation_path` в ответе выдаёт делегата на
+  // четвёртом хопе за первого и размыкает анти-луп.
   //
   // Содержательную часть берём от модели, `_`-контекст — из упавшего payload:
   // он пришёл из реального действия и свой гейт уже проходил. Исключение —
@@ -969,8 +1008,12 @@ export function startSelfDiagPoller(
   }
 
   const handle = setInterval(() => {
-    // Не `void tick()`: у tick есть finally, но нет catch, а первый же вызов в
-    // нём — синхронное обращение к БД (listPendingDiagTasks). Заблокированная
+    // Не `void tick()`: у tick есть finally, но нет catch, а к БД он
+    // обращается синхронно и без своей защиты — выборка `listPendingDiagTasks`
+    // идёт голой. Позицию этого вызова в теле здесь НЕ называем: подбор
+    // осиротевших вставили выше него позже, и прежняя формулировка «первый же
+    // вызов» с тех пор описывала несуществующий порядок. У подбора свой catch,
+    // до внешнего `.catch` его ошибка не доходит вовсе. Заблокированная
     // или сломанная БД превращала тик в НЕОБРАБОТАННЫЙ reject, и он уходил в
     // глобальный process.on("unhandledRejection") из telegraf-patch — то есть
     // в лог падала строка `[unhandledRejection]` без модуля и без стека, по

@@ -14,6 +14,33 @@ import { isMacOnline } from "./mac-bridge.ts";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+/**
+ * Экранирование значения метки по формату экспозиции Prometheus.
+ *
+ * Аудит 2026-09-11: экранировались обратный слэш и кавычка, а перевод строки —
+ * нет, хотя формат требует все три. Цена именно перевода строки не та же, что
+ * у кавычки: `\n` внутри значения разрывает строку экспозиции пополам, и хвост
+ * после переноса Prometheus читает как ОТДЕЛЬНЫЙ ряд. То есть порча формата
+ * здесь выглядит как выдуманная метрика, а не как нечитаемая строка.
+ *
+ * Достижимого пути сегодня нет, и врать об этом не нужно: обе метки закрыты
+ * сверху — `version` приходит из package.json, `status` пишется через
+ * `ActionStatus` (шесть литералов, см. `ACTION_STATUSES` в lib/audit.ts).
+ * Но держится это на вызывающих, а не здесь: колонка `agent_actions.status` —
+ * просто `TEXT NOT NULL` без CHECK, а рендер берёт значение из `GROUP BY` по
+ * ней, то есть тем, что в колонке лежит. Инвариант формата должен принадлежать
+ * тому, кто формат печатает; тот же урок, что у `validateSlug` в lib/memory.ts.
+ *
+ * Порядок замен обязателен: слэш первым, иначе следующие правила экранируют
+ * слэши, которые сами же и поставили.
+ */
+function escapeLabelValue(v: string): string {
+  return v
+    .replace(/\\/g, "\\\\")
+    .replace(/\n/g, "\\n")
+    .replace(/"/g, '\\"');
+}
+
 function renderMetricLine(
   name: string,
   help: string,
@@ -25,7 +52,7 @@ function renderMetricLine(
     let labels = "";
     if (s.labels && Object.keys(s.labels).length > 0) {
       const parts = Object.entries(s.labels).map(
-        ([k, v]) => `${k}="${String(v).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`,
+        ([k, v]) => `${k}="${escapeLabelValue(String(v))}"`,
       );
       labels = `{${parts.join(",")}}`;
     }
@@ -33,6 +60,9 @@ function renderMetricLine(
   }
   return out;
 }
+
+/** Test seam: экранирование меток проверяется без похода в БД. */
+export const _escapeLabelValue = escapeLabelValue;
 
 /**
  * Версия сборки — читается с диска один раз на процесс.
@@ -147,10 +177,10 @@ export function renderMetrics(): string {
 
   // agent_actions_recent{status} GROUP BY status, last 24h
   //
-  // Аудит 2026-08-20: раньше называлось `agent_actions_total` с `# TYPE counter`.
+  // Аудит 2026-08-20: раньше называлось agent_actions_total с `# TYPE counter`.
   // Оба слова были неправдой. Запрос ограничен окном `created_at >= now - 24h`,
   // то есть значение ПАДАЕТ, как только старые действия выпадают из окна.
-  // Соседняя `messages_total` была не лучше: db-maint в 04:00 UTC переносит
+  // Соседняя messages_total была не лучше: db-maint в 04:00 UTC переносит
   // старые строки в `messages_archive` и удаляет из источника, так что счётчик
   // каждую ночь обнуляется вниз.
   //
@@ -162,7 +192,7 @@ export function renderMetrics(): string {
   // только тип, но и имя, иначе ложь просто переезжает в название.
   //
   // Переименование безопасно, но не по той причине, что стояла здесь раньше:
-  // `METRICS_TOKEN` в `.env.example:105` как раз есть — пустой, с пометкой
+  // `METRICS_TOKEN` в `.env.example` как раз есть — пустой, с пометкой
   // «пусто = эндпоинт закрыт». Обоснование в том, что переменная пустая, а не
   // в том, что её не существует: пока `METRICS_TOKEN` не задан, `/metrics`
   // fail-closed и скрейпить его некому, так что имени ряда никто ещё не

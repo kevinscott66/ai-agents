@@ -8,11 +8,14 @@
  *
  * Аудит 2026-09-11: шапка описывала «массив timestamps (ms)» — форму, которой
  * тут больше нет. На признаке резервации держится корректность возврата
- * слотов: `release` ищет запись по `reservationId`, а не по совпадению
- * времени, потому что обычный commit или соседняя резервация могут иметь тот
- * же `now`. Правка, сделанная по прежней шапке (сравнение элементов как чисел,
- * `arr.filter(t => t > cutoff)`, любой новый обходчик бакетов), молча снесла бы
- * это поле — и `release` начал бы вырезать из ведра чужие записи.
+ * слотов: `release`, который возвращает `reserveUserbotFloodSlots`, ищет
+ * запись по `reservationId`, а не по совпадению времени, потому что обычный
+ * commit или соседняя резервация могут иметь тот же `now`. Правка, сделанная
+ * по прежней шапке (сравнение элементов как чисел, `arr.filter(t => t >
+ * cutoff)`, любой новый обходчик бакетов), молча снесла бы это поле — и он
+ * начал бы вырезать из ведра чужие записи. (Не путать с
+ * `releaseUnusedChatReservation` ниже: у той резервации своего идентификатора
+ * нет, она снимается по `reservedAt` через `refundBucket`.)
  *
  * Не персистится, не делится между процессами. Этого достаточно: у нас один
  * процесс на VPS, рестарт = сброс. Цель — защита от багов и циклов внутри
@@ -120,8 +123,8 @@ let nextReservationId = 1;
  * Аудит 2026-08-08: карта росла бесконечно.
  *
  * Шапка модуля объясняет, почему лимиты не персистятся: «рестарт = сброс».
- * Но рестарта может не быть месяцами, а из пяти форматов ключа четыре
- * содержат chatId и/или userId: `chat:<chatId>:<action>`,
+ * Но рестарта может не быть месяцами, а четыре формата ключа содержат chatId
+ * и/или userId: `chat:<chatId>:<action>`,
  * `bot:<botId>:chat:<chatId>:<action>`, `userbot:<account>:chat:<chatId>` и
  * `ingest:chat:<chatId>:user:<userId>`. Число ключей задаёт не наш код, а тот,
  * кто пишет боту: любой может написать в личку или добавить бота в группу, и
@@ -130,6 +133,14 @@ let nextReservationId = 1;
  * подтверждалось — а ingest-лимит вызывается на КАЖДОМ входящем сообщении, то
  * есть до всякой проверки прав. Утечка в том же единственном процессе, где
  * живут 12 ботов, HTTP Mini App и SQLite.
+ *
+ * Аудит 2026-09-11, круг 51: абзац выше начинался словами «из пяти форматов
+ * ключа четыре». Форматов семь — к перечисленным четырём добавились
+ * `agent:<agentKey>:<action>`, `global:<action>` и `agent-all:<agentKey>`, —
+ * но все три ключуются нашими же сущностями и растут только вместе с числом
+ * ролей. То есть неверным было именно то число, от которого ничего не
+ * зависело; оставшееся «четыре» — про чужие ключи — верно и сегодня, и
+ * держится tests/audit-2026-09-11-lying-comments-tier3.test.ts.
  *
  * Тот же класс уже вылечен в lib/http-utils.ts, и рассуждение оттуда работает
  * здесь ещё сильнее: ведро, у которого САМЫЙ СВЕЖИЙ штамп старше окна, при
@@ -169,8 +180,16 @@ let lastEvict = 0;
  * старта до первого такого вызова — но именно на старте лимит и важен.
  *
  * Поэтому окно передаётся сюда параметром: всякий, кто вытесняет, обязан
- * назвать правило, по которому работает. `commit` вызывается только следом за
- * `checkBucket`, который окно уже учёл, — ему называть нечего.
+ * назвать правило, по которому работает.
+ *
+ * Аудит 2026-09-11: дальше стояло «`commit` вызывается только следом за
+ * `checkBucket`, ему называть нечего». Это неправда: повтор в
+ * `withUserbotFloodGuard` при `skipBucket` списывает попытку
+ * (`commitUserbotFloodLimit`) без всякого `checkBucket`. Порог всё равно не
+ * занижается — контракт `skipBucket` требует прошедшего
+ * `reserveUserbotFloodSlots`, а тот уже поднял `maxWindowMs` настоящим
+ * окном правила, и `maxWindowMs` не убывает. То есть `windowMs = 0` здесь
+ * значит «порога не касаюсь», а не «окна нет».
  */
 function evictExpiredBuckets(now: number, windowMs = 0): void {
   if (windowMs > maxWindowMs) maxWindowMs = windowMs;
@@ -469,6 +488,43 @@ export function refundChatRateLimits(
 }
 
 /**
+ * Отпустить чат-резервацию, которой так и не воспользовались.
+ *
+ * Отличается от `refundChatRateLimits` ровно одним: не смотрит в
+ * `NO_REFUND_ACTIONS`. Разница не в силе, а в поводе. `refundChatRateLimits`
+ * отвечает на вопрос «dispatch провалился — вернуть ли слот?», и для
+ * GENERATE_IMAGE ответ «нет»: к моменту провала запрос к провайдеру мог быть
+ * уже оплачен, размен подписан в докблоке `NO_REFUND_ACTIONS`. Здесь вопрос
+ * другой: dispatch'а не было вовсе — резервацию сняли и тут же поняли, что
+ * ход не состоится. Платить не за что, охранять нечего, и держать слот чата
+ * занятым значит наказывать весь чат за ход, которого не было.
+ *
+ * Аудит 2026-09-11: единственный вызывающий — ветка «агентский бакет отказал
+ * после того, как чат-слот занят» в gateOrDispatch. Там стоял
+ * `refundChatRateLimits`, то есть для GENERATE_IMAGE — no-op, при
+ * комментарии, обещающем возврат. Новых вызывающих заводить не следует: у
+ * «резервация не использована» узкий и проверяемый смысл, а «верни слот за
+ * неудачу» — это соседняя функция, и сливать их обратно нельзя.
+ */
+export function releaseUnusedChatReservation(
+  botId: number | string | undefined,
+  chatId: number | string | undefined,
+  actionType: string,
+  now: number = Date.now(),
+  reservedAt?: number,
+): void {
+  // Порядок аргументов повторяет refundChatRateLimits намеренно: перепутать
+  // вызовы местами легко, и перепутанный должен хотя бы считать то же самое.
+  const windowMs = perChatRule().windowMs;
+  const hasChat = !(chatId === undefined || chatId === null || chatId === "");
+  const hasBot = !(botId === undefined || botId === null || botId === "");
+  if (hasChat) refundBucket(`chat:${chatId}:${actionType}`, windowMs, now, reservedAt);
+  if (hasChat && hasBot) {
+    refundBucket(`bot:${botId}:chat:${chatId}:${actionType}`, windowMs, now, reservedAt);
+  }
+}
+
+/**
  * Снять отметку резервации из корзины.
  *
  * `reservedAt` — время, которым помечена наша резервация (его возвращают
@@ -606,7 +662,7 @@ function userbotFloodRule(): BucketRule {
  * ключ зависит от режима: одна сессия — один ключ на всех.
  *
  * Аудит 2026-09-11: «с роутером у роли своя сессия» — неправда для роли, у
- * которой сессия не объявлена. `getUserbotHandle` (userbot-router.ts:452)
+ * которой сессия не объявлена. `getUserbotHandle` (userbot-router.ts)
  * отдаёт персональный хэндл только зарегистрированным; незарегистрированная
  * роль штатно откатывается на тот же синглтон владельца («Агенты БЕЗ
  * объявленной сессии откатываются как и раньше»). Оператор, включивший роутер
@@ -655,8 +711,15 @@ function userbotBucketKey(
 }
 
 /**
- * T-402: Check per-(characterId, chatId) userbot flood limit.
- * Returns ok:true if characterId or chatId is missing (no context → pass).
+ * T-402: ведро анти-флуда userbot'а на пару (АККАУНТ, chatId).
+ *
+ * Аудит 2026-09-11: подпись говорила «per-(characterId, chatId)», а ключ
+ * собирает `userbotBucketKey` — через `userbotAccountKey`, то есть роли без
+ * объявленной сессии делят одно ведро. Ровно эта копия правила и разошлась с
+ * оригиналом: докблок `SHARED_USERBOT_ACCOUNT_KEY` объясняет, почему ключ
+ * следует за аккаунтом, а подпись этажом ниже обещала ролевую гранулярность.
+ *
+ * `ok: true` без characterId или chatId: нет контекста — нечего ограничивать.
  */
 export function checkUserbotFloodLimit(
   characterId: string | number | undefined,
@@ -675,7 +738,7 @@ export function checkUserbotFloodLimit(
   if (!r.ok) {
     return {
       ok: false,
-      reason: `userbot flood limit: per character/chat (${rule.max}/${Math.round(rule.windowMs / 1000)}s)`,
+      reason: `userbot flood limit: per account/chat (${rule.max}/${Math.round(rule.windowMs / 1000)}s)`,
       retryInMs: r.retryInMs,
     };
   }
@@ -768,8 +831,8 @@ function retryInMsForSlots(
  *
  * Что ходы бывают одновременными — не гипотеза: telegraf обрабатывает пачку
  * из getUpdates через `Promise.all`, а веер по ролям в message-handler идёт
- * без `await` (то же обоснование, что у `agent-sdk-runtime.ts:99` и ниже в
- * этом файле). Ключ ведра — `userbot:<account>:chat:<chatId>`, и при одной
+ * без `await` (то же обоснование, что у `usageWriter` в agent-sdk-runtime.ts
+ * и ниже в этом файле). Ключ ведра — `userbot:<account>:chat:<chatId>`, и при одной
  * общей сессии он совпадает у конкурирующих ходов любых ролей. Плюс
  * SET_REACTION/DELETE_MESSAGE ходят в то же ведро через `guardedUserbotCall`
  * и ёмкость не считают вовсе.

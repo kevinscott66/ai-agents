@@ -170,7 +170,7 @@ export interface RunWithToolsOpts {
    * ExecCtx, чтобы DELEGATE_TO_ROLE отдал его в respondAs, а не заводил свой.
    * См. handoff.ts:HANDOFF_MAX_INVOCATIONS.
    */
-  handoffBudget?: { n: number; max: number };
+  handoffBudget?: import("./handoff.ts").HandoffBudget;
   /** Stage A: triggering Telegram user_id (for MAC_RUN_CLAUDE whitelist). */
   triggerUserId?: string;
   /** T-410: request-id propagated from ingress through every tool call. */
@@ -210,10 +210,11 @@ export async function runWithTools(opts: RunWithToolsOpts): Promise<string> {
   //
   // Аудит 2026-08-13: дефолт стоял НИЖЕ, за ранним возвратом ветки SDK, то
   // есть на боевом пути (USE_AGENT_SDK=true) не выполнялся вовсе. undefined
-  // уезжал через tools-schema → action-dispatch в handoff.ts:248, а там такой
-  // же `?? {n:0,max:...}` — и КАЖДЫЙ DELEGATE_TO_ROLE заводил собственный
-  // счётчик с полным запасом. Общий потолок на ход исчезал: до восьми
-  // независимых поддеревьев по HANDOFF_MAX_INVOCATIONS вызовов вместо одного.
+  // уезжал через tools-schema → action-dispatch в `respondAs` (handoff.ts), а
+  // там такой же `?? {n:0,max:...}` — и КАЖДЫЙ DELEGATE_TO_ROLE заводил
+  // собственный счётчик с полным запасом. Общий потолок на ход исчезал: до
+  // восьми независимых поддеревьев по HANDOFF_MAX_INVOCATIONS вызовов вместо
+  // одного.
   const handoffBudget = opts.handoffBudget ?? {
     n: 0,
     max: HANDOFF_MAX_INVOCATIONS,
@@ -362,10 +363,18 @@ export async function runWithTools(opts: RunWithToolsOpts): Promise<string> {
    *
    * Аудит 2026-08-21: `lastText` перезаписывается на каждой итерации, в том
    * числе пустой строкой — а ход с tool_use сплошь и рядом идёт без текста.
-   * Трём читателям `lastText` это и нужно: на ветках «модель закончила»
-   * (stop_reason !== tool_use) и «tool_use без блоков» возвращать надо ровно
-   * то, что модель сказала СЕЙЧАС, иначе старая реплика выдаётся за финальный
-   * ответ.
+   * Ветке «модель закончила» (stop_reason !== tool_use) это и нужно:
+   * возвращать надо ровно то, что модель сказала СЕЙЧАС, иначе старая реплика
+   * выдаётся за финальный ответ. Пустой `lastText` там объясняет
+   * `explainEmptyStop`, а не подменяет прошлой репликой.
+   *
+   * Аудит 2026-09-11: здесь в том же ряду стояла ветка «tool_use без блоков»,
+   * и про неё это уже неправда. Правкой 2026-08-28 её перевели на
+   * `lastText || bestText || explainEmptyStop(...)` — то есть на ту самую
+   * «старую реплику», которую абзац объявлял недопустимой; размен осознанный
+   * (преамбула прошлой итерации лучше молчащего бота), но документация его не
+   * пережила. Читатель, правящий поведение пустого ответа, сверился бы с этим
+   * абзацем и был бы уверен, что реплика предыдущей итерации сюда не попадёт.
    *
    * А вот последнему читателю — заглушке после исчерпания MAX_TOOL_ITERS —
    * нужно обратное: там `lastText` заведомо пуст (цикл дошёл до предела,

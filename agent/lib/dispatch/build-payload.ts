@@ -346,10 +346,15 @@ export function buildPayload<T extends ActionType>(
       return { ok: true, payload: payload as PayloadFor<T> };
     }
     case "CREATE_POLL": {
-      const question = String(i.question ?? "").trim();
-      const options = Array.isArray(i.options)
-        ? (i.options as unknown[]).map((x) => String(x).trim())
-        : [];
+      const questionField = proseField(i.question, "question");
+      if (!questionField.ok) return questionField;
+      const question = questionField.value.trim();
+      const options: string[] = [];
+      for (const o of Array.isArray(i.options) ? (i.options as unknown[]) : []) {
+        const opt = proseField(o, "options[]");
+        if (!opt.ok) return opt;
+        options.push(opt.value.trim());
+      }
       const pollError = validatePoll(question, options);
       if (pollError) return { ok: false, error: pollError };
       const payload: PayloadFor<"CREATE_POLL"> = {
@@ -364,14 +369,20 @@ export function buildPayload<T extends ActionType>(
       return { ok: true, payload: payload as PayloadFor<T> };
     }
     case "CREATE_TASK": {
-      const title = String(i.title ?? "").trim();
+      const titleField = proseField(i.title, "title");
+      if (!titleField.ok) return titleField;
+      const descField = proseField(i.description, "description");
+      if (!descField.ok) return descField;
+      const title = titleField.value.trim();
       if (!title) return { ok: false, error: "title is required" };
       // Аудит 2026-08-27: было `typeof i.priority === "number" ? … : 0`. Схема
-      // объявляет `integer 0..100` (tools-schema.ts:69), а строка `"90"` —
+      // объявляет `integer 0..100` (запись `priority` в tools-schema.ts), а
+      // строка `"90"` —
       // ровно тот класс мусора, ради которого в этом же файле чинили
       // `SCHEDULE_POST.scheduledAt` и `CREATE_TEAM_CHANNEL.roles`. Молчаливая
       // подмена на 0 уводила срочную задачу в самый низ очереди роли
-      // (`ORDER BY priority DESC, created_at ASC`, tasks.ts:681) — при
+      // (сборка `ORDER BY priority DESC, created_at ASC` в
+      // `listTasksByAssignee`) — при
       // `ok:true` с готовым `taskId`. Верхней границы тоже не было:
       // `priority: 100000` намертво прибивал задачу к первой строке.
       if (
@@ -390,7 +401,7 @@ export function buildPayload<T extends ActionType>(
         chatId,
         createdBy: ctx.agentKey,
         title,
-        description: i.description == null ? null : String(i.description),
+        description: i.description == null ? null : descField.value,
         assignedTo: i.assignedTo == null ? null : String(i.assignedTo),
         priority: typeof i.priority === "number" ? (i.priority as number) : 0,
         parentId: i.parentTaskId == null ? null : String(i.parentTaskId),
@@ -416,20 +427,24 @@ export function buildPayload<T extends ActionType>(
       // отличает «не дали» от «дали пусто» ровно по `undefined` и на этом пути
       // не срабатывала ни разу. Соседнее `output` собрано правильно, второй
       // потребитель (miniapp-server) тоже — расхождение, а не решение.
+      const errField = proseField(i.error, "error");
+      if (!errField.ok) return errField;
       const payload: PayloadFor<"UPDATE_TASK_STATUS"> = {
         taskId,
         status,
         output: i.output,
-        error: i.error == null ? undefined : String(i.error),
+        error: i.error == null ? undefined : errField.value,
       };
       return { ok: true, payload: payload as PayloadFor<T> };
     }
     case "REQUEST_REVIEW": {
       const taskId = String(i.taskId ?? "");
       if (!taskId) return { ok: false, error: "taskId required" };
+      const commentField = proseField(i.comment, "comment");
+      if (!commentField.ok) return commentField;
       const payload: PayloadFor<"REQUEST_REVIEW"> = {
         taskId,
-        comment: i.comment == null ? undefined : String(i.comment),
+        comment: i.comment == null ? undefined : commentField.value,
       };
       return { ok: true, payload: payload as PayloadFor<T> };
     }
@@ -455,10 +470,12 @@ export function buildPayload<T extends ActionType>(
         if ("error" in r) return { ok: false, error: r.error };
         source = { base64: r.value };
       }
+      const capField = proseField(i.caption, "caption");
+      if (!capField.ok) return capField;
       const payload: PayloadFor<"SEND_PHOTO"> = {
         chatId,
         source,
-        caption: i.caption == null ? undefined : String(i.caption),
+        caption: i.caption == null ? undefined : capField.value,
         replyToMessageId:
           typeof i.replyToMessageId === "number"
             ? (i.replyToMessageId as number)
@@ -467,7 +484,9 @@ export function buildPayload<T extends ActionType>(
       return { ok: true, payload: payload as PayloadFor<T> };
     }
     case "SEND_DOCUMENT": {
-      const content = typeof i.content === "string" ? i.content : "";
+      const contentField = proseField(i.content, "content");
+      if (!contentField.ok) return contentField;
+      const content = contentField.value;
       const filename =
         typeof i.filename === "string" ? i.filename.trim() : "";
       if (!content) return { ok: false, error: "content is required" };
@@ -488,11 +507,13 @@ export function buildPayload<T extends ActionType>(
         .replace(/[/\\]/g, "_")
         .replace(/["\u0000-\u001f\u007f]/g, "_")
         .slice(0, 200);
+      const docCapField = proseField(i.caption, "caption");
+      if (!docCapField.ok) return docCapField;
       const payload: PayloadFor<"SEND_DOCUMENT"> = {
         chatId,
         content,
         filename: safeName,
-        caption: i.caption == null ? undefined : String(i.caption),
+        caption: i.caption == null ? undefined : docCapField.value,
         replyToMessageId:
           typeof i.replyToMessageId === "number"
             ? (i.replyToMessageId as number)
@@ -501,7 +522,9 @@ export function buildPayload<T extends ActionType>(
       return { ok: true, payload: payload as PayloadFor<T> };
     }
     case "CREATE_TEAM_CHANNEL": {
-      const title = typeof i.title === "string" ? i.title.trim() : "";
+      const titleField = proseField(i.title, "title");
+      if (!titleField.ok) return titleField;
+      const title = titleField.value.trim();
       if (!title) return { ok: false, error: "title is required" };
       // Аудит 2026-08-12: здесь стояло `.map(String).filter(Boolean)` — любая
       // строка проходила как роль. Дальше action-dispatch резолвит роль в
@@ -541,7 +564,9 @@ export function buildPayload<T extends ActionType>(
           error: `title: ${title.length} символов — лимит Telegram ${CHANNEL_TITLE_MAX}`,
         };
       }
-      const about = i.about == null ? "" : String(i.about);
+      const aboutField = proseField(i.about, "about");
+      if (!aboutField.ok) return aboutField;
+      const about = aboutField.value;
       if (about.length > CHANNEL_ABOUT_MAX) {
         return {
           ok: false,
@@ -558,8 +583,19 @@ export function buildPayload<T extends ActionType>(
     case "PUBLISH_TO_CHANNEL": {
       const channelId =
         typeof i.channelId === "number" ? (i.channelId as number) : Number(i.channelId);
-      const text = typeof i.text === "string" ? i.text : "";
       if (!Number.isFinite(channelId)) return { ok: false, error: "channelId required" };
+      // Аудит 2026-09-11: единственное прозаическое поле, уходящее в ПУБЛИЧНЫЙ
+      // канал, шло мимо `proseField` — стояло `typeof i.text === "string" ? …
+      // : ""`. Правка 2026-08-29 завела отказ на неверном типе для семи полей
+      // и это пропустила, а тут молчание дороже всего: при заданном фото
+      // пустой текст законен, поэтому `{"text": 12345}` не спотыкался и о
+      // проверку ниже. В канал уходил пост с картинкой и без подписи, а
+      // действие отчитывалось `ok:true` — расхождение «просили / получилось»
+      // до вызывающего не доезжало, чего прямо требует шапка
+      // `handlePublishToChannel` в dispatch/publish.ts.
+      const textField = proseField(i.text, "text");
+      if (!textField.ok) return textField;
+      const text = textField.value;
       if (!text.trim() && !i.photoUrl && !i.photoBase64 && !i.coverPrompt)
         return { ok: false, error: "text или фото/coverPrompt обязательны" };
       // Под лимит текст подгонит fitToLimit — здесь только абсурдная граница,
@@ -645,7 +681,9 @@ export function buildPayload<T extends ActionType>(
     case "WRITE_WIKI": {
       const scope = String(i.scope ?? "");
       const slug = String(i.slug ?? "").trim();
-      const title = String(i.title ?? "").trim();
+      const wikiTitleField = proseField(i.title, "title");
+      if (!wikiTitleField.ok) return wikiTitleField;
+      const title = wikiTitleField.value.trim();
       const contentField = proseField(i.content, "content");
       if (!contentField.ok) return contentField;
       const content = contentField.value;
@@ -665,7 +703,13 @@ export function buildPayload<T extends ActionType>(
       return { ok: true, payload: payload as PayloadFor<T> };
     }
     case "SPLIT_TASK": {
-      const title = String(i.title ?? "").trim();
+      const splitTitle = proseField(i.title, "title");
+      if (!splitTitle.ok) return splitTitle;
+      const splitDesc = proseField(i.description, "description");
+      if (!splitDesc.ok) return splitDesc;
+      const splitCtx = proseField(i.context, "context");
+      if (!splitCtx.ok) return splitCtx;
+      const title = splitTitle.value.trim();
       const rolesRaw = Array.isArray(i.roles) ? (i.roles as unknown[]).map((x) => String(x)) : [];
       if (!title) return { ok: false, error: "title is required" };
       if (rolesRaw.length === 0) return { ok: false, error: "roles must be non-empty" };
@@ -675,23 +719,27 @@ export function buildPayload<T extends ActionType>(
       }
       const payload: PayloadFor<"SPLIT_TASK"> = {
         title,
-        description: i.description == null ? undefined : String(i.description),
+        description: i.description == null ? undefined : splitDesc.value,
         roles: rolesRaw,
-        context: i.context == null ? undefined : String(i.context),
+        context: i.context == null ? undefined : splitCtx.value,
         chatId,
       };
       return { ok: true, payload: payload as PayloadFor<T> };
     }
     case "DELEGATE_TO_ROLE": {
       const role = String(i.role ?? "");
-      const task = String(i.task ?? "").trim();
+      const taskField = proseField(i.task, "task");
+      if (!taskField.ok) return taskField;
+      const delegCtx = proseField(i.context, "context");
+      if (!delegCtx.ok) return delegCtx;
+      const task = taskField.value.trim();
       if (!role || !(ROLE_KEYS as readonly string[]).includes(role))
         return { ok: false, error: `unknown role: ${role}` };
       if (!task) return { ok: false, error: "task is required" };
       const payload: PayloadFor<"DELEGATE_TO_ROLE"> = {
         role,
         task,
-        context: i.context == null ? undefined : String(i.context),
+        context: i.context == null ? undefined : delegCtx.value,
       };
       return { ok: true, payload: payload as PayloadFor<T> };
     }
@@ -702,6 +750,8 @@ export function buildPayload<T extends ActionType>(
       const systemPrompt = promptField.value;
       if (!name) return { ok: false, error: "name is required" };
       if (!systemPrompt.trim()) return { ok: false, error: "system_prompt is required" };
+      const hintField = proseField(i.task_hint, "task_hint");
+      if (!hintField.ok) return hintField;
       const provider = i.provider == null ? undefined : String(i.provider).trim().toLowerCase();
       if (provider !== undefined && !["internal", "claude", "codex"].includes(provider)) {
         return { ok: false, error: `unknown role provider: ${provider}` };
@@ -709,7 +759,7 @@ export function buildPayload<T extends ActionType>(
       const payload: PayloadFor<"SPAWN_ROLE"> = {
         name,
         system_prompt: systemPrompt,
-        task_hint: i.task_hint == null ? undefined : String(i.task_hint),
+        task_hint: i.task_hint == null ? undefined : hintField.value,
         provider: provider as PayloadFor<"SPAWN_ROLE">["provider"],
       };
       return { ok: true, payload: payload as PayloadFor<T> };
@@ -729,7 +779,8 @@ export function buildPayload<T extends ActionType>(
       const allowedKinds = new Set(["text", "service", "all"]);
       // Аудит 2026-08-20: фильтр молча выбрасывал нераспознанные значения, а
       // список целиком из неизвестных схлопывался в undefined — и ниже по
-      // стеку подставлялся дефолт ["service"] (dispatch/misc.ts:78). Модель,
+      // стеку подставлялся дефолт ["service"] (сборка `kinds` в
+      // dispatch/misc.ts). Модель,
       // запросившая kinds: ["user","agent"], получала служебные сообщения,
       // ok:true и ни одного намёка, что фильтр подменён; пустоту она читает
       // как «в чате ничего не было». Отказ дешевле молчаливой подмены.
@@ -784,6 +835,18 @@ export function buildPayload<T extends ActionType>(
 
       if (!channel) return { ok: false, error: "channel is required" };
       if (!content) return { ok: false, error: "content is required" };
+      // Аудит 2026-09-11: у отложенного поста границы длины не было вовсе,
+      // хотя публикуется он тем же PUBLISH_TO_CHANNEL и упрётся в тот же
+      // предел — только через неделю и уже после одобрения владельцем.
+      // Отказ здесь стоит одной строки в чате, отказ там — сорванной
+      // публикации, о которой никто не узнает. Предел тот же и по той же
+      // причине, см. PUBLISH_TEXT_MAX_RAW.
+      if (content.length > PUBLISH_TEXT_MAX_RAW) {
+        return {
+          ok: false,
+          error: `content: ${content.length} символов при пределе ${PUBLISH_TEXT_MAX_RAW} — в сообщение Telegram влезет ~4096 после разметки, сократите пост`,
+        };
+      }
       if (!scheduledAt || scheduledAt <= Date.now()) {
         return { ok: false, error: "scheduledAt must be a future timestamp" };
       }

@@ -1,8 +1,8 @@
 /**
  * sdk-web-guard.ts — SSRF-фильтр для WebFetch у роль-ботов.
  *
- * Аудит 2026-08-08. `WEB_TOOLS = ["WebSearch", "WebFetch"]` выдаётся всем 12
- * ролям без ограничений по хосту, а сервис на VPS слушает `127.0.0.1:8787`
+ * Аудит 2026-08-08. Пара WebSearch + WebFetch выдавалась всем 12 ролям без
+ * ограничений по хосту, а сервис на VPS слушает `127.0.0.1:8787`
  * (Mini App) — то есть агент может сходить во внутреннюю сеть от имени
  * процесса, который стоит за nginx, и вернуть ответ в чат или в пост канала.
  *
@@ -33,7 +33,7 @@
  * статический случай и rebinding между нашим резолвом и коннектом закрыты
  * оба. PreToolUse-хук остаётся defense-in-depth для вызовов мимо нашего
  * MCP-тула; в проде подключён `webFetchGuardHookAsync`
- * (`agent-sdk-runtime.ts:660`), который валидирует ВЕСЬ набор ответов DNS —
+ * (`agent-sdk-runtime.ts`), который валидирует ВЕСЬ набор ответов DNS —
  * тем же кодом, что и загрузка, чтобы решения хука и загрузки не расходились.
  * `blockedFetchReasonResolved`/`webFetchGuardHook` — более старый и более
  * слабый вариант (смотрит адреса, но не гоняет их через политику URL);
@@ -45,6 +45,7 @@ import * as http from "node:http";
 import * as https from "node:https";
 import { untrusted } from "./agent-prompts.ts";
 import {
+  isDomainPolicyReason,
   webFetchAllowlistConfigured,
   webFetchDomainPolicyReason,
 } from "./web-search.ts";
@@ -270,7 +271,7 @@ const defaultPublicAddressResolver: PublicAddressResolver = async (hostname) =>
  *
  * Аудит 2026-08-28: константа существовала, но применялась только в
  * `blockedFetchReasonResolved`, у которого нет ни одного вызова в проде —
- * PreToolUse-хук там `webFetchGuardHookAsync` (`agent-sdk-runtime.ts:660`), а
+ * PreToolUse-хук там `webFetchGuardHookAsync` (`agent-sdk-runtime.ts`), а
  * фактическая загрузка — `guardedWebFetch`. Оба ходили в голый `dnsLookup`,
  * у которого таймаута нет вообще: потолок держит только системный резолвер
  * (`resolv.conf`: timeout × attempts × число nameserver-ов, это десятки
@@ -883,7 +884,7 @@ function isInputOrResolverReason(reason: string): boolean {
 }
 
 /**
- * Причины из доменной политики оператора — тоже не про внутреннюю сеть.
+ * Текст отказа для модели: обвинение в инъекции — только по политике адресов.
  *
  * Аудит 2026-08-29: списки доменов довели до WebFetch 2026-08-28, а разбор
  * текста отказа правили в том же цикле — и не свели. Отказ «домен habr.ru вне
@@ -891,17 +892,15 @@ function isInputOrResolverReason(reason: string): boolean {
  * `isInputOrResolverReason` и уезжал в общий текст: «если этот адрес попросил
  * кто-то в переписке — это попытка вытащить внутренние данные». То есть за
  * обычную настройку оператора роль-бот получал обвинение в инъекции — ровно
- * тот ложный сигнал, ради устранения которого `denyReasonText` и написан.
+ * тот ложный сигнал, ради устранения которого эта функция и написана.
  *
- * Хвост строки, а не начало: причину пишет `webFetchDomainPolicyReason` про
- * имя, а `validatedTarget` — про адрес.
+ * Аудит 2026-09-11: тогда же здесь завели СВОЙ регэксп на два хвоста, а
+ * `webFetchDomainPolicyReason` отдаёт три строки — третья (сломанный конфиг)
+ * снова уезжала в обвинение. Правило вернулось к производителю строк:
+ * `isDomainPolicyReason` (web-search.ts).
  */
-const DOMAIN_POLICY_RE =
-  /(?:вне WEB_SEARCH_ALLOWED_DOMAINS|закрыт WEB_SEARCH_BLOCKED_DOMAINS)$/;
-
-/** Текст отказа для модели: обвинение в инъекции — только по политике адресов. */
 function denyReasonText(reason: string): string {
-  if (DOMAIN_POLICY_RE.test(reason)) {
+  if (isDomainPolicyReason(reason)) {
     return (
       `WebFetch не выполнен: ${reason}. ` +
       `Список доменов задан оператором команды — это настройка, а не признак атаки. ` +

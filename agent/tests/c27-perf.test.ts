@@ -64,10 +64,19 @@ describe("C27: DB pragmas + indexes", () => {
         .all() as { name: string }[]
     ).map((r) => r.name);
     expect(names).toContain("idx_tasks_status_created");
-    expect(names).toContain("idx_tasks_assigned_to");
     expect(names).toContain("idx_approvals_created");
-    expect(names).toContain("idx_agent_actions_agent_created");
     expect(names).toContain("idx_agent_actions_status");
+    // Аудит 2026-09-11: здесь стояли `idx_tasks_assigned_to` и
+    // `idx_agent_actions_agent_created`. Миграция 055 сняла оба как полные
+    // дубликаты: первый — строгий префикс `idx_tasks_assigned_status`,
+    // второй отличается от `idx_agent_actions_agent_ts` только словом DESC,
+    // которое SQLite игнорирует. Проверяем близнецов: горячий путь тот же,
+    // а имена теперь единственные.
+    expect(names).toContain("idx_tasks_assigned_status");
+    expect(names).toContain("idx_agent_actions_agent_ts");
+    // Что дубликаты не вернутся, следит отдельный инвариант «ни один индекс
+    // не префикс другого на той же таблице» —
+    // tests/audit-2026-09-11-calendar-index-and-dups.test.ts.
   });
 });
 

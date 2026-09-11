@@ -2,7 +2,7 @@
  * Аудит 2026-08-20: прогон тестов правил живое git-tracked дерево вики.
  *
  * `tests/_db-path.ts` пинил только MEMORY_DB_PATH. Каталог markdown-страниц
- * читался как `process.env.MEMORY_DIR ?? "memory"` (lib/memory.ts:35) на
+ * читался как `process.env.MEMORY_DIR ?? "memory"` (lib/memory.ts) на
  * загрузке модуля, то есть относительно cwd — а санкционированный гейт
  * запускается из `agent/`. Значит все 22 теста, трогающие вики, работали в
  * реальном `agent/memory`, который лежит в гите: `wiki-view.test.ts` каждый

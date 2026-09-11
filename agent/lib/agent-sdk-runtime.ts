@@ -108,12 +108,6 @@ export function assistantText(m: any): string {
 }
 
 /**
- * Учёт токенов для подписочного (Agent SDK) пути. result-сообщение SDK несёт
- * `usage` (input/output + cache). Без этого `agent_token_usage` пуст на проде
- * (USE_AGENT_SDK=true), из-за чего Mini App и дайджест WorkSpace показывали 0
- * затраченных токенов (raw-путь callAnthropic писал usage, а SDK-путь — нет).
- */
-/**
  * Писатель расхода «нарастающим итогом»: принимает суммы за прогон целиком и
  * дописывает в БД только то, чего там ещё нет.
  *
@@ -130,6 +124,11 @@ export function assistantText(m: any): string {
  * Аргументы — накопленные суммы, а не приращения: у SDK есть два источника
  * (сумма по assistant-сообщениям и накопительный usage у result), и они могут
  * разойтись. Кто больше — тот и записан; отрицательная разница игнорируется.
+ *
+ * Учёт токенов для подписочного (Agent SDK) пути. result-сообщение SDK несёт
+ * `usage` (input/output + cache). Без этого `agent_token_usage` пуст на проде
+ * (USE_AGENT_SDK=true), из-за чего Mini App и дайджест WorkSpace показывали 0
+ * затраченных токенов (raw-путь callAnthropic писал usage, а SDK-путь — нет).
  */
 export function usageWriter(
   agentKey: string,
@@ -309,13 +308,19 @@ export async function* singleUserMessage(content: any[]): AsyncGenerator<any> {
  * Аудит 2026-08-28: `enum` терялся. Raw-путь отдаёт модели `input_schema` как
  * есть, а SDK-путь пересобирает схему в zod — и всякий `enum: [...]` схлопывался
  * в `z.string()`. Модель на проде (USE_AGENT_SDK=true) не видела допустимых
- * значений ни у одного из пятнадцати мест: `role` у ASSIGN_TASK и
+ * значений ни в одном месте, где схема их перечисляет: `role` у ASSIGN_TASK и
  * DELEGATE_TO_ROLE (это ROLE_KEYS — угадать их нельзя, а промах роняет
  * делегирование), `status` у UPDATE_TASK_STATUS, `roles` у SPLIT_TASK и
  * CREATE_TEAM_CHANNEL, size/quality/background у GENERATE_IMAGE, coverStyle,
  * фильтр статусов у GET_LOGS и режим разрешений у MAC_RUN_CLAUDE. Хуже того,
  * произвольная строка доезжала до executeTool и падала уже там — ходом позже и
  * без подсказки, чем её заменить.
+ *
+ * Аудит 2026-09-11, круг 51: здесь стояло «ни у одного из пятнадцати мест».
+ * Мест с `enum:` в lib/tools-schema.ts четырнадцать — счёт разъехался на одну
+ * правку схемы, которую никто не заметил, и разъехался бы снова. Число убрано
+ * по правилу круга 20: считать обязан grep по схеме, а не проза. Замер держит
+ * tests/audit-2026-09-11-lying-comments-tier3.test.ts.
  */
 function propToZod(prop: any): z.ZodTypeAny {
   const t = prop?.type;
@@ -412,7 +417,6 @@ export function isFailureResult(out: string): boolean {
   }
 }
 
-/** MCP-сервер из наших TOOLS, отфильтрованных по роли + allowedTools. */
 /**
  * Сколько раз один и тот же инструмент может отработать за один прогон SDK.
  *
@@ -434,6 +438,7 @@ export function isFailureResult(out: string): boolean {
  */
 export const SDK_MAX_CALLS_PER_TOOL = MAX_CALLS_PER_TOOL_PER_RUN;
 
+/** MCP-сервер из наших TOOLS, отфильтрованных по роли + allowedTools. */
 export function buildTeamMcp(opts: RunWithToolsOpts, ctx: ExecCtx) {
   const stats: ToolRunStats = { executed: 0 };
   // Счётчик на прогон: buildTeamMcp зовётся один раз из runViaAgentSdk.
@@ -666,7 +671,6 @@ const DISALLOWED = [
  * путь к бинарю приходит из CLAUDE_BIN, модель задаётся явно.
  */
 const SETTING_SOURCES: never[] = [];
-/** Read-only веб-тулзы Claude Code, открытые агентам для ресёрча. */
 
 /**
  * Что кладём в `allowedTools` запроса к CLI.
@@ -683,8 +687,9 @@ const SETTING_SOURCES: never[] = [];
  * ровно один — явно переданный пустой `allowedTools`.
  *
  * Аудит 2026-08-21: тот же набор игнорировал `WEB_SEARCH_ENABLED`. Raw-путь
- * спрашивает разрешения (`tool-loop.ts:294` → `webSearchTool()`, null пока
- * переменная не "true"), а дефолт — выключено (`.env.example:123` пуст).
+ * спрашивает разрешения (в `tool-loop.ts` — вызов `webSearchTool()`, null
+ * пока переменная не "true"), а дефолт — выключено (строка
+ * `WEB_SEARCH_ENABLED=` в `.env.example` пуста).
  * Замер при незаданной переменной: raw даёт web_search — false, SDK-путь
  * даёт WebSearch,WebFetch. На проде работает именно SDK-путь, то есть
  * выключатель оператора не выключал ничего, а `WEB_SEARCH_ALLOWED_DOMAINS`
@@ -773,8 +778,11 @@ export const FORCE_FIRST_TOOL_BLOCK =
 /**
  * Defense-in-depth hook for native SDK WebFetch permission events.
  *
- * The executable WebFetch route is the in-process MCP tool below; native
- * WebFetch is denylisted so the CLI cannot bypass the pinned fetch boundary.
+ * The executable WebFetch route is the in-process MCP tool `guardedWebFetchTool`
+ * (built above in this file); native WebFetch is denylisted so the CLI cannot
+ * bypass the pinned fetch boundary. The word here used to be "below" — it was
+ * true when the hook sat higher up, and a direction that rots is worth naming
+ * the symbol for instead.
  */
 function sdkHooks() {
   // Аудит 2026-08-28: `WEB_SEARCH_MAX_USES` на raw-пути уезжает в `max_uses`
@@ -851,8 +859,13 @@ export async function runTextViaAgentSdk(opts: {
   // «aieng response not parseable as JSON: », обвиняя модель в сбое CLI.
   // Поэтому теперь: подтип запоминаем, текст ассистента копим отдельно и на
   // неуспешном подтипе либо отдаём накопленный текст, либо бросаем с именем
-  // подтипа. Оба вызывающих (compactor.ts:98 — try/catch с log.error,
-  // self-diag.ts:588 — try/catch с updateTaskStatus "failed") исключение ждут.
+  // подтипа. Круг 29: здесь стояло «оба вызывающих», и названы были двое —
+  // `compactor.ts` (try/catch с log.error) и `self-diag.ts` (try/catch с
+  // updateTaskStatus "failed"). Вызывающих ПЯТЬ: сверх этих двух — svg-fallback
+  // (ленивый import), orchestrator-bot и orchestrator-userbot. Исключение ждут
+  // все пятеро, но закрытый список из двух имён врал сразу двумя способами:
+  // счётом и составом — правящий поведение сверялся бы с ним и не увидел трёх
+  // путей, по которым отказ CLI уходит в чат.
   let subtype = "";
   let sawResult = false;
   let lastAssistant = "";

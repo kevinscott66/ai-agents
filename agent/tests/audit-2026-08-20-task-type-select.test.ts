@@ -3,7 +3,8 @@
  * который не делал ничего.
  *
  * Сервер кладёт тип в `tasks.input` — и только если поля «Ввод» нет вовсе
- * (lib/miniapp-server.ts:1043-1048):
+ * (ветка `POST /api/tasks` в lib/miniapp-server.ts, поле `inputPayload`
+ * у вызова `createTask`):
  *
  *   inputPayload: body.input !== undefined ? body.input
  *               : body.type ? { type: body.type } : undefined
@@ -13,8 +14,8 @@
  *   • «Ввод» пуст → в `input` ложится `{"type":"general"}`, которое не читает
  *     никто. `input` — не свалка меток: по нему живут self-diag
  *     (`input.type === "diagnostic"`, lib/diagnostic.ts:21) и учёт делегаций
- *     (`_delegation_*`, lib/tasks.ts:436), и он же режется редактором контента
- *     не-админам (TASK_CONTENT_FIELDS, miniapp-server.ts:347).
+ *     (`_delegation_*`, lib/tasks.ts), и он же режется редактором контента
+ *     не-админам (TASK_CONTENT_FIELDS в lib/miniapp-server.ts).
  *
  * Ни одного потребителя у general/feature/bug/research в репозитории нет:
  * сама константа приехала бутстрапом шаблона (7b2abea4) и осталась не

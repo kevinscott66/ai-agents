@@ -69,8 +69,23 @@ describe("build-payload различает «не дали» и «дали пу�
     expect(build({ taskId: "t", status: "failed", error: "упало" }).error).toBe("упало");
   });
 
-  test("нестроковая причина по-прежнему приводится к строке", () => {
-    expect(build({ taskId: "t", status: "failed", error: 42 }).error).toBe("42");
+  /**
+   * Круг 25 поменял это поведение сознательно. Пин 2026-08-28 фиксировал
+   * «остальное не трогали», а не решение: доктрина `proseField` (аудит
+   * 2026-08-29) требует от прозы, уходящей в долгое хранение, отказа на
+   * неверном типе, и схема объявляет `error` строкой — значит SDK-путь
+   * (`propToZod` → z.string()) такое уже отбивал, а сырой приводил к строке.
+   * `{"error": {"code": 500}}` ложился в колонку как `[object Object]`, и
+   * человек в карточке задачи читал ровно это вместо причины.
+   */
+  test("нестроковая причина — отказ, а не приведение к строке", () => {
+    const r = buildPayload(
+      "UPDATE_TASK_STATUS",
+      { taskId: "t", status: "failed", error: 42 },
+      { agentKey: "backend" },
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("error");
   });
 
   test("output собран так же и остался таким", () => {

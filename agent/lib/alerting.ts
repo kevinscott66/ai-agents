@@ -239,7 +239,7 @@ export function checkApprovalBacklog(opts: CheckOptions = {}): boolean {
 /**
  * Rate-limit storm: count rate_limited rows in agent_actions inside window.
  * The codebase records rate-limit rejections via `logAction(... status='rate_limited' ...)`
- * in agent_actions (see action-dispatch.ts:1037).
+ * in agent_actions (see `gateOrDispatch` in action-dispatch.ts).
  *
  * Аудит 2026-08-08: окно по умолчанию 5 минут, а вызывали проверку раз в час
  * (db-maint.ts, alertTimer). Проверка смотрит `created_at >= now - 5м`, то есть
@@ -291,7 +291,7 @@ export function checkRateLimitStorm(opts: CheckOptions = {}): boolean {
   return false;
 }
 
-// Аудит 2026-08-29: агрегатор `checkBacklogAlerts` удалён. Он существовал
+// Аудит 2026-08-29: агрегатор checkBacklogAlerts удалён. Он существовал
 // ради одного вызова из часового тика db-maint, и когда проверку шторма
 // вынесли на собственный таймер (2026-08-08), пережил эту правку молча —
 // прод продолжал звать обе проверки часовым тиком вопреки комментарию рядом.

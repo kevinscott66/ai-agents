@@ -1,9 +1,9 @@
 /**
  * Аудит 2026-08-12: оркестраторский автомерж не спрашивал ни про draft, ни про метки.
  *
- * Автомержа в этом репо два, и они обязаны решать одинаково — это записано в
- * шапке `.github/workflows/auto-merge.yml` («То же правило продублировано в
- * isRiskyPath()»). Воркфлоу отсекает PR по четырём сигналам человека:
+ * Автомержа в репозитории тогда было два, и они обязаны были решать одинаково
+ * — это стояло в шапке воркфлоу auto-merge.yml («То же правило продублировано
+ * в isRiskyPath()»). Воркфлоу отсекал PR по четырём сигналам человека:
  *
  *   if [ "$DRAFT" = "true" ]; then echo "  SKIP: draft"; continue; fi
  *   if echo ",$LABELS," | grep -qE ',(hold|risky|needs-human|do-not-merge),'; then
@@ -11,6 +11,11 @@
  *   fi
  *
  * Второй путь — `handleReviewAndMergePr`, его гоняет control-loop (`--mode review`).
+ * С публичного релиза 2026-09-01 он единственный: воркфлоу удалён, его `case`
+ * уцелел в .github/scripts/automerge-filter.sh как файл политики и не
+ * вызывается ничем (tests/audit-2026-09-11-automerge-single-path.test.ts).
+ * Поэтому находка ниже перестала быть расхождением двух мержеров и стала
+ * единственным ответом системы на метку `hold`.
  * Замер на PR, который человек пометил `hold` и оставил черновиком, а трогает он
  * один docs/plan.md:
  *
@@ -34,6 +39,7 @@ import { describe, test, expect } from "bun:test";
 import { handleReviewAndMergePr } from "../lib/dispatch/github.ts";
 import { runReviewMode } from "../orchestrator/review-mode.ts";
 import type { GhRunner, GhRunResult } from "../lib/dispatch/github.ts";
+import { TRUSTED_PR_IDENTITY } from "./helpers/pr-view-fixture.ts";
 
 const CTX = { agentKey: "orchestrator", chatId: 0 };
 
@@ -49,6 +55,7 @@ interface PrView {
 /** Чистый docs-only PR: зелёный, в белом списке путей, готов к автомержу. */
 function safePr(extra: PrView = {}): PrView {
   return {
+    ...TRUSTED_PR_IDENTITY,
     state: "OPEN",
     mergeable: "MERGEABLE",
     changedFiles: 1,

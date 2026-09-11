@@ -284,6 +284,38 @@ type ServerLike = { requestIP?: (r: Request) => { address: string } | null };
 const LOOPBACK_PEERS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 
 /**
+ * Ключ ведра для адреса, ПРИСЛАННОГО клиентом (заголовок владельца или XFF).
+ *
+ * Аудит 2026-08-20: пул SHARED_LOCAL_KEYS сделан для случая «клиентской
+ * идентичности нет вовсе» (ADNL через ton-прокси с петли), и владелец на VPS
+ * поднимает ему ёмкость до 600. Но `clientIpKey` возвращал значение заголовка
+ * как есть, а гейт доверия — «сокет пришёл с петли» — за nginx выполняется
+ * ВСЕГДА. Значит запрос с `CF-Connecting-IP: 127.0.0.1` попадал ровно в этот
+ * привилегированный пул: посторонний получал ёмкость, предназначенную
+ * .ton-трафику, и заодно мог выпить её у самого ton-прокси.
+ *
+ * Утверждение «я — петля», пришедшее в заголовке, бессмысленно по построению:
+ * через Cloudflare или внешний nginx адрес 127.0.0.1 прийти не может. Такие
+ * запросы сводим в один отдельный ключ обычной ёмкости — он не пересекается ни
+ * с общим локальным пулом, ни с чьим-то настоящим адресом.
+ *
+ * Это только вторая линия. Первая — vhost: `SITE_CLIENT_IP_HEADER` безопасен
+ * лишь когда nginx сам перезаписывает этот заголовок (`set_real_ip_from` для
+ * сетей CF + `real_ip_header`), иначе клиент подставляет любой адрес и крутит
+ * ключ на каждый запрос. Проверить конфиг из кода нельзя — см. предупреждение
+ * при старте.
+ *
+ * Сводит их сюда `claimedIpKey` ниже.
+ */
+export const CLAIMED_LOOPBACK_KEY = "ip:claimed-loopback";
+
+/** Ключ для присланного клиентом адреса: «я — петля» сводится в отдельное ведро. */
+function claimedIpKey(addr: string): string {
+  const key = `ip:${addr}`;
+  return SHARED_LOCAL_KEYS.has(key) ? CLAIMED_LOOPBACK_KEY : key;
+}
+
+/**
  * Ключ ведра лимитера — адрес клиента.
  *
  * Аудит 2026-08-12: раньше peer предпочитался безусловно. Сайт стоит за nginx
@@ -314,36 +346,22 @@ const LOOPBACK_PEERS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
  * За Cloudflare владелец ставит `cf-connecting-ip` (его CF перезаписывает сам,
  * подделать снаружи нельзя). Пустое значение сохраняет прежнее поведение —
  * последний элемент X-Forwarded-For.
+ *
+ * Аудит 2026-09-11: значение этого заголовка бралось с ЛЕВОГО конца
+ * (`split(",")[0]`) — с того самого, который в ветке XFF десятью строками ниже
+ * объявлен подконтрольным клиенту. Оправданием служила оговорка про «ровно
+ * один адрес», но значение переменной — строка в .env, а не тип. Владелец,
+ * выписавший явно то, что абзац выше называет прежним поведением
+ * (`SITE_CLIENT_IP_HEADER=x-forwarded-for`), разворачивал доверие на 180°:
+ * ключом лимитера становился адрес, который клиент выбирает сам и меняет на
+ * каждый запрос. Тот же разворот выходил и при дубле заголовка от клиента —
+ * `Headers.get` склеивает одноимённые заголовки через запятую.
+ *
+ * Теперь оба источника читаются одним `trustedHop` — с правого конца и с тем
+ * же SITE_TRUSTED_PROXY_HOPS. Для однозначного `cf-connecting-ip` концы
+ * совпадают, то есть рабочая конфигурация не меняется ничем. Держит
+ * audit-2026-09-11-client-ip-header-first-hop.test.ts.
  */
-/**
- * Ключ ведра для адреса, ПРИСЛАННОГО клиентом (заголовок владельца или XFF).
- *
- * Аудит 2026-08-20: пул SHARED_LOCAL_KEYS сделан для случая «клиентской
- * идентичности нет вовсе» (ADNL через ton-прокси с петли), и владелец на VPS
- * поднимает ему ёмкость до 600. Но `clientIpKey` возвращал значение заголовка
- * как есть, а гейт доверия — «сокет пришёл с петли» — за nginx выполняется
- * ВСЕГДА. Значит запрос с `CF-Connecting-IP: 127.0.0.1` попадал ровно в этот
- * привилегированный пул: посторонний получал ёмкость, предназначенную
- * .ton-трафику, и заодно мог выпить её у самого ton-прокси.
- *
- * Утверждение «я — петля», пришедшее в заголовке, бессмысленно по построению:
- * через Cloudflare или внешний nginx адрес 127.0.0.1 прийти не может. Такие
- * запросы сводим в один отдельный ключ обычной ёмкости — он не пересекается ни
- * с общим локальным пулом, ни с чьим-то настоящим адресом.
- *
- * Это только вторая линия. Первая — vhost: `SITE_CLIENT_IP_HEADER` безопасен
- * лишь когда nginx сам перезаписывает этот заголовок (`set_real_ip_from` для
- * сетей CF + `real_ip_header`), иначе клиент подставляет любой адрес и крутит
- * ключ на каждый запрос. Проверить конфиг из кода нельзя — см. предупреждение
- * при старте.
- */
-export const CLAIMED_LOOPBACK_KEY = "ip:claimed-loopback";
-
-function claimedIpKey(addr: string): string {
-  const key = `ip:${addr}`;
-  return SHARED_LOCAL_KEYS.has(key) ? CLAIMED_LOOPBACK_KEY : key;
-}
-
 export function clientIpKey(
   xff: string | null | undefined,
   peer: string | null,
@@ -351,22 +369,38 @@ export function clientIpKey(
   trustedHops: number = trustedProxyHops(),
 ): string {
   if (peer !== null && LOOPBACK_PEERS.has(peer)) {
-    // Заданный владельцем заголовок содержит ровно один адрес — берём как есть.
+    // Оба источника разбираются одинаково: см. trustedHop ниже. Раньше здесь
+    // стояло `direct.split(",")[0]` под оговоркой «заголовок владельца содержит
+    // ровно один адрес» — см. аудит 2026-09-11 в докблоке.
     const direct = trustedHeaderValue?.trim();
-    if (direct) return claimedIpKey(direct.split(",")[0]!.trim());
+    if (direct) {
+      const candidate = trustedHop(direct, trustedHops);
+      if (candidate) return claimedIpKey(candidate);
+    }
     if (xff) {
-      const hops = xff.split(",").map((s) => s.trim()).filter(Boolean);
-      // Отсчёт с конца: последний элемент дописал наш ближайший прокси, и он
-      // единственный, кому мы верим по умолчанию. Если между клиентом и нами
-      // стоит ещё один свой слой (CDN → nginx → сюда), в SITE_TRUSTED_PROXY_HOPS
-      // ставится 2, и берётся предпоследний. Всё, что левее доверенных хопов,
-      // прислал клиент — и подделать может любое значение.
-      const idx = hops.length - Math.max(1, trustedHops);
-      const candidate = hops[idx] ?? hops[0];
+      const candidate = trustedHop(xff, trustedHops);
       if (candidate) return claimedIpKey(candidate);
     }
   }
   return `ip:${peer ?? "unknown"}`;
+}
+
+/**
+ * Адрес из списка «через запятую», отсчитанный с ПРАВОГО конца.
+ *
+ * Последний элемент дописал наш ближайший прокси, и он единственный, кому мы
+ * верим по умолчанию. Если между клиентом и нами стоит ещё один свой слой
+ * (CDN → nginx → сюда), в SITE_TRUSTED_PROXY_HOPS ставится 2, и берётся
+ * предпоследний. Всё, что левее доверенных хопов, прислал клиент — и подделать
+ * может любое значение.
+ *
+ * Список короче, чем доверенных хопов, — это не «значит, всё своё»: берём
+ * самый левый, он в таком списке и есть ближайший к нам.
+ */
+function trustedHop(value: string, trustedHops: number): string | undefined {
+  const hops = value.split(",").map((s) => s.trim()).filter(Boolean);
+  const idx = hops.length - Math.max(1, trustedHops);
+  return hops[idx] ?? hops[0];
 }
 
 /**
@@ -477,26 +511,13 @@ function serveStatic(pathname: string, spaFallback = true): Response | null {
     return null;
   }
 
-  // Resolve & guard against path traversal.
-  const dist = webDist();
-  const rel = normalize(pathname).replace(/^(\.\.[/\\])+/, "");
-  let filePath = join(dist, rel);
-  if (!filePath.startsWith(dist + sep) && filePath !== dist) {
-    filePath = dist;
-  }
-
-  if (existsSync(filePath) && statSync(filePath).isFile()) {
-    return fileResponse(filePath);
-  }
+  const filePath = distFilePath(pathname);
+  if (filePath) return fileResponse(filePath);
 
   // Отсутствующий ассет (хешированный бандл, картинка, шрифт) обязан отдавать
   // 404: index.html вместо него маскирует протухший кэш после редеплоя под
   // MIME-ошибку в консоли.
-  const relNoSlash = rel.replace(/^[/\\]+/, "");
-  if (
-    relNoSlash.startsWith(`assets${sep}`) ||
-    MIME[extname(relNoSlash).toLowerCase()]
-  ) {
+  if (hasBuildFileShape(pathname)) {
     return null;
   }
 
@@ -513,19 +534,56 @@ function serveStatic(pathname: string, spaFallback = true): Response | null {
 }
 
 /**
- * Путь ведёт к файлу сборки, а не к оболочке.
+ * Путь ВЫГЛЯДИТ файлом сборки: каталог ассетов или известное расширение.
  *
- * Та же мерка, что у отказа выше: каталог ассетов или известное расширение.
- * Нужна отдельно, потому что по ней решается ещё и лимитирование: оболочка
- * стоит чтения `index.html`, ассет отдаётся ядром.
+ * Это мерка формы, а не наличия. Она решает, чем отвечать на промах: тегу
+ * `<img>` и тегу `<script>` оболочка не нужна — им нужен код ответа, поэтому
+ * такой промах отдаёт короткий 404, а не страницу.
  */
-function looksLikeAsset(pathname: string): boolean {
-  const rel = pathname.replace(/^[/\\]+/, "");
+function hasBuildFileShape(pathname: string): boolean {
+  const rel = normalize(pathname).replace(/^(\.\.[/\\])+/, "").replace(/^[/\\]+/, "");
   return (
     rel.startsWith(`assets${sep}`) ||
     rel.startsWith("assets/") ||
     MIME[extname(rel).toLowerCase()] !== undefined
   );
+}
+
+/**
+ * Путь к СУЩЕСТВУЮЩЕМУ файлу внутри каталога сборки, иначе null.
+ *
+ * Здесь же защита от выхода за каталог: нормализуем, срезаем ведущие `../` и
+ * требуем, чтобы результат лежал внутри `dist`.
+ */
+function distFilePath(pathname: string): string | null {
+  const dist = webDist();
+  if (!existsSync(dist)) return null;
+  const rel = normalize(pathname).replace(/^(\.\.[/\\])+/, "");
+  let filePath = join(dist, rel);
+  if (!filePath.startsWith(dist + sep) && filePath !== dist) {
+    filePath = dist;
+  }
+  if (!existsSync(filePath) || !statSync(filePath).isFile()) return null;
+  return filePath;
+}
+
+/**
+ * Запрос, который обслуживает ядро, а не мы: его ведро не считает.
+ *
+ * Аудит 2026-09-11 (круг 17): здесь стояла мерка ФОРМЫ — каталог `assets/`
+ * или известное расширение. Обоснование у освобождения ровно одно: страница
+ * тянет файлы сборки пачкой, и общий бюджет её бы задушил. Для файла,
+ * которого на диске нет, это обоснование не работает, а мерка его всё равно
+ * освобождала — достаточно было приписать к адресу `.png`. `/digest/x.png`
+ * подходил и под освобождение, и под `digestIdFromPath`, то есть ходил в
+ * SQLite бесплатно; `/1.png` бесплатно получал целую оболочку.
+ *
+ * Мерка теперь — наличие файла. Оболочку по прямому адресу `/index.html`
+ * исключаем отдельно: файл есть, но он стоит чтения и отдаётся с no-cache.
+ */
+function servedByKernel(pathname: string): boolean {
+  if (extname(pathname).toLowerCase() === ".html") return false;
+  return distFilePath(pathname) !== null;
 }
 
 /**
@@ -637,9 +695,11 @@ function metaDescription(s: string): string {
   // UTF-16 могла попасть внутрь суррогатной пары (эмодзи в сводке — не
   // экзотика), и одинокий суррогат уезжал сразу в три атрибута; в байтах
   // ответа он не кодируется, так что читатель видел U+FFFD на месте последней
-  // буквы. Третий и последний рез в файле, доведённый до общего контракта:
-  // `clipSlug` починили посимвольным Array.from, `clip` — этой же проверкой
-  // хвоста, XML-путь чистит через XML_FORBIDDEN.
+  // буквы. Третий рез в файле, доведённый до общего контракта: `clipSlug`
+  // починили посимвольным Array.from, `clip` — этой же проверкой хвоста,
+  // XML-путь чистит через XML_FORBIDDEN. Не последний: четвёртым оказался
+  // `q` в ветке `/api/digests?q=` — его этой волной пропустили ровно потому,
+  // что список тут был записан закрытым.
   return one.length > META_DESC_MAX ? `${clip(one, META_DESC_MAX - 1)}…` : one;
 }
 
@@ -827,10 +887,6 @@ function rfc822(iso: string): string {
 }
 
 /**
- * GET /rss.xml — RSS 2.0 feed of the ~20 latest digests. Returned as XML (not
- * under the HTML CSP), with nosniff. Built before the SPA static fallback.
- */
-/**
  * Кэш готовых XML-лент.
  *
  * `/rss.xml` и `/sitemap.xml` собираются из БД синхронно, а `Cache-Control`
@@ -903,6 +959,10 @@ function buildRssXml(): string {
   );
 }
 
+/**
+ * GET /rss.xml — RSS 2.0 feed of the ~20 latest digests. Returned as XML (not
+ * under the HTML CSP), with nosniff. Built before the SPA static fallback.
+ */
 function rssResponse(): Response {
   return new Response(cachedFeed("rss", buildRssXml), {
     headers: {
@@ -991,6 +1051,13 @@ function robotsResponse(): Response {
 }
 
 /**
+ * Потолок адресов на таблицу в `sitemap.xml`. Протокол разрешает 50 000 на
+ * файл; берём с запасом вдвое, чтобы статические маршруты и обе таблицы вместе
+ * гарантированно уложились.
+ */
+export const SITEMAP_MAX_PER_TABLE = 20_000;
+
+/**
  * GET /sitemap.xml — все статьи и активности, а не двадцать последних.
  *
  * RSS (/rss.xml) — это лента: он по определению обрезан, и статья, уехавшая за
@@ -1000,13 +1067,6 @@ function robotsResponse(): Response {
  * `<loc>` — percent-encoded id внутри xmlEscape: id приходит через ингест от
  * модели, и амперсанд в нём не должен ломать документ.
  */
-/**
- * Потолок адресов на таблицу в `sitemap.xml`. Протокол разрешает 50 000 на
- * файл; берём с запасом вдвое, чтобы статические маршруты и обе таблицы вместе
- * гарантированно уложились.
- */
-export const SITEMAP_MAX_PER_TABLE = 20_000;
-
 export function buildSitemapXml(limit: number = SITEMAP_MAX_PER_TABLE): string {
   const urls: { loc: string; lastmod?: string }[] = STATIC_ROUTES.map((p) => ({
     loc: `${SITE_ORIGIN}${p}`,
@@ -1103,15 +1163,6 @@ export const MAX_INGEST_BYTES = 1024 * 1024;
 export const MAX_REQUEST_BODY_BYTES = MAX_INGEST_BYTES * 8;
 
 /**
- * Сравнение токена за постоянное время. Токен нигде не логируется.
- *
- * Сравниваем SHA-256 обеих строк, а не сами строки: хэши всегда 32 байта,
- * поэтому `timingSafeEqual` не бросает на разной длине — и, главное, из
- * времени ответа больше не вытекает длина ожидаемого токена. Прежний код
- * возвращал false сразу на `provided.length !== expected.length`, то есть
- * подбор длины стоил одного запроса на вариант (аудит 2026-08-12).
- */
-/**
  * Секрет ингеста или null, если мост выключен.
  *
  * Аудит 2026-09-11 (круг 15): значение читалось в трёх местах тремя разными
@@ -1127,6 +1178,15 @@ function ingestSecret(): string | null {
   return v && v.trim().length > 0 ? v : null;
 }
 
+/**
+ * Сравнение токена за постоянное время. Токен нигде не логируется.
+ *
+ * Сравниваем SHA-256 обеих строк, а не сами строки: хэши всегда 32 байта,
+ * поэтому `timingSafeEqual` не бросает на разной длине — и, главное, из
+ * времени ответа больше не вытекает длина ожидаемого токена. Прежний код
+ * возвращал false сразу на `provided.length !== expected.length`, то есть
+ * подбор длины стоил одного запроса на вариант (аудит 2026-08-12).
+ */
 function tokenMatches(provided: string | null): boolean {
   const expected = ingestSecret();
   // Bridge is OFF unless the env secret is configured.
@@ -1183,7 +1243,6 @@ function contentSuffix(...parts: string[]): string {
     .slice(0, 10);
 }
 
-/** Build a url-safe slug from a title (Cyrillic-friendly) + date prefix. */
 /**
  * Рез основы слага по СИМВОЛАМ, а не по единицам UTF-16.
  *
@@ -1201,6 +1260,7 @@ function clipSlug(base: string, max: number): string {
   return Array.from(base).slice(0, max).join("");
 }
 
+/** Build a url-safe slug from a title (Cyrillic-friendly) + date prefix. */
 function slugFromTitle(title: string, dateIso: string): string {
   const datePart = dateIso.slice(0, 10); // YYYY-MM-DD
   const base = clipSlug(
@@ -2283,7 +2343,7 @@ export function makeFetchHandler() {
       // читать index.html на каждый запрос. Перечислять больше нечего:
       // лимитируем всё, что стоит оболочки, то есть всё, кроме файлов
       // сборки. Ассеты по-прежнему мимо ведра — страница тянет их пачкой.
-      !looksLikeAsset(url.pathname);
+      !servedByKernel(url.pathname);
     if (rateLimitedNonApi && !rateLimitOk(clientIp(req, server))) {
       return withSecurityHeaders(
         new Response("Too Many Requests", {
@@ -2369,6 +2429,12 @@ export function makeFetchHandler() {
     const known = isKnownSpaRoute(url.pathname);
     const res = serveStatic(url.pathname, known);
     if (res) return withSecurityHeaders(res);
+    // Промах по адресу формы файла сборки: отвечаем коротко. Оболочка тут не
+    // читатель, а тег — целая страница в ответ на отсутствующую картинку это
+    // килобайты с `no-cache` вместо девяти байт.
+    if (hasBuildFileShape(url.pathname)) {
+      return withSecurityHeaders(new Response("Not Found", { status: 404 }));
+    }
     const missing = known ? null : notFoundShellResponse();
     return withSecurityHeaders(missing ?? new Response("Not Found", { status: 404 }));
   };

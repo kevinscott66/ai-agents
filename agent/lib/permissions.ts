@@ -9,6 +9,7 @@
  *
  * evaluateGate() сводит оба в одно из трёх решений: allow | deny | approval.
  */
+import type { Database } from "bun:sqlite";
 import { db } from "./db.ts";
 import { log } from "./log.ts";
 import { logAction } from "./audit.ts";
@@ -65,17 +66,30 @@ export const DISPATCH_ONLY_ACTIONS: Readonly<Record<string, string>> = Object.fr
   // Аудит 2026-08-28: прежняя формулировка («ставится движком self-healing
   // автоматически») описывала не то, что происходит. Движок его не ставит —
   // на catch-пути он зовёт библиотечный createDiagnosticTask() напрямую, мимо
-  // диспетчера. Дальше — факт: до ветки диспетчера не доходит никто.
+  // диспетчера.
+  //
+  // Аудит 2026-09-11: и «до ветки диспетчера не доходит никто» было неправдой.
+  // Путь был: ход упал → aieng предлагает починку → parseAiengResponse брал
+  // любое имя из ACTION_TYPES → ретрай уезжал в динамический dispatchAndAudit.
+  // Теперь разбор отвергает ключи этого словаря (lib/self-diag.ts, рядом с
+  // проверкой ACTION_TYPE_SET), и формулировка снова описывает код.
   CREATE_DIAGNOSTIC_TASK:
     "тула нет, и диспатчить её некому: движок self-healing зовёт createDiagnosticTask() напрямую",
   SPAWN_ROLE: "локальная очередь роли только через approved dispatch; вызывающего нет",
 });
 
 /**
- * T-701/T-702/T-703: Actions that ALWAYS require approval — even when the calling
- * agent has `requires_approval=false` and the autonomy mode is `auto`.
+ * T-701/T-702/T-703: Actions that require approval even when the calling agent
+ * has `requires_approval=false` and the autonomy mode is `auto`.
  * Used for inter-agent mutations (perm/aieng changing other agents'
  * security state). Keeps a human-in-the-loop for every privilege change.
+ *
+ * Аудит 2026-09-11 (круг 29): было «ALWAYS require approval», и это слово
+ * неверно ровно для одного участника — `MAC_RUN_CLAUDE` выпускает owner opt-in
+ * (`MAC_AUTONOMOUS=true` плюс autonomy=auto, ветка `macAuto` в `evaluateGate`).
+ * Заглавное ALWAYS читается как инвариант и гасит вопрос «а есть ли обход?»
+ * именно там, где обход есть, — поэтому исключение названо здесь, а не только
+ * у самой ветки гейта. Для всех остальных действий набора обхода нет.
  */
 export const ALWAYS_APPROVE_ACTIONS: Set<ActionType> = new Set<ActionType>([
   "GRANT_PERMISSION",
@@ -89,10 +103,20 @@ export const ALWAYS_APPROVE_ACTIONS: Set<ActionType> = new Set<ActionType>([
   "SPAWN_ROLE",
   // SEC-audit 2026-06-10 (MED-2): MAC remote-exec is RCE on the owner's machine.
   // requires_approval in the permissions table is GRANT_PERMISSION-flippable, so
-  // under `auto` autonomy approval could be removed. Make approval MANDATORY —
-  // independent of autonomy mode and grant state.
-  // NB: MAC_STOP is deliberately NOT here — it is a safety kill-switch and must
-  // fire immediately (it stays orchestrator-only via CALLER_RESTRICTED).
+  // under `auto` autonomy approval could be removed. Approval здесь не зависит
+  // ни от autonomy, ни от строки грантов — единственный выход даёт сам владелец
+  // через MAC_AUTONOMOUS=true (см. `macAuto`), и bypass-режим не выпускает и он.
+  //
+  // NB: MAC_STOP не здесь. Аудит 2026-09-11 (круг 29): обоснованием стояло «it
+  // is a safety kill-switch and must fire immediately», а MAC_STOP лежит в
+  // SEMI_AUTO_RISKY — то есть в semi_auto, автономии ПО УМОЛЧАНИЮ, стоп-кран
+  // как раз уходит на апрув. Через гейт мгновенно он срабатывает только в
+  // `auto`; мимо гейта — из Mini App, где POST /api/mac/stop диспатчит MAC_STOP
+  // напрямую под `requireAdmin` (круг 42: «только в auto» читалось как «другого
+  // пути нет», а он есть, и человек там в контуре по построению). Здесь
+  // его нет по другой причине: ALWAYS_APPROVE поднимает пол во ВСЕХ режимах,
+  // включая `auto`, а для остановки чужого прогона это лишний этаж. Оркестратор
+  // остаётся единственным вызывающим через CALLER_RESTRICTED.
   "MAC_RUN_CLAUDE",
   // Аудит 2026-08-04: публикация в публичный канал шла БЕЗ человека в контуре.
   // Миграция 038 сеет PUBLISH_TO_CHANNEL как allowed=1, requires_approval=0, в
@@ -194,11 +218,6 @@ export interface Permission {
   requires_approval: boolean;
 }
 
-/**
- * Действия, которые в режиме semi_auto всегда требуют approval,
- * даже если permissions.requires_approval=false.
- * Пока — только исходящие сообщения (внешний side-effect).
- */
 /**
  * Действия, у которых `via_userbot: true` означает «отправлено от лица живого
  * владельца» и потому требует человека, какой бы ни была autonomy.
@@ -306,6 +325,22 @@ export function payloadForcesApproval(
   return null;
 }
 
+/**
+ * Действия, которые в режиме semi_auto всегда требуют approval,
+ * даже если permissions.requires_approval=false.
+ *
+ * Аудит 2026-09-11 (круг 29): здесь стояло «Пока — только исходящие сообщения
+ * (внешний side-effect)». Набор давно шире: к сообщениям добавились
+ * `MAC_RUN_CLAUDE` и `MAC_STOP` (команды на личной машине владельца) и
+ * `CREATE_TEAM_CHANNEL` (создание канала от его имени). Врала не мелочь:
+ * semi_auto — АВТОНОМИЯ ПО УМОЛЧАНИЮ, то есть это описание набора, который в
+ * большинстве чатов и решает, спросят человека или нет. Читатель, сверившийся с
+ * ним, выводит «мак-действия сюда не относятся» — и ошибается ровно наоборот.
+ *
+ * Держать список в прозе нечем: он растёт. Поэтому здесь назван КРИТЕРИЙ —
+ * действие с внешним или необратимым эффектом, который в semi_auto не должен
+ * уходить молча, — а состав читается по коду ниже.
+ */
 export const SEMI_AUTO_RISKY: Set<ActionType> = new Set<ActionType>([
   "SEND_MESSAGE",
   "PIN_MESSAGE",
@@ -380,9 +415,19 @@ export function grantIneffectiveReason(
     return `${action} не выдан роли '${agentKey}' (ROLE_EXPOSED_TOOLS, lib/permissions.ts)`;
   }
   if (mode === "approval" && LOW_FRICTION_ACTIONS.has(action)) {
+    // Аудит 2026-09-11: тут было сказано «гейт отвечает allow … во всех
+    // режимах автономии». Вывод (строку писать бессмысленно) верен, а
+    // объяснение врало: `locked` и forceApproval стоят в evaluateGate ВЫШЕ
+    // LOW_FRICTION_ACTIONS и отвечают deny и approval соответственно. Эту
+    // строку человек читает дословно в четырёх местах — /grant и /perms
+    // (commands.ts), POST /api/permissions (miniapp-server.ts) и валидация
+    // GRANT_PERMISSION (dispatch/permissions.ts), — поэтому она называет то,
+    // что действительно общее для всех режимов: requires_approval не читают
+    // нигде.
     return (
-      `${action} — low-friction (LOW_FRICTION_ACTIONS, lib/permissions.ts): гейт ` +
-      `отвечает allow ДО того, как прочтёт requires_approval, во всех режимах автономии`
+      `${action} — low-friction (LOW_FRICTION_ACTIONS, lib/permissions.ts): до ` +
+      `requires_approval гейт по нему не доходит ни в одном режиме автономии ` +
+      `(в locked — deny, при forceApproval — approval, в остальных — allow)`
     );
   }
   if (mode === "auto" && ALWAYS_APPROVE_ACTIONS.has(action)) {
@@ -489,7 +534,7 @@ export interface PermissionChangeAudit {
   /** Актор: `miniapp:<user_id>`, `tg:<user_id>`, agent_key инициатора. */
   changedBy: string;
   /** Чат, из которого пришло изменение. Для Mini App — id пользователя. */
-  chatId?: number | string | null;
+  chatId?: number | null;
   /** Канал изменения: `miniapp` | `command` | `dispatch`. */
   source: string;
   /** Причина, если её спрашивают у вызывающего. */
@@ -548,11 +593,14 @@ export function setPermission(
  * 2026-08-20 — до правки стоп-кран владельца молча не срабатывал:
  *
  *   1. владелец ставит `smm` режим `auto` — через Mini App
- *      (`miniapp-server.ts:1433`) или одобренный CHANGE_AGENT_STATUS
- *      (`dispatch/agent-status.ts:176`); оба пути боевые;
+ *      (`POST /api/autonomy` в miniapp-server.ts) или одобренный
+ *      CHANGE_AGENT_STATUS (`handleChangeAgentStatus` в
+ *      dispatch/agent-status.ts); оба пути боевые;
  *   2. позже в чате что-то идёт не так, владелец шлёт `/autonomy locked`;
- *   3. `cmdAutonomy` умеет писать ТОЛЬКО chat-scope (`commands.ts:348`) —
- *      писать или чистить agent-строку из чата нечем;
+ *   3. `cmdAutonomy` (commands.ts) умеет писать ТОЛЬКО chat-scope — писать или
+ *      чистить agent-строку ИЗ ЧАТА нечем. Снять её можно, но только с другого
+ *      входа: `POST /api/autonomy` с `inherit` зовёт `clearAutonomy("agent", …)`
+ *      (с 2026-08-21). Из Telegram такого пути по-прежнему нет;
  *   4. для `smm` первой находилась agent-строка, и всё с
  *      `requires_approval = 0` продолжало исполняться в «заблокированном»
  *      чате без человека.
@@ -683,9 +731,12 @@ export interface GateInput {
    */
   forceApproval?: boolean;
   /**
-   * Текст причины для карточки approval. Причин уже больше одной
-   * (owner-voice, bypass-режим MAC_RUN_CLAUDE), и подставлять единственную
-   * зашитую строку значит врать человеку о том, что он подтверждает.
+   * Текст причины для карточки approval. Причина не одна, и подставлять
+   * единственную зашитую строку значит врать человеку о том, что он
+   * подтверждает. Перечислять их здесь нечем: список растёт (круг 29 застал
+   * его на «owner-voice, bypass-режим MAC_RUN_CLAUDE» при уже трёх ветках —
+   * третьей пришла делегированная мак-команда). Состав читается в
+   * `payloadForcesApproval`, где он и заведён единой точкой.
    */
   forceApprovalReason?: string;
 }
@@ -711,9 +762,9 @@ interface AgentStateRow {
  * цепочки. Глотаем ровно «нет таблицы»; всё остальное считаем «выключен»:
  * недоступность реестра статусов — не повод действовать.
  */
-export function isAgentDisabled(agentKey: string): boolean {
+export function isAgentDisabled(agentKey: string, database: Database = db): boolean {
   try {
-    const row = db
+    const row = database
       .prepare(`SELECT status FROM agent_states WHERE agent_key = ?`)
       .get(agentKey) as AgentStateRow | undefined;
     return row?.status === "disabled";
@@ -738,18 +789,36 @@ export function isAgentDisabled(agentKey: string): boolean {
  * `disabled`, но обратимая из Mini App одним кликом (`/resume`), и она не
  * трогает `status`, которым управляет только perm через CHANGE_AGENT_STATUS.
  *
- * Ошибку чтения глотаем в «не на паузе»: сюда попадаем только после успешного
- * чтения той же строки в isAgentDisabled, так что реальный сбой БД уже привёл
- * бы к deny выше — молча глушить все 12 ролей на второй попытке незачем.
+ * Аудит 2026-09-11: ошибка чтения глоталась в «не на паузе» целиком, и
+ * оправдывал это порядок вызовов — «сюда попадаем только после успешного чтения
+ * той же строки в isAgentDisabled, так что реальный сбой БД уже привёл бы к deny
+ * выше». Оба сегодняшних вызывающих (`agentStopReason`, `evaluateGate`) и правда
+ * спрашивают disabled первым, так что дыра ненаблюдаема. Но это копия правила:
+ * безопасность ЭТОЙ функции вынесена в порядок вызова у ДРУГОЙ, а порядок не
+ * стережёт ни компилятор, ни тест. Третий вызывающий, которому нужна только
+ * пауза, получил бы fail-open — и поставленная владельцем пауза исчезала бы
+ * ровно в ту минуту, когда база недоступна.
+ *
+ * Разбираем ошибку так же, как сосед, и зависимость от порядка пропадает.
+ * «Нет таблицы» и «нет колонки» — не сбой, а схема старше фичи: паузы в ней не
+ * существует, честный ответ «не на паузе». Всё прочее (SQLITE_BUSY, залоченный
+ * файл, битая страница) — «на паузе»: недоступность реестра состояний не повод
+ * действовать. Двенадцать ролей при этом молчат не тихо — рядом ERROR в лог.
  */
-export function isAgentPaused(agentKey: string): boolean {
+export function isAgentPaused(agentKey: string, database: Database = db): boolean {
   try {
-    const row = db
+    const row = database
       .prepare(`SELECT paused FROM agent_states WHERE agent_key = ?`)
       .get(agentKey) as { paused: number | null } | undefined;
     return row?.paused === 1;
-  } catch {
-    return false;
+  } catch (e) {
+    const msg = String((e as Error)?.message ?? e);
+    if (/no such (table|column)/i.test(msg)) return false;
+    log.error("[permissions] agent_states недоступна — считаем агента на паузе", {
+      agentKey,
+      error: msg,
+    });
+    return true;
   }
 }
 
@@ -896,9 +965,10 @@ export function evaluateGate(input: GateInput): GateDecision {
   // агент продолжал писать. Тогда починили COMMENT_TASK, а GRANT_PERMISSION и
   // MAC_RUN_CLAUDE остались выше.
   //
-  // Второй половиной дефект доезжал до исполнения: commands.ts:183 при нажатии
-  // «Approve» перепроверяет гейт и берёт ТОЛЬКО deny-слои. Карточка, одобренная
-  // до блокировки, у обычного действия упиралась в `blocked at execution`, а у
+  // Второй половиной дефект доезжал до исполнения: `executeApproved`
+  // (commands.ts) при нажатии «Approve» перепроверяет гейт и берёт ТОЛЬКО
+  // deny-слои. Карточка, одобренная до блокировки, у обычного действия
+  // упиралась в `blocked at execution`, а у
   // ALWAYS_APPROVE — нет, потому что до `locked` не доходила.
   if (mode === "locked") {
     return { decision: "deny", reason: "autonomy locked" };

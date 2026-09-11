@@ -25,6 +25,7 @@ import {
   PR_LIST_LIMIT,
 } from "../orchestrator/review-mode.ts";
 import type { GhRunner, GhRunResult } from "../lib/dispatch/github.ts";
+import { TRUSTED_PR_IDENTITY } from "./helpers/pr-view-fixture.ts";
 
 const NOW = Date.parse("2026-08-20T12:00:00Z");
 const now = () => NOW;
@@ -111,7 +112,7 @@ describe("runReviewMode переносит признак обрезки", () =>
   it("truncated доезжает до результата", async () => {
     const { runGh } = fakeGh({
       "pr list": { stdout: prPage(PR_LIST_LIMIT) },
-      "pr view": { stdout: JSON.stringify({ state: "OPEN", mergeable: "MERGEABLE", files: [] }) },
+      "pr view": { stdout: JSON.stringify({ ...TRUSTED_PR_IDENTITY, state: "OPEN", mergeable: "MERGEABLE", files: [] }) },
     });
     const res = await runReviewMode({ runGh, now, windowMinutes: 90 });
     expect(res.truncated).toBe(true);

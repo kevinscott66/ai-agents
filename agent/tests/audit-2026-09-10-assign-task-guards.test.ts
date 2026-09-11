@@ -64,7 +64,11 @@ describe("задача самопочинки адресована aieng", () =>
     const raw = JSON.stringify(getTask(t.id)?.input);
     expect(raw).toContain('"_diag":true');
     const src = readFileSync(new URL("../lib/self-diag.ts", import.meta.url), "utf-8");
-    expect(src).toContain(`assigned_to = 'aieng'`);
+    // Круг 51: имя исполнителя уехало в DIAG_ASSIGNEE (lib/tasks.ts) и
+    // связывается параметром — литерала в SQL больше нет и быть не должно,
+    // см. tests/audit-2026-09-11-diag-assignee-single-source.test.ts.
+    expect(src).toContain(`assigned_to = ?`);
+    expect(src).toContain(`.all(DIAG_ASSIGNEE, `);
     expect(src).toContain(`"_diag":true`);
   });
 
@@ -126,9 +130,9 @@ describe("прочее", () => {
  *
  * Первая редакция этого докблока (утро того же аудита) объясняла дубль тем,
  * что исключение из библиотеки доходит до модели как `dispatch/audit failed: …`.
- * Это неверно: `dispatchAction` ловит его сам (action-dispatch.ts:1013) и
+ * Это неверно: `dispatchAction` ловит его сам и
  * возвращает обычный `{ok:false, error}`. Префикс `dispatch/audit failed:`
- * ставится в одном месте (action-dispatch.ts:1877) и только когда бросает сам
+ * ставится в одном месте — в `catch` у `gateOrDispatch` — и только когда бросает сам
  * `dispatchAndAudit`, то есть на записи строки аудита, — см. докблок
  * `audit-2026-08-27-dispatch-await-handlers.test.ts`, где описан именно тот
  * путь. По ФОРМЕ ответа отказ от броска здесь не отличить.

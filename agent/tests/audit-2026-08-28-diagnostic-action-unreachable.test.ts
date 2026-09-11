@@ -62,6 +62,11 @@ describe("предпосылки", () => {
 });
 
 describe("через диспетчер это действие не приходит ниоткуда", () => {
+  // Аудит 2026-09-11: регексп ниже видит только СТРОКОВЫЙ литерал первым
+  // аргументом dispatch*, а самый опасный вызов был динамическим —
+  // dispatchAndAudit(retryAction, …) в self-diag-ретрае. Слепую зону этого
+  // теста закрывает запрет на входе разбора:
+  // tests/audit-2026-09-11-selfdiag-dispatch-only.test.ts.
   test("ни один файл lib/ и orchestrator/ его не диспатчит", () => {
     const callers = SOURCES.filter(([, src]) =>
       new RegExp(`dispatch(Action|AndAudit)\\(\\s*["'\`]${ACTION}`).test(src),

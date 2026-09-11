@@ -18,11 +18,21 @@
  * стоп-гейт стоит до дедупа и лимитов, чтобы поставленный на паузу агент не
  * жёг ни токены, ни чужие счётчики.
  *
- * Behaviour is unchanged from the inline version. Everything the handler
- * closed over at module scope is now passed explicitly via {@link MessageHandlerDeps}
- * (mutable `bots` array, the chat allowlist, the history limit, the Anthropic
- * client, the model id, and the shared HandoffDeps). The two pure helpers
- * (`isMentioned`/`tailLines`) come from ./helpers.ts to avoid a circular import.
+ * Всё, что обработчик замыкал на уровне модуля, передаётся явно через
+ * {@link MessageHandlerDeps} (растущий массив `bots`, allowlist чатов, размер
+ * окна истории, клиент Anthropic, id модели и общие HandoffDeps). Чистые
+ * хелперы — `isMentioned`, `mentionedHandles`, `tailLines` — живут в
+ * ./helpers.ts, чтобы не заводить круговой импорт.
+ *
+ * Аудит 2026-09-11: тут было «Behaviour is unchanged from the inline version»
+ * и «the two pure helpers». Ни то, ни другое давно не верно, и обе неправды
+ * дорогие. Поведение с выноса менялось многократно, и каждый раз — гейтом на
+ * раннем выходе (стоп-гейт, анти-дуп, лимит ingest, черта `turnStarted`); при
+ * разборе «почему роль не ответила» шапка уводила читателя искать причину в
+ * Telegram и SDK вместо трёх `return` внутри. Хелперов три, и пропущенный —
+ * `mentionedHandles`, который helpers.ts называет единственным источником
+ * правды об упоминаниях: доверившись шапке, следующий заведёт свой разбор
+ * entity и воспроизведёт рассинхрон, разобранный аудитом 2026-08-28.
  */
 import { Telegraf } from "telegraf";
 import Anthropic from "@anthropic-ai/sdk";
@@ -54,6 +64,7 @@ import {
   MAX_HANDOFF_DEPTH,
   HANDOFF_MAX_INVOCATIONS,
   type HandoffDeps,
+  type HandoffBudget,
 } from "../lib/handoff.ts";
 import { getDiscussionMode } from "../lib/chat-settings.ts";
 import {
@@ -63,6 +74,7 @@ import {
   buildWikiPagesSystemText,
   speakerLabel,
   defuseSpeakerLabels,
+  nowSystemText,
 } from "../lib/agent-prompts.ts";
 
 // P2 discussion-mode: предел глубины handoff-цепочки, когда режим включён.
@@ -87,12 +99,9 @@ import { log, redactText, redactSender, redactUserId } from "../lib/log.ts";
 import { BudgetExceededError } from "../lib/token-budget.ts";
 import { getErrorMessage } from "../lib/errors.ts";
 import { isMentioned, mentionedHandles, tailLines } from "./helpers.ts";
+import { mediaNote } from "../lib/media-markers.ts";
+import { cutToCodeUnits } from "../lib/text-cut.ts";
 
-/**
- * Что сказать в чат, когда ход упал. Текст ошибки НЕ пересказываем: в нём
- * бывают URL с токенами и куски запроса. Пользователю нужно другое — понять,
- * ждать ли, повторять ли, звать ли человека.
- */
 /**
  * Сколько текста агента показываем вместе с отказом. Ход мог написать длинный
  * ответ; в чат он попадает вместе с объяснением, почему обрыв, — и не должен
@@ -158,6 +167,17 @@ export function attachmentLossNote(args: {
   );
 }
 
+/**
+ * Что сказать в чат, когда ход упал. Текст ошибки НЕ пересказываем: в нём
+ * бывают URL с токенами и куски запроса. Пользователю нужно другое — понять,
+ * ждать ли, повторять ли, звать ли человека.
+ *
+ * Аудит 2026-09-11: этот абзац стоял шестьюдесятью строками выше, вторым
+ * подряд `/** *\/`-блоком, — то есть прилипал к `PARTIAL_TEXT_MAX`, а
+ * функция, которую он охраняет, оставалась без документации вовсе. Правило
+ * «причину не пересказываем» — защита от утечки токенов из URL в чат, и
+ * висеть оно должно над той функцией, которая может их туда пустить.
+ */
 export function replyForTurnError(err: unknown): string {
   if (err instanceof BudgetExceededError) {
     const tail = "вернусь после сброса (00:00 UTC).";
@@ -171,7 +191,17 @@ export function replyForTurnError(err: unknown): string {
     const parts: string[] = [];
     if (err.partialText) {
       const t = err.partialText.trim();
-      parts.push(t.length > PARTIAL_TEXT_MAX ? t.slice(0, PARTIAL_TEXT_MAX - 1).trimEnd() + "…" : t);
+      if (t.length > PARTIAL_TEXT_MAX) {
+        // Аудит 2026-09-11: резали по code units без оглядки на суррогаты.
+        // Эмодзи на границе оставлял в хвосте одинокий высокий суррогат, и
+        // при кодировании в UTF-8 человек видел ромб вместо символа. Правило
+        // не новое — но круг 25 держал его тремя копиями, и два места обрезки
+        // его не унаследовали: наследовать было нечего. Теперь оно одно, в
+        // lib/text-cut.ts, и туда же ходят те два.
+        parts.push(cutToCodeUnits(t, PARTIAL_TEXT_MAX - 1).trimEnd() + "…");
+      } else {
+        parts.push(t);
+      }
     }
     parts.push(
       err.sideEffects
@@ -203,10 +233,7 @@ export function replyForTurnError(err: unknown): string {
   return "Не смог обработать сообщение: внутренняя ошибка, она записана в лог. Повтори запрос или позови человека.";
 }
 
-/**
- * READ_FILE (P1): распознать текстовый документ-вложение по mime ИЛИ расширению
- * имени файла (Telegram часто шлёт application/octet-stream для .md/.csv/.log).
- */
+/** Расширения, по которым документ считается текстовым, — см. `isTextDocument`. */
 const TEXT_DOC_EXT =
   /\.(md|markdown|txt|text|json|jsonl|csv|tsv|log|ya?ml|xml|ts|tsx|js|jsx|py|sh|sql|html?|css|ini|toml|env|conf|cfg)$/i;
 const TEXT_DOC_MIME = new Set<string>([
@@ -265,6 +292,10 @@ export function isImageDocument(d: unknown): boolean {
   return normalizeMime((d as { mime_type?: unknown }).mime_type).startsWith("image/");
 }
 
+/**
+ * READ_FILE (P1): распознать текстовый документ-вложение по mime ИЛИ расширению
+ * имени файла (Telegram часто шлёт application/octet-stream для .md/.csv/.log).
+ */
 export function isTextDocument(d: unknown): boolean {
   if (!d || typeof d !== "object") return false;
   const doc = d as { mime_type?: unknown; file_name?: unknown };
@@ -319,7 +350,8 @@ export const MAX_DOC_BYTES = 1024 * 1024;
  *    СОДЕРЖИМОЕ присланного файла, и модель разбирала JSON ошибки под именем
  *    report.md. Не падает ничего, не логируется ничего.
  *
- * Соседний путь голосового (voice-handler.ts:138) этот код проверяет с самого
+ * Соседний путь голосового (проверка `!response.ok` после fetch в
+ * orchestrator/voice-handler.ts) этот код проверяет с самого
  * начала — два способа скачать файл Telegram разошлись в одном репозитории.
  * Поэтому проверка живёт в одной функции на оба вызова, а не копией в каждом:
  * разъехалось ровно потому, что копий было две.
@@ -345,7 +377,18 @@ export async function fetchTelegramAttachment(
 export interface MessageHandlerDeps {
   /** Mutable list of running bots (shared reference — grows as bots boot). */
   bots: RunningBot[];
-  /** Chat-id allowlist (empty = allow all). */
+  /**
+   * Chat-id allowlist. ПУСТОЙ ЗАПРЕЩАЕТ ВСЕХ — `isAllowlisted`
+   * (lib/allowlist.ts), fail-closed по SEC-5.
+   *
+   * Аудит 2026-09-11: здесь стояло «empty = allow all» — ровно наоборот.
+   * Формулировка уже дважды признана ошибкой и исправлена у соседей
+   * (`registerVoiceHandler` в voice-handler.ts, orchestrator-team.ts); этот
+   * файл при той зачистке пропустили. Опаснее не то, что читатель почистит
+   * TELEGRAM_ALLOWED_GROUP_IDS и пойдёт искать поломку в Telegram, а
+   * обратное: он по этой строке заведёт в новом месте `allowed.length ? … :
+   * true` — и откроет ботов всему свету.
+   */
   allowed: string[];
   /** Short-memory history window size. */
   historyLimit: number;
@@ -379,6 +422,25 @@ export function registerMessageHandler(
   const { bots, allowed, historyLimit, anthropic, model, handoffDeps } = deps;
 
   bot.on("message", async (ctx) => {
+    // Аудит 2026-09-11: `try` ниже открыт ДО всех гейтов, а его `catch`
+    // отвечает в чат. Значит любой сбой, случившийся РАНЬШЕ решения «отвечаем
+    // ли мы вообще», давал ответ мимо этого решения. Ближайшая незащищённая
+    // операция — запись входящего в короткую память (`recordMessage` бросает
+    // синхронно на SQLITE_BUSY во время бэкапа, на readonly-базе, на
+    // рассинхроне миграций), и стоит она выше стоп-гейта.
+    //
+    // Цена: поставленный на паузу агент заговаривал — ровно то, что запрещает
+    // докблок гейта («не должен ни говорить, ни жечь на это токены»). Тем же
+    // путём обходились ещё три решения: немой носитель, «нас не упомянули» и
+    // ТИХИЙ дроп по лимиту ingest, про который рядом написано «no reply —
+    // avoids an amplifiable bounce»: при бросающей записи каждый флудящий
+    // апдейт получал ответ, то есть усилитель включался именно там, где его
+    // выключали.
+    //
+    // Флаг поднимается в одной точке — когда все гейты пройдены и ход начат.
+    // Раньше неё `catch` только пишет в лог: сбой до этой черты означает, что
+    // роль ещё не решила говорить, и извиняться ей не за что.
+    let turnStarted = false;
     try {
       const chatId = ctx.chat.id.toString();
       // C7: отметка «апдейт получен» переехала в middleware на входе бота —
@@ -422,14 +484,24 @@ export function registerMessageHandler(
           : undefined;
       const hasImage = !!largestPhoto || !!doc;
       const hasTextDoc = !!textDoc;
+      // Аудит 2026-09-11: ход без подписи вообще не доходил до короткой
+      // памяти — `return` стоял до записи. Картинку и текстовый документ
+      // спасали ветки выше, а кружок, видео, стикер, гифка, аудиофайл и
+      // любой другой документ исчезали бесследно: в истории оставался
+      // разрыв, и следующий ход модели читал «человек промолчал». Теперь
+      // такой ход кладётся пометкой носителя (`lib/media-markers.ts`) и
+      // только после записи мы выходим — маршрутизация не меняется, немой
+      // стикер по-прежнему не поднимает платный ход.
+      const silentMedia =
+        rawText.trim() || hasImage || hasTextDoc ? null : mediaNote(msg);
       const text: string = rawText.trim()
         ? rawText
         : hasImage
           ? "[image]"
           : hasTextDoc
             ? `[файл: ${typeof textDoc.file_name === "string" ? textDoc.file_name : "document"}]`
-            : "";
-      if (!rawText.trim() && !hasImage && !hasTextDoc) return;
+            : (silentMedia ?? "");
+      if (!text) return;
 
       if (ctx.from?.id === running.id) return;
       const senderBot = ctx.from?.is_bot
@@ -456,12 +528,21 @@ export function registerMessageHandler(
           transport: 'bot_api', // T-543: Track transport source
         });
       }
+      // Немой носитель записан — дальше идти незачем: отвечать не на что,
+      // а `shouldReply` ниже на такой ход всё равно поднял бы платный вызов
+      // модели, если бы Дирижёр был в чате один.
+      if (silentMedia) return;
 
       // Routing:
       //   - человек упомянул нас → отвечаем;
       //   - Lead упомянул нас (handoff) → отвечаем, если мы не Lead;
       //   - другой наш бот упомянул нас → игнор (loops prevention);
-      //   - никого не упомянули и мы Lead → отвечаем.
+      //   - никого из наших не упомянули, мы Lead И пишет НЕ наш бот →
+      //     отвечаем. Последнее условие — не деталь: без него Дирижёр
+      //     отзывался бы на любую безадресную реплику своих же одиннадцати,
+      //     а его собственный ответ так же безадресен. Это замкнутая петля
+      //     платных ходов, и защита от неё живёт только здесь: `mentioned`
+      //     её не ловит (упоминания нет вовсе).
       let shouldReply = false;
       if (mentioned) {
         if (!fromOurBot) shouldReply = true;
@@ -522,6 +603,10 @@ export function registerMessageHandler(
         `[in][${def.key}] chat=${chatId} from=${redactSender(ctx.from?.id, ctx.from?.username)} text=${redactText(text)}`
       );
 
+      // Черта: гейты позади, ход наш. Отсюда сбой — это сбой ХОДА, и о нём
+      // человеку сообщают (разбор — в `catch` внизу).
+      turnStarted = true;
+
       await ctx.sendChatAction("typing");
 
       const recent = getRecentMessages(chatId, historyLimit);
@@ -571,6 +656,11 @@ export function registerMessageHandler(
           cache_control: { type: "ephemeral" },
         },
         ...(hitPages ? [{ type: "text" as const, text: hitPages }] : []),
+        // Аудит 2026-09-11: последним и БЕЗ cache_control — см. nowSystemText.
+        // Кэш режется по последней точке cache_control, поэтому меняющийся
+        // каждую минуту хвост здесь бесплатен, а среди блоков выше обнулял бы
+        // кэш каждый ход.
+        { type: "text" as const, text: nowSystemText() },
       ];
 
       const messages: Anthropic.MessageParam[] = recent.map((r) => {
@@ -679,8 +769,10 @@ export function registerMessageHandler(
             } else {
               let content = Buffer.from(ab).toString("utf8");
               if (content.length > MAX_DOC_CHARS) {
+                // Через `cutToCodeUnits`, а не `slice`: половина суррогатной
+                // пары на границе уезжает в промпт модели и в короткую память.
                 content =
-                  content.slice(0, MAX_DOC_CHARS) +
+                  cutToCodeUnits(content, MAX_DOC_CHARS) +
                   "\n…[файл обрезан по лимиту контекста]";
               }
               const filename =
@@ -735,7 +827,7 @@ export function registerMessageHandler(
       // ДО runWithTools: делегирования оркестратора — такие же LLM-вызовы, как
       // и каскад по @-упоминаниям ниже, и раньше в потолок не попадали вовсе
       // (счётчик рождался строкой после, уже когда оркестратор отработал).
-      const handoffBudget = { n: 0, max: HANDOFF_MAX_INVOCATIONS };
+      const handoffBudget: HandoffBudget = { n: 0, max: HANDOFF_MAX_INVOCATIONS };
       const reply = await runWithTools({
         anthropic,
         model,
@@ -878,7 +970,16 @@ export function registerMessageHandler(
         // Счётчик тот же, что ушёл в runWithTools выше: делегирования оркестратора
         // уже израсходовали часть запаса, и каскад по упоминаниям продолжает с
         // того же места, а не с нуля.
-        const targets = findHandoffTargets(reply, def.key, bots);
+        // Аудит 2026-09-11: и того же счётчика мало. Роль, которую этот ход уже
+        // позвал через DELEGATE_TO_ROLE, каскад звал ВТОРОЙ раз — итоговый текст
+        // оркестратора её упоминает («передал @delabs_backend_bot»), а `visited`
+        // здесь собирался заново из двух ключей. Выходил второй платный прогон
+        // и второе сообщение в чате на одно сообщение пользователя. Упоминание
+        // в итоге — ссылка на сделанное, а не новое поручение, поэтому отсекаем
+        // по списку уже отработавших ролей (handoff.ts, там же где счётчик).
+        const targets = findHandoffTargets(reply, def.key, bots).filter(
+          (t) => !handoffBudget.invoked?.has(t.def.key),
+        );
         for (const t of targets) {
           void (deps.respondAsImpl ?? respondAs)(
             {
@@ -917,6 +1018,10 @@ export function registerMessageHandler(
       });
     } catch (err) {
       log.error(`[err][${def.key}]`, { error: String(err) });
+      // Сбой ДО черты `turnStarted` — не сбой хода: роль ещё не решила, её ли
+      // это сообщение и можно ли ей говорить. Ответ здесь обошёл бы то самое
+      // решение; лога довольно.
+      if (!turnStarted) return;
       // Раньше здесь всё и заканчивалось: любой сбой хода — исчерпанный
       // дневной бюджет, 429 после ретраев, 400 от API — превращался в молчание.
       // Пользователь видел не ошибку, а бота, который просто не ответил, и

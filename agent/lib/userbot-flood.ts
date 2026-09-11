@@ -25,6 +25,10 @@ import { log } from "./log.ts";
 
 // ─── Backoff calculator ────────────────────────────────────────────────────
 
+/** Первая пауза; дальше удваивается до MAX_BACKOFF_MS — см. `floodBackoffMs`. */
+export const INITIAL_BACKOFF_MS = 1_000;
+export const MAX_BACKOFF_MS = 60_000;
+
 /**
  * Calculate delay in ms before the next attempt after a FLOOD_WAIT.
  *
@@ -41,9 +45,6 @@ import { log } from "./log.ts";
  * @param serverSeconds  seconds requested by Telegram (from FLOOD_WAIT_<N>), optional
  * @param _jitter   override jitter for deterministic tests (default: random 0-1000ms)
  */
-export const INITIAL_BACKOFF_MS = 1_000;
-export const MAX_BACKOFF_MS = 60_000;
-
 export function floodBackoffMs(
   attempt: number,
   serverSeconds?: number,
@@ -90,11 +91,18 @@ export function exceedsMaxFloodWait(serverSeconds: number | undefined): boolean 
  * через минуту снова стучалось в аккаунт внутри того же окна бана. Молотьба
  * просто переезжала из цикла в соседние вызовы.
  *
- * Ключ — characterId, как и у ведра: у роутера сессии по агентам (T-541).
- * Если несколько ролей делят одну сессию через singleton-fallback, покрытие
- * получается неполным — это ограничение существующей гранулярности, а не
- * этого кулдауна; лучше недоблокировать чужую роль, чем глушить одиннадцать
- * аккаунтов из-за одного.
+ * Ключ — АККАУНТ (`userbotAccountKey`), а не роль. Абзац на этом месте
+ * утверждал обратное — «ключ — characterId <…> лучше недоблокировать чужую
+ * роль, чем глушить одиннадцать аккаунтов из-за одного», — и это была не
+ * просто неправда, а приглашение сузить ключ обратно. Сужение откатило бы
+ * аудит 2026-09-11: FLOOD_WAIT выдаёт Telegram АККАУНТУ, и пока роли ходят
+ * через один синглтон владельца (а без объявленной сессии они ходят именно
+ * так — см. докблок `SHARED_USERBOT_ACCOUNT_KEY` в rate-limits.ts), ролевой
+ * ключ означал бы, что десять остальных ролей продолжают стучаться в уже
+ * забаненный аккаунт. «Одиннадцать аккаунтов» в старом абзаце — это на самом
+ * деле одиннадцать ролей на ОДНОМ аккаунте, и глушить их вместе правильно.
+ *
+ * Ровно поэтому текст отказа говорит «аккаунт молчит», а не «роль».
  */
 const floodCooldownUntil = new Map<string, number>();
 

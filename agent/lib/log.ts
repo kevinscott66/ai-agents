@@ -13,11 +13,12 @@ type LogData = Record<string, unknown>;
  */
 const SENSITIVE_KEY =
   /(token|secret|password|passwd|authorization|bearer|api[-_]?key|access[-_]?key|private[-_]?key|x-figma-token)/i;
-// initdata: SSE-подключение Mini App передаёт initData в query (EventSource не
-// умеет заголовки). Это полноценный, реиграбельный 24 часа credential —
-// перехват даёт полную имперсонацию пользователя на всех /api/*. Само
-// приложение URL целиком не логирует, но одно слово здесь закрывает регрессию
-// на будущее: любой будущий лог с полным URL уже будет вычищен.
+// initdata: полноценный, реиграбельный 24 часа credential — перехват даёт
+// полную имперсонацию пользователя на всех /api/*. В query-строке его сегодня
+// нет: SSE-подключение ходит по одноразовому билету (lib/sse-ticket.ts), а
+// приём `?initData=` убран специально. Слово остаётся здесь именно поэтому —
+// оно стережёт возврат канала, а не описывает живой: любой будущий лог с
+// полным URL уже будет вычищен.
 // Аудит 2026-09-10: имя параметра сверялось с началом, а приставки бывают
 // почти всегда. `?refresh_token=`, `&client_secret=`, `&x-api-key=` не
 // совпадали ни с одной альтернативой: `token` требовалось СРАЗУ после `?`/`&`.
@@ -64,7 +65,7 @@ const INLINE_QS_SECRET = new RegExp(
  *
  * В скрипты-сканеры (deploy/vps-autonomous/scan-staged-secrets.sh и
  * .github/scripts/check-secret-hygiene.sh) эта форма НЕ добавляется, и паритет
- * шести форм это не нарушает: те работают по staged-диффу репозитория, где
+ * семи форм это не нарушает: те работают по staged-диффу репозитория, где
  * `token: …` стоит в каждом втором YAML и JSON — гейт стал бы неотличим от
  * шума. Здесь граница выходная, цена ложного срабатывания — три звёздочки в
  * логе.
@@ -117,7 +118,7 @@ const BEARER = /((?:Bearer|Basic)\s+)[A-Za-z0-9._\-+/=~]+/gi;
 const TELEGRAM_TOKEN = /(?<!\d)(\d{6,12}):[A-Za-z0-9_-]{30,}/g;
 
 // Аудит 2026-08-20: скраббер не ловил ровно ту форму, ради которой его зовут
-// из mac-bridge.ts. Комментарий у `snapshotOf` (lib/mac-bridge.ts:294) называет
+// из mac-bridge.ts. Комментарий у `snapshotOf` (lib/mac-bridge.ts) называет
 // её дословно: «`git push` по HTTPS печатает в stderr URL вида
 // `https://x-access-token:ghp_…@github.com/…`». Это вывод произвольной
 // программы, запущенной на машине владельца, и он уходит двумя дорогами — в
@@ -125,11 +126,12 @@ const TELEGRAM_TOKEN = /(?<!\d)(\d{6,12}):[A-Za-z0-9_-]{30,}/g;
 // через /api/actions.
 //
 // Формы взяты из существующего определения «как выглядит секрет» в этом же
-// репо — deploy/vps-autonomous/scan-staged-secrets.sh:27-34. Определений и так
+// репо — массив PATTERNS в deploy/vps-autonomous/scan-staged-secrets.sh.
+// Определений и так
 // было два, и на выходной границе стояло более слабое; теперь они совпадают.
 //
-// Аудит 2026-08-28: совпадали не полностью — из шести форм скрипта здесь было
-// пять, не хватало `ИМЯ=значение`. Паритет теперь проверяется тестом
+// Аудит 2026-08-28: совпадали не полностью — из семи форм скрипта здесь было
+// шесть, не хватало `ИМЯ=значение`. Паритет теперь проверяется тестом
 // (tests/audit-2026-08-28-scrub-secret-assignment.test.ts), а не только этим
 // абзацем: правку любой из двух сторон приходится делать вместе.
 
@@ -175,7 +177,7 @@ const OPENAI_KEY = /\b(sk-)[A-Za-z0-9]{40,}/g;
  */
 const OPENAI_PREFIXED_KEY = /\b(sk-[a-z]{2,12}-)[A-Za-z0-9_-]{20,}/g;
 /**
- * Присваивание `ИМЯ=значение` — шестая форма из
+ * Присваивание `ИМЯ=значение` — седьмая и последняя форма из
  * deploy/vps-autonomous/scan-staged-secrets.sh, единственная, которой здесь
  * не было. Комментарий выше утверждал, что определения совпадают; аудит
  * 2026-08-28 показал, что нет, и что именно этой формой выглядит всё
@@ -190,7 +192,43 @@ const OPENAI_PREFIXED_KEY = /\b(sk-[a-z]{2,12}-)[A-Za-z0-9_-]{20,}/g;
  * символов: ниже неё это счётчик, а не секрет.
  */
 const SECRET_ASSIGNMENT =
-  /((?:TOKEN|SECRET|PASSWORD|API_KEY|APIKEY|SESSION)[A-Z0-9_]*\s*=\s*["']?)[A-Za-z0-9_/+.:-]{16,}/g;
+  /((?:TOKEN|SECRET|PASSWORD|API_KEY|APIKEY|API_HASH|SESSION)[A-Z0-9_]*\s*=\s*["']?)[A-Za-z0-9_/+.:-]{16,}/g;
+
+/**
+ * StringSession юзербота — по форме, а не по имени.
+ *
+ * Аудит 2026-09-11, круг 51: у самого дорогого секрета проекта правила по
+ * форме не было вовсе, в отличие от `ghp_`, `github_pat_` и `sk-ant-`. Ловилась
+ * только запись `TELEGRAM_SESSION=…`; `session: 1BQ…` в YAML или JSON проходил
+ * насквозь, потому что слово `session` из LABELED_SECRET_NAME исключено
+ * намеренно (обоснование — в докблоке того правила). А сессия MTProto — это
+ * полная имперсонация владельца: ни TTL, ни второго фактора у неё нет.
+ *
+ * Порог длины высокий (250) именно затем, чтобы правило было про сессию, а не
+ * про «любой base64». Живая строка gramjs — около 350 символов; хвост короче
+ * порога бесполезен и тому, кто его перехватил.
+ */
+const TELEGRAM_STRING_SESSION = /(?<![A-Za-z0-9+/=])1[A-Za-z0-9+/=_-]{250,}/g;
+
+/**
+ * Та же форма «имя: значение», но в camelCase.
+ *
+ * Аудит 2026-09-11: `LABELED_SECRET` требует, чтобы перед ключевым словом
+ * стоял разделитель `_`, `-` или `.` либо начало слова — из-за lookbehind
+ * `(?<![A-Za-z0-9])`. Поэтому `api_key: …` чистился, а `accessToken: …` —
+ * самое обычное имя поля в JS-экосистеме — нет. Внутри объекта такой ключ
+ * закрыт `SENSITIVE_KEY` (там границы нет), а вот в строке — например, в
+ * сериализованном теле чужого ответа внутри текста ошибки — уезжал целиком.
+ *
+ * Правило РЕГИСТРОЗАВИСИМО и требует горба: `[a-z0-9]` перед заглавной. Без
+ * этого оно повторяло бы `LABELED_SECRET` и ловило бы любое слово,
+ * кончающееся на token, — скажем, monkeyToken, — наравне с `accessToken`,
+ * чего мы как раз избегаем в соседнем правиле. Слово-пример намеренно без
+ * обратных кавычек: в этом репозитории кавычки — обещание, что символ
+ * найдётся, а такого символа нет и не должно быть.
+ */
+const CAMEL_LABELED_SECRET =
+  /((?<=[a-z0-9])(?:Token|Secret|Password|Passphrase|ApiKey|AccessKey|PrivateKey|Authorization|InitData|Credentials?)["']?\s*:\s*(?:(?:Bearer|Basic|Token)\s+)?["']?)[^\s,;"'`}\]@]+/g;
 
 /**
  * Вычистить секреты из произвольной строки. Экспортируется, чтобы у «как
@@ -201,6 +239,7 @@ const SECRET_ASSIGNMENT =
 export function scrubSecretString(s: string): string {
   return s
     .replace(LABELED_SECRET, "$1***")
+    .replace(CAMEL_LABELED_SECRET, "$1***")
     .replace(CURL_USERPASS, "$1***")
     .replace(INLINE_QS_SECRET, "$1***")
     .replace(BEARER, "$1***")
@@ -213,7 +252,11 @@ export function scrubSecretString(s: string): string {
     .replace(ANTHROPIC_KEY, "$1***")
     .replace(OPENAI_PREFIXED_KEY, "$1***")
     .replace(OPENAI_KEY, "$1***")
-    .replace(SECRET_ASSIGNMENT, "$1***");
+    .replace(SECRET_ASSIGNMENT, "$1***")
+    // Последним: к этому моменту `TELEGRAM_SESSION=…` уже превращено в
+    // `TELEGRAM_SESSION=***` правилом выше, и ловить остаётся голую строку —
+    // ту, что лежит в YAML или прилетела в тексте чужой ошибки.
+    .replace(TELEGRAM_STRING_SESSION, "***");
 }
 
 /**
@@ -243,8 +286,14 @@ export function scrubbedHead(s: string, max: number): string {
  * Тот же скраббер, но по произвольной структуре: строки чистятся правилами
  * выше, значения под «говорящими» ключами (`token`, `secret`, …) заменяются
  * целиком. Экспортируется по той же причине, что и `scrubSecretString`:
- * определение «как выглядит секрет» на проекте одно. Второй сток — строка
- * `audit_logs.payload` в `emitAlert`, которая уходит наружу по /api/audit.
+ * определение «как выглядит секрет» на проекте одно.
+ *
+ * Кто зовёт, здесь не перечислен намеренно. Тут было сказано «второй сток —
+ * строка `audit_logs.payload` в `emitAlert`», и это прочли как «в эту колонку
+ * пишет emitAlert»; писателей в неё было два, и второй (отказ
+ * UPDATE_AGENT_PROMPT в lib/dispatch/agent-prompt.ts) полтора месяца не чистил
+ * ничего. Перечень вызывающих в докблоке устаревает молча — смотреть надо
+ * вызовы, а не этот абзац (аудит 2026-09-11, круг 51).
  */
 export function scrubSecretsDeep<T>(value: T): T {
   return scrubSecrets(value) as T;
@@ -388,6 +437,17 @@ export const log = new Logger();
  */
 const REDACT_DISABLED = process.env.LOG_REDACT === "0";
 
+/** Сколько символов отпечатка показывает `redactText` с каждого конца. */
+const REDACT_PREFIX = 4;
+const REDACT_SUFFIX = 4;
+
+/**
+ * Сколько символов обязаны остаться СКРЫТЫМИ, чтобы отпечаток вообще
+ * показывался. Не ноль: при нуле отпечаток совпадает со всей строкой —
+ * см. докстроку `redactText`.
+ */
+const REDACT_MIN_HIDDEN = 4;
+
 /**
  * Redact a Telegram user identifier (numeric id or username).
  * Returns a stable short form `uid:<last4>` so logs remain correlatable
@@ -425,17 +485,35 @@ export function redactSender(
 }
 
 /**
- * Redact arbitrary user-authored text. Returns either:
- *   - `<len=N>` for short strings (≤7 chars), or
- *   - `<len=N first4=XXXX last4=YYYY>` for longer strings.
- * Never reveals middle content, regardless of length.
+ * Резать произвольный текст человека. Отдаёт либо `<len=N>`, либо
+ * `<len=N first4=XXXX last4=YYYY>` — отпечаток для корреляции одного
+ * и того же текста между строками лога.
+ *
+ * Аудит 2026-09-11: порогом было 7, а подпись обещала «never reveals
+ * middle content, regardless of length». При длине 8 середины не
+ * существует вовсе: `first4 + last4` — это ВСЯ строка, и обещание
+ * выполнялось впустую. Замер: `"12345678"` → `<len=8 first4=1234
+ * last4=5678>`, `"7 Baker St"` → `<len=10 first4=7 Ba last4=r St>`. В полосе
+ * 8–11 символов лежит ровно то, ради чего резали: одноразовый код,
+ * короткий пароль, адрес. Сторожа этого не ловили: они берут строки
+ * в 20, 39 и 58 символов и `"да"` — полосу 8–11 не проверял ни один.
+ *
+ * Поэтому порог не число, а свойство: отпечаток показывается, только
+ * если после него СКРЫТЫ хотя бы `REDACT_MIN_HIDDEN` символов. Записанное
+ * через длины кусков, это свойство не разъедется с ними: поменяется
+ * `first4`/`last4` — порог пересчитается сам.
+ *
+ * Цена — в полосе 8–11 коррелировать строки по логу больше нельзя. Это
+ * ровно та полоса, где корреляция и есть разглашение, так что терять тут
+ * нечего.
  */
 export function redactText(value: string | null | undefined): string {
   if (value === null || value === undefined) return "<len=0>";
   const s = String(value);
   if (REDACT_DISABLED) return s;
-  if (s.length <= 7) return `<len=${s.length}>`;
-  return `<len=${s.length} first4=${s.slice(0, 4)} last4=${s.slice(-4)}>`;
+  const shown = REDACT_PREFIX + REDACT_SUFFIX;
+  if (s.length < shown + REDACT_MIN_HIDDEN) return `<len=${s.length}>`;
+  return `<len=${s.length} first${REDACT_PREFIX}=${s.slice(0, REDACT_PREFIX)} last${REDACT_SUFFIX}=${s.slice(-REDACT_SUFFIX)}>`;
 }
 
 // Legacy compatibility - can be used to gradually migrate console.log calls

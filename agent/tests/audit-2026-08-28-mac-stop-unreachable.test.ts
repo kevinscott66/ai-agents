@@ -5,7 +5,8 @@
  * `runningCount` считался по сессиям со статусом `running`. Такой сессии в
  * `agent_actions` не бывает:
  *
- *   • вокабуляр статусов — ровно шесть значений (lib/audit.ts:13), из них
+ *   • вокабуляр статусов — ровно шесть значений (`ACTION_STATUSES` в
+ *     lib/audit.ts), из них
  *     страница сама отбрасывает `pending_approval`/`forbidden`/`rate_limited`
  *     (NON_RUN), а `ok`/`error` `toMacSession` переводит в `completed`/`failed`;
  *   • единственное, что осталось бы «выполняется», — `attempted`, но его не

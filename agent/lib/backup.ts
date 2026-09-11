@@ -411,7 +411,7 @@ async function runBackupUnlocked(
   // 1) DB snapshot via VACUUM INTO.
   try {
     // Аудит 2026-08-27: было `process.env.MEMORY_DB_PATH ?? join(...)`. `??`
-    // ловит только ОТСУТСТВУЮЩУЮ переменную, а `.env.example:55` ставит её
+    // ловит только ОТСУТСТВУЮЩУЮ переменную, а `.env.example` ставит её
     // пустой. Пустой путь давал `fs.existsSync("") === false` — и ночной
     // снапшот БД молча пропускался КАЖДУЮ ночь, оставляя одну строку
     // `db source not found: ` в логах. Разбор — общий с `lib/db.ts`.
@@ -490,8 +490,8 @@ async function runBackupUnlocked(
   // старте, незачем.
   try {
     // Аудит 2026-08-28: переменная читалась через `??` — та же ошибка, что
-    // строкой 365 разобрана для MEMORY_DB_PATH, и в том же файле.
-    // `.env.example:56` ставит переменную пустой, `existsSync("")` ложно, и
+    // разобрана выше для `MEMORY_DB_PATH`, в шаге снапшота БД этого же файла.
+    // `.env.example` ставит переменную пустой, `existsSync("")` ложно, и
     // архив вики пропускался КАЖДУЮ ночь. Разбор — общий с `lib/memory.ts`,
     // иначе бэкап и писатель разъедутся в другую сторону.
     const wikiDir = resolveMemoryDir(process.env.MEMORY_DIR);
@@ -509,7 +509,12 @@ async function runBackupUnlocked(
       const tmpPath = `${outPath}.tmp-${process.pid}-${randomUUID()}`;
       let published = false;
       try {
-        const res = Bun.spawnSync(["tar", "-czf", tmpPath, "-C", parent, base]);
+        // `--` перед именем участника: `base` — это basename каталога из
+        // MEMORY_DIR, то есть значение из окружения. Достижимого пути сегодня
+        // нет (каталог задаёт владелец в .env, и назвать его `-C` он не
+        // собирался), но разделитель — это не защита от злого умысла, а то,
+        // что отличает «имя файла» от «опции» в argv самого tar.
+        const res = Bun.spawnSync(["tar", "-czf", tmpPath, "-C", parent, "--", base]);
         if (res.exitCode !== 0) {
           const stderr = res.stderr ? new TextDecoder().decode(res.stderr) : "";
           throw new Error(`tar exit ${res.exitCode}: ${stderr.trim()}`);

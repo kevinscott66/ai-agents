@@ -10,7 +10,7 @@
  * `??` ловит только null/undefined. Переменная, объявленная и пустая, — это
  * `""`, и до дефолта дело не доходит: `Number("")` равен 0.
  *
- * А `.env.example:55` ровно так её и отдаёт:
+ * А `.env.example` ровно так её и отдаёт:
  *
  *   MEMORY_HISTORY_LIMIT=               # Optional cap on retained history entries.
  *

@@ -1,5 +1,5 @@
 /**
- * R-A: единый диспатчер для 12 action types.
+ * R-A: единый диспатчер действий агентов.
  *
  * dispatchAction — выполняет действие (telegram-side-effect или task-операция),
  * НЕ пишет audit. dispatchAndAudit — обёртка с логированием ok/error.
@@ -8,10 +8,22 @@
  * на allow вызывает dispatchAndAudit, на deny/approval пишет audit и
  * создаёт approval-запись.
  *
- * Task-actions идут напрямую в lib/tasks.ts, минуя lib/actions.ts::doXxx
- * (чтобы аудит писался ровно один раз — здесь).
+ * Task-actions идут напрямую в lib/tasks.ts, чтобы аудит писался ровно один
+ * раз — здесь.
+ *
+ * Аудит 2026-09-11: в шапке стояло «для 12 action types», и число отстало
+ * втрое — в `ACTION_TYPES` (permissions.ts) их 31. Числа здесь больше нет
+ * намеренно: единственный его источник — сам список, а копия неизбежно
+ * разъедется снова (правило круга 20 — не подгонять число, а убрать его и
+ * назвать символ). Там же стояла оговорка «минуя lib/actions.ts::doXxx»:
+ * этого модуля нет с 2026-08-12, и обходить было нечего.
  */
 import { getErrorMessage } from "./errors.ts";
+import {
+  foldFanoutOutcomes,
+  delegationShortfallText,
+  type FanoutOutcome,
+} from "./dispatch/split-fanout.ts";
 import type { Telegram } from "telegraf";
 import {
   handleGenerateImage,
@@ -47,6 +59,7 @@ import {
   updateTaskStatus,
   getTask,
   reconcileExpectedChildren,
+  DIAG_ASSIGNEE,
 } from "./tasks.ts";
 import {
   handleCreateTask,
@@ -123,6 +136,7 @@ import {
   checkAndConsumeChatRateLimits,
   refundRateLimit,
   refundChatRateLimits,
+  releaseUnusedChatReservation,
 } from "./rate-limits.ts";
 import {
   respondAs as defaultRespondAs,
@@ -130,6 +144,7 @@ import {
   type HandoffDeps,
   type HandoffOutcome,
   type RespondAsOpts,
+  type HandoffBudget,
 } from "./handoff.ts";
 import { CHARACTERS } from "../characters/index.ts";
 import type { RunningBot, InputImage, InputDocument } from "./types.ts";
@@ -199,8 +214,8 @@ export interface DispatchCtx {
    * agent calls DELEGATE_TO_ROLE(role=X) and X is already in the chain, dispatch
    * returns ok:false with a clear "cycle" error in the tool_result.
    *
-   * Аудит 2026-08-10: здесь было «ортогонально legacy-счётчику `_depth`,
-   * оставленному как backstop». Backstop'а не было — `_depth` никто не ставил,
+   * Аудит 2026-08-10: здесь было «ортогонально legacy-счётчику _depth,
+   * оставленному как backstop». Backstop'а не было — _depth никто не ставил,
    * и гейт по нему не срабатывал ни разу; счётчик удалён. Длина этой цепочки —
    * единственный потолок глубины, и он же единственный, который растёт.
    */
@@ -215,16 +230,18 @@ export interface DispatchCtx {
    *   HANDOFF_MAX_INVOCATIONS = 16
    *   budget в opts respondAs: null, null, null
    *
-   * `null` значит «заводи свой»: handoff.ts:241 на каждое делегирование
-   * создаёт новое `{n:0,max:16}`. Потолок «16 LLM-вызовов на ход» превращался в
-   * 16 на каждую ветку. Теперь ссылка одна на весь ход и её видят оба входа.
+   * `null` значит «заводи свой»: `respondAs` (handoff.ts) на каждое
+   * делегирование создаёт новое `{n:0,max:16}`. Потолок «16 LLM-вызовов на
+   * ход» превращался в 16 на каждую ветку. Теперь ссылка одна на весь ход и её
+   * видят оба входа.
    */
-  handoffBudget?: { n: number; max: number };
+  handoffBudget?: HandoffBudget;
   /**
    * Вложения ЭТОГО хода пользователя.
    *
    * Аудит 2026-08-12: делегат их не получал. В историю картинка без подписи
-   * ложится строкой «[image]» (message-handler.ts:219), документ — строкой
+   * ложится строкой «[image]» (`registerMessageHandler` в
+   * orchestrator/message-handler.ts), документ — строкой
    * «[файл: имя]». Замер того, что видит дизайнер, когда владелец бросил
    * картинку и оркестратор передал задачу дальше:
    *
@@ -278,11 +295,6 @@ export type DispatchResult =
 
 
 /**
- * T-541: Get userbot handle with optional router support.
- * When USERBOT_ROUTER_ENABLED=true, attempts to use agent-specific session first.
- */
-
-/**
  * Сколько символов ответа делегата уходит наверх в tool_result DELEGATE_TO_ROLE
  * и в строку доски. Ответ целиком уже в чате — здесь он нужен оркестратору,
  * чтобы передать результат следующему шагу пайплайна, а не чтобы пересказать.
@@ -291,6 +303,15 @@ export type DispatchResult =
  */
 const DELEGATE_REPLY_MAX = 4000;
 
+/**
+ * С чьего аккаунта уходит действие (T-541).
+ *
+ * Исходов три, и «попробовать сессию агента, иначе общую» среди них нет: при
+ * `USERBOT_ROUTER_ENABLED=true` отдаём либо сессию агента, либо null — откат
+ * на личный аккаунт владельца был бы подменой личности (разбор 2026-08-28 —
+ * в теле функции). Без флага работает общий юзербот. `ctx.userbot` — шов для
+ * тестов, он старше обоих путей и перекрывает их оба.
+ */
 async function resolveUserbotHandle(ctx: DispatchCtx): Promise<UserbotHandle | null> {
   // Test seam override
   if (ctx.userbot !== undefined) {
@@ -513,8 +534,8 @@ export async function dispatchAction<T extends ActionType>(
             error: `delegation cycle: '${role}' is already in chain [${chain.join("→")}]`,
           };
         }
-        // Аудит 2026-08-10: здесь стоял второй потолок, `p._depth >=
-        // MAX_HANDOFF_DEPTH`. Поле объявлено как «set by dispatch, not by LLM»,
+        // Аудит 2026-08-10: здесь стоял второй потолок, p._depth >=
+        // MAX_HANDOFF_DEPTH. Поле объявлено как «set by dispatch, not by LLM»,
         // но не ставилось ни dispatch'ем, ни кем-либо ещё: в схеме инструмента
         // его нет, и единственной записью во всём репозитории была строка в
         // тесте c10, который этот же гейт и «проверял». Гейт не срабатывал
@@ -534,8 +555,8 @@ export async function dispatchAction<T extends ActionType>(
         // снималась входом модели, без единого аппрува и без следа в
         // истории: перехода cancelled → running в FSM нет вовсе.
         //
-        // Отсечка на входе модели уже стоит в `dispatch/tasks.ts:116`, но
-        // она закрывает только CREATE_TASK. Сюда parentId приезжает двумя
+        // Отсечка на входе модели уже стоит в `handleCreateTask`
+        // (dispatch/tasks.ts), но она закрывает только CREATE_TASK. Сюда parentId приезжает двумя
         // другими дорогами: явным `_parent_task_id` и — чаще — циклом
         // SPLIT_TASK, который создаёт детей по одному через gateOrDispatch.
         // Каждая итерация цикла это полный ход делегата (десятки секунд ×
@@ -663,7 +684,8 @@ export async function dispatchAction<T extends ActionType>(
           log.error("[delegate] failed to create task row", { error: String(e) });
         }
         if (delegatedTaskId) {
-          // FSM запрещает pending → done напрямую (agent/lib/tasks.ts:63).
+          // FSM запрещает pending → done напрямую: таблица `TASK_TRANSITIONS`
+          // в lib/task-fsm.ts.
           // Переводим в running сразу после создания, иначе закрыть не сможем.
           try {
             updateTaskStatus(delegatedTaskId, "running");
@@ -704,7 +726,7 @@ export async function dispatchAction<T extends ActionType>(
               // ровно то же число, только считаемое тем, что действительно
               // растёт на каждом хопе. Для обычного делегирования (chain =
               // [отправитель]) выходит 1 — как и было, когда сюда приходило
-              // `_depth + 1` при вечном `_depth = 0`. Разница видна только
+              // _depth + 1 при вечном _depth = 0. Разница видна только
               // глубоко в цепочке: делегат на четвёртом хопе больше не получает
               // полный запас каскада по упоминаниям, как будто он первый.
               depth: chain.length,
@@ -842,8 +864,7 @@ export async function dispatchAction<T extends ActionType>(
             expectedChildren: roles.length,
           },
         });
-        const childIds: string[] = [];
-        const errors: string[] = [];
+        const outcomes: FanoutOutcome[] = [];
         for (const role of roles) {
           // Аудит 2026-08-12: здесь стоял dispatchAction — сырой исполнитель.
           // Всё, что делает делегирование легальным, живёт слоем выше, в
@@ -872,19 +893,24 @@ export async function dispatchAction<T extends ActionType>(
             } as PayloadFor<"DELEGATE_TO_ROLE">,
             ctx,
           );
-          if (r.kind === "ok") {
-            if (r.taskId) childIds.push(r.taskId);
-          } else {
-            errors.push(`${role}: ${gateRefusalText(r)}`);
-          }
+          outcomes.push(
+            r.kind === "ok"
+              ? { role, taskId: r.taskId }
+              : { role, refusal: gateRefusalText(r) },
+          );
         }
         // Часть ролей могла не создать строку (отказ по циклу делегирования,
         // упавший createTask). Сводим обещание к факту и пересчитываем
         // родителя — иначе счётчик не сойдётся и он провисит до gc_stale.
+        // Разбор исходов — в lib/dispatch/split-fanout.ts: там же объяснено,
+        // почему «ok без taskId» обязан попасть в errors, а не потеряться.
+        const { childIds, errors } = foldFanoutOutcomes(outcomes);
         if (childIds.length !== roles.length) {
           try {
             reconcileExpectedChildren(parent.id, childIds.length, {
-              error: joinDelegationErrors(errors) || "all delegations failed",
+              error:
+                joinDelegationErrors(errors) ||
+                delegationShortfallText(childIds.length, roles.length),
             });
           } catch (e) {
             log.warn("[split] reconcile failed", {
@@ -1012,6 +1038,10 @@ export async function dispatchAction<T extends ActionType>(
         // T-701. Мёртвая ветка: тула у действия нет, а движок self-healing
         // зовёт createDiagnosticTask() напрямую (ниже, T-704). Подробнее — в
         // заголовке dispatch/diagnostic-action.ts.
+        //
+        // Аудит 2026-09-11: мёртвой она стала не сама собой. Оживлял её
+        // self-diag-ретрай, чей разбор принимал любое имя из ACTION_TYPES;
+        // теперь он отвергает ключи DISPATCH_ONLY_ACTIONS.
         const p = payload as PayloadByType["CREATE_DIAGNOSTIC_TASK"];
         const res = handleCreateDiagnosticTask(p, {
           agentKey: ctx.agentKey,
@@ -1432,24 +1462,42 @@ export async function dispatchAndAudit<T extends ActionType>(
     const diagFlag = p?._diag === true;
     const retryCount =
       typeof p?._retry_count === "number" ? p._retry_count : 0;
-    if (!shouldSkipSelfDiag(actionType, res.error) && !diagFlag && retryCount < 1) {
-      // T-705b: circuit breaker on the diagnostic-fix chain.
-      const parentChain = getFixChain(p);
-      const maxDepth = getFixChainMaxDepth();
-      if (parentChain.length >= maxDepth) {
-        const finalChain = appendFixChain(
-          parentChain,
-          `diag:${actionType}:circuit_breaker`,
-        );
-        log.error("inter_agent_fix.circuit_breaker", {
-          actionType,
-          chain: finalChain,
-          max_depth: maxDepth,
-          error: res.error,
-        });
-        // Do NOT spawn another diag task. Mark this as a terminal failure.
-        c15Error = `circuit breaker tripped (fix_chain depth ${parentChain.length} >= ${maxDepth}): ${res.error}`;
-      } else if (isDiagTaskThrottled(`Tool error: ${actionType}`)) {
+    // T-705b: circuit breaker on the diagnostic-fix chain.
+    //
+    // Аудит 2026-09-11: до этого дня оба предохранителя стояли под ОДНИМ
+    // условием, включавшим `retryCount < 1`, — и этим более грубый насмерть
+    // закрывал более тонкий. Единственный, кто пишет `_fix_chain` в payload
+    // ДЕЙСТВИЯ (`processDiagTask` в lib/self-diag.ts), кладёт на тот же объект
+    // `_retry_count: 1`; значит у любого payload'а с непустой цепочкой внешнее
+    // условие ложно, а у всех, кто до сравнения доходил, цепочка ПУСТА. При
+    // `maxDepth >= 1` (ниже единицы `positiveEnvInt` не пускает) сравнение
+    // `0 >= maxDepth` ложно всегда: ветка была недостижима, `inter_agent_fix.
+    // circuit_breaker` не мог напечататься ни при какой конфигурации, а ручка
+    // INTER_AGENT_FIX_CHAIN_MAX_DEPTH не управляла ничем. Тесты этого не
+    // ловили, потому что кормили диспетчер payload'ами с `_fix_chain` и без
+    // `_retry_count` — формой, которой конвейер не производит.
+    //
+    // Разделено: цепочку меряем независимо от счётчика ретраев, а `retryCount`
+    // по-прежнему ограничивает только ЗАВЕДЕНИЕ новой диаг-задачи. Это два
+    // разных вопроса: «глубоко ли зашла починка» и «не вторая ли это попытка».
+    const diagEligible = !shouldSkipSelfDiag(actionType, res.error) && !diagFlag;
+    const parentChain = getFixChain(p);
+    const maxDepth = getFixChainMaxDepth();
+    if (diagEligible && parentChain.length >= maxDepth) {
+      const finalChain = appendFixChain(
+        parentChain,
+        `diag:${actionType}:circuit_breaker`,
+      );
+      log.error("inter_agent_fix.circuit_breaker", {
+        actionType,
+        chain: finalChain,
+        max_depth: maxDepth,
+        error: res.error,
+      });
+      // Do NOT spawn another diag task. Mark this as a terminal failure.
+      c15Error = `circuit breaker tripped (fix_chain depth ${parentChain.length} >= ${maxDepth}): ${res.error}`;
+    } else if (diagEligible && retryCount < 1) {
+      if (isDiagTaskThrottled(`Tool error: ${actionType}`)) {
         // T-705 throttle: не плодить >5 diag-задач одного типа в час
         // (анти-шторм). Текст ошибки не подменяем — причина та же.
         log.warn("[self-diag] throttled — too many diag tasks for actionType", {
@@ -1464,7 +1512,7 @@ export async function dispatchAndAudit<T extends ActionType>(
         const task = createTask({
           chatId,
           createdBy: ctx.agentKey,
-          assignedTo: "aieng",
+          assignedTo: DIAG_ASSIGNEE,
           title: `Tool error: ${actionType}`,
           description: res.error,
           inputPayload: {
@@ -1857,10 +1905,27 @@ export async function gateOrDispatch<T extends ActionType>(
     ? checkAndConsumeRateLimit(ctx.agentKey, actionType)
     : reserveChat;
   if (!reserve.ok) {
-    // Агентский бакет проиграл гонку уже после того, как чат-слот занят —
-    // вернуть, иначе проигравший всё равно съедает лимит чата.
+    // Чат-слот уже занят, а агентский бакет отказал — отпустить, иначе ход,
+    // которого не было, съедает лимит чата у всех остальных ролей.
+    //
+    // Аудит 2026-09-11 — про эту ветку сразу два уточнения.
+    //
+    // Первое: сегодня она недостижима. Ранняя проверка наверху и эта
+    // резервация считают один и тот же предикат (обе идут в
+    // `evaluateAllBuckets`), между ними нет ни await, ни другого потребителя
+    // агентского бакета — значит отказать здесь, пройдя там, не может. Ветка
+    // остаётся сторожем на случай, когда между проверками появится await или
+    // второй потребитель: тогда она проснётся, и проснуться должна исправной.
+    //
+    // Второе: исправной она не была. Здесь стоял `refundChatRateLimits`, а
+    // его первая строка — выход по `NO_REFUND_ACTIONS`, где лежит
+    // GENERATE_IMAGE. То есть для единственного платного действия комментарий
+    // обещал возврат, которого не происходило. Набор заведён против другого
+    // повода — dispatch СОСТОЯЛСЯ и упал, возможно уже оплатив запрос к
+    // провайдеру; здесь dispatch'а не было вовсе, платить не за что. Разводить
+    // эти два повода и нужна `releaseUnusedChatReservation`.
     if (reserveChat.ok) {
-      refundChatRateLimits(
+      releaseUnusedChatReservation(
         ctx.botId,
         ctx.chatId,
         actionType,

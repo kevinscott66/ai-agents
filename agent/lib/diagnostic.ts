@@ -86,20 +86,26 @@ export const DELEGATION_REFUSALS: readonly string[] = [
   "(all candidates stopped)",
   // handoff вернул `skipped`: цель остановлена уже в воронке (legacy-путь по
   // @-упоминанию) либо исчерпан бюджет вызовов ролей на ход. Оба места —
-  // handoff.ts:299 и :315 — по определению «не запускали», а не «сломалось».
+  // ветка `targetStop` и ветка `budget.n >= budget.max` в handoff.ts — по
+  // определению «не запускали», а не «сломалось» (круг 29: здесь стояли номера
+  // `299` и `:315`, оба протухшие; второй — без имени файла, поэтому его не
+  // видел ни один сторож; теперь видит — см.
+  // audit-2026-09-11-no-line-coords-in-source).
   // Соседний `delegate_failed:` намеренно НЕ здесь: там и настоящий провал.
   "delegate_skipped:",
   // Исходы гейта. Аудит 2026-08-28: список знал отказы самой воронки и ни
   // одного решения гейта — а фан-аут сплита ходит через `gateOrDispatch` и
-  // получает именно их. Тексты собирает `gateRefusalText`
-  // (action-dispatch.ts:1390), вызывающий кладёт их как `<role>: <текст>`
-  // (:864). Все три означают «правила сказали нет» или «не сейчас».
+  // получает именно их. Тексты собирает `gateRefusalText` в
+  // action-dispatch.ts, а вызывающий — ветка SPLIT_TASK в `dispatchAction` —
+  // кладёт их как `<role>: <текст>`. Все три означают «правила сказали нет»
+  // или «не сейчас».
   //
   // Дороже всех обходился `pending_approval:`: при autonomy=manual его
   // возвращает КАЖДОЕ делегирование (DELEGATE_TO_ROLE не в
-  // LOW_FRICTION_ACTIONS, ветка manual отвечает approval безусловно —
-  // permissions.ts:929). Детей ноль, сплит отвечает `split failed: no roles
-  // accepted the task (…)`, и на каждый сплит на доску падали две задачи с
+  // LOW_FRICTION_ACTIONS, ветка `mode === "manual"` в `evaluateGate`
+  // (permissions.ts) отвечает approval безусловно). Детей ноль, сплит отвечает
+  // `split failed: no roles accepted the task (…)`, и на каждый сплит на доску
+  // падали две задачи с
   // просьбой починить сработавший гейт. Под semi_auto то же с `forbidden:`,
   // причём `categorizeError` раскладывал его в permission_denied и уводил на
   // perm.
@@ -110,7 +116,8 @@ export const DELEGATION_REFUSALS: readonly string[] = [
   "pending_approval:",
   "rate_limited:",
   "forbidden:",
-  // Прямое делегирование под отменённого родителя (action-dispatch.ts:568).
+  // Прямое делегирование под отменённого родителя: отказ
+  // `parent task is cancelled` в action-dispatch.ts.
   // Текст сам говорит агенту, что делать вместо этого. Соседний `parent task
   // not found:` намеренно НЕ здесь: отменённая задача есть, ненайденной нет —
   // это висячая ссылка, то есть поломка.
@@ -304,8 +311,8 @@ export function categorizeError(error: string | null | undefined): ErrorCategory
 }
 
 /**
- * Регэксп агрегирующей обёртки сплита. Пишет её action-dispatch.ts:889,
- * читают отсюда двое: isByDesignRefusal и categorizeAggregateError.
+ * Регэксп агрегирующей обёртки сплита. Пишет её ветка `SPLIT_TASK`
+ * в action-dispatch.ts, читают отсюда двое: isByDesignRefusal и categorizeAggregateError.
  */
 const SPLIT_AGGREGATE_RE = /^split failed: no roles accepted the task \((.*)\)$/s;
 
@@ -340,7 +347,8 @@ const CATEGORY_PRIORITY: readonly ErrorCategory[] = [
  * Аудит 2026-08-28: класс сбоя определялся по склейке, а не по сегментам.
  *
  * `res.error` у SPLIT_TASK и у фан-аута DELEGATE_TO_ROLE — это N сегментов
- * `role: причина`, склеенных `"; "` (action-dispatch.ts:873 и :889).
+ * `role: причина`, склеенных `joinDelegationErrors` (обе ветки —
+ * в `dispatchAction`, action-dispatch.ts).
  * `categorizeError` — регэкспы по всей строке, и порядок проверок в нём решал,
  * кто победит. Один сегмент с 429 делал `rate_limited` всю сводку: дальше
  * createDiagnosticTask отвечал `deferred_rate_limited` («ретраи разберутся»),
@@ -532,8 +540,15 @@ export function findExistingDiagnostic(
 /**
  * Create an auto-diagnostic task for a failed action. See module docstring.
  *
- * Idempotent: returns the existing-task path with skippedReason='duplicate'
- * if a live (non-terminal) diag for the same (action, category) pair exists.
+ * Аудит 2026-09-11: здесь стояло «Idempotent: … skippedReason='duplicate'»,
+ * и это обещание в проде не выполняется ни разу. Дедуп ключуется на
+ * `failedActionId`, а живой вызывающий берёт его из logAction — свежий
+ * `crypto.randomUUID()` на каждый вызов, совпасть пара не может в принципе
+ * (разбор — в шапке модуля и у самого дедупа ниже). Ветка `'duplicate'`
+ * достижима только для вызывающего, который ПЕРЕДАЛ устойчивый id: сейчас
+ * такой один — тесты. Единственная реальная граница потока — троттл
+ * `isDiagTaskThrottled` по title, и снимать его «как дублирующую защиту»
+ * нельзя.
  */
 export function createDiagnosticTask(
   input: CreateDiagnosticTaskInput,
@@ -551,10 +566,11 @@ export function createDiagnosticTask(
   // отдают ровно `rate_limited` и `network` (pickResponsibleRole), а обе
   // категории уже вернулись выше со своими причинами. Оставлено намеренно:
   // это последний рубеж, если в ErrorCategory добавят имя и забудут строку в
-  // pickResponsibleRole. Соседний вызывающий (dispatch/diagnostic-action.ts:
-  // 205-218) сознательно устроен наоборот — там условие ровно `!responsible`,
-  // без перечисления категорий; расхождение здесь не случайно: там нужен один
-  // отказ, здесь — разные `skippedReason` для разных причин.
+  // pickResponsibleRole. Соседний вызывающий (`handleCreateDiagnosticTask` в
+  // dispatch/diagnostic-action.ts) сознательно устроен наоборот — там условие
+  // ровно `!responsible`, без перечисления категорий; расхождение не
+  // случайно: там нужен один отказ, здесь — разные `skippedReason` для
+  // разных причин.
   if (!responsible) {
     return { task: null, category, skippedReason: "no_role" };
   }

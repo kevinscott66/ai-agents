@@ -37,7 +37,7 @@ const REQUEST_TIMEOUT_MS = 5000;
  * NODE_ENV. Настоящая экспортированная переменная бьёт дефолт bun'а —
  * `NODE_ENV=production bun test` давал NODE_ENV === "production", и гейт
  * снимался целиком. А ставить NODE_ENV=production на сервере предписывает
- * `.env.example:83`, и держат оба unit-файла; `set -a; . /opt/agent-team/.env`
+ * строка `NODE_ENV=` в `.env.example`, и держат оба unit-файла; `set -a; . /opt/agent-team/.env`
  * экспортирует его вместе с боевыми SITE_INGEST_URL/TOKEN. Это ровно условия
  * T-743, восстановленные одной переменной. Признак теперь ставит preload
  * тест-раннера — см. test-run-marker.ts.
@@ -153,7 +153,7 @@ function isScaffoldLine(line: string): boolean {
  * хода. Обе ветки теперь смотрят на один и тот же набор строк.
  *
  * Аудит 2026-09-11: у поста два заголовка, и второй жил своей копией этой
- * функции — `deriveBannerTitle` в dispatch/publish.ts, с телом ДО правки
+ * функции — deriveBannerTitle в dispatch/publish.ts, с телом ДО правки
  * 2026-08-20 и без снятия ссылок (2026-08-28). Тот же футер уезжал уже не в
  * запись на сайте, а в PNG-обложку публичного поста — и вот там обратного
  * хода нет совсем, картинку не переингестишь. Копию убрали, длину вынесли в
@@ -197,7 +197,8 @@ export function deriveTitle(text: string, maxLen = 120): string {
  * дополнительно снимает markdown-ссылки, срезает ведущую не-букву и режет по
  * 120 символам. Из-за этого строка заголовка почти никогда не совпадала сама с
  * собой и уезжала в summary второй раз. Спасал только `isScaffoldLine`, а он
- * знает ровно 📰 и 🗓 — тогда как tools-schema.ts:322 выдаёт модели всю палитру
+ * знает ровно 📰 и 🗓 — тогда как описание PUBLISH_TO_CHANNEL
+ * (lib/tools-schema.ts) выдаёт модели всю палитру
  * (🤑📰🗓️✅🤩🙌😮❌💰🔥👉👇⭐️😎) и просит выбирать по смыслу. Пост,
  * начинающийся с `🔥 **Web3 Пульс за 27 августа**`, давал на delabs.space
  * карточку, описание которой начинается с её же заголовка. Уходит это в
@@ -271,7 +272,8 @@ export function parseDigestPost(postText: string): ParsedDigest {
   //
   // Аудит 2026-08-28: границей была первая строка СО ССЫЛКОЙ, а в домашнем
   // формате пункт начинается заголовком на своей строке, и ссылка приходит
-  // строкой-двумя ниже (tools-schema.ts:332 просит 2-3 строки описания под
+  // строкой-двумя ниже (шаблон «Дайджест/сводка» в описании
+  // PUBLISH_TO_CHANNEL, lib/tools-schema.ts, просит 2-3 строки описания под
   // каждым заголовком). В итоге заголовки пунктов уезжали в описание карточки:
   // buildActivityRunText давал summary «Что стоит сделать прямо сейчас — по
   // шагам и без воды. 🔥 Monad», а buildWeeklyRecapText — «…Что произошло и что
@@ -360,6 +362,31 @@ function rememberSent(key: string, now: number): void {
   }
 }
 
+/**
+ * Настройки моста на сайт: обе переменные или ничего.
+ *
+ * Аудит 2026-09-11: читались как есть, а `EnvironmentFile=` для строки `KEY=`
+ * кладёт ПУСТУЮ строку. Пустую проверка `!url || !token` ловила, а значение из
+ * одних пробелов — нет: оно истинно, мост считает себя настроенным и уходит
+ * слать POST по адресу с пробелом. Наружу это выглядит сетевым сбоем — то есть
+ * неотличимо от «сайт не ответил».
+ *
+ * Схему проверяем здесь же, а не у потребителя, по разбору из lib/delabs-env.ts:
+ * адрес без `http(s)://` — это относительный fetch, который бросает, и та же
+ * неотличимая «сетевая» ошибка. Мост, настроенный наполовину, должен считаться
+ * выключенным и сказать об этом в лог, иначе опечатка в .env невидима.
+ */
+export function siteIngestConfig(): { url: string; token: string } | null {
+  const url = process.env.SITE_INGEST_URL?.trim() || "";
+  const token = process.env.SITE_INGEST_TOKEN?.trim() || "";
+  if (!url || !token) return null;
+  if (!/^https?:\/\/[^\s/]+/i.test(url)) {
+    log.warn("[site-ingest] SITE_INGEST_URL без схемы — мост выключен", { url });
+    return null;
+  }
+  return { url, token };
+}
+
 /** Тест-хук: забыть, что уже отправляли. */
 export function _resetIngestDedup(): void {
   sentAt.clear();
@@ -389,10 +416,10 @@ export async function ingestDigestToSite(
   // Раньше всего остального: под тестами мост закрыт (см. ingestBlockedByTestRun).
   if (ingestBlockedByTestRun()) return;
 
-  const url = process.env.SITE_INGEST_URL;
-  const token = process.env.SITE_INGEST_TOKEN;
-  // Bridge OFF by default.
-  if (!url || !token) return;
+  // Bridge OFF by default — см. siteIngestConfig.
+  const cfg = siteIngestConfig();
+  if (!cfg) return;
+  const { url, token } = cfg;
 
   // Аудит 2026-08-12: канала в сигнатуре не было вовсе, а публиковать
   // PUBLISH_TO_CHANNEL разрешает в ЛЮБОЙ канал из реестра team_channels —

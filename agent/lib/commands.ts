@@ -58,7 +58,10 @@ export type TelegramResolver = (agentKey: string) => Telegram | undefined;
  * Всё, что путь апрува обязан донести до dispatch помимо самой заявки.
  *
  * Аудит 2026-08-12: ctx собирался из трёх полей — `{ agentKey, chatId,
- * telegram }`, — тогда как `gateOrDispatch` получает одиннадцать. Замер (заявка
+ * telegram }`, — тогда как `gateOrDispatch` получает весь `DispatchCtx`.
+ * Числа здесь нет намеренно: в 2026-08-12 полей было одиннадцать, к
+ * 2026-09-11 стало восемнадцать, и копия счёта разъедется снова — считать
+ * обязан тип, а не проза. Замер (заявка
  * DELEGATE_TO_ROLE от orchestrator, права выданы, владелец нажал Approve):
  *
  *   DELEGATE_TO_ROLE бросил: no resolveAgent in dispatch ctx
@@ -148,10 +151,11 @@ export function isAutonomyMode(s: string): s is AutonomyMode {
 /**
  * Отказ ДО диспатча: строку действия закрываем сами.
  *
- * Аудит 2026-09-11. `executeApproved` может отказать четырьмя способами, и три
- * из них срабатывают ДО `dispatchAndAudit`: протухший TTL заявки, вызывающий,
+ * Аудит 2026-09-11. `executeApproved` может отказать пятью способами, и четыре
+ * из них срабатывают ДО `dispatchAndAudit`: тип действия, которого в коде уже
+ * нет (заявка пережила переименование), протухший TTL заявки, вызывающий,
  * которому этот тип действия не положен, и deny-гейт, появившийся между
- * созданием заявки и нажатием «Approve». В этих трёх случаях второй строки в
+ * созданием заявки и нажатием «Approve». В этих четырёх случаях второй строки в
  * `agent_actions` не заводится вовсе — а первая, заведённая гейтом в
  * `pending_approval`, так и остаётся ждать решения, которое уже принято.
  * Санитары мимо: `expireStaleApprovals` смотрит на `approvals.status='pending'`
@@ -160,12 +164,12 @@ export function isAutonomyMode(s: string): s is AutonomyMode {
  * который читает сама модель, и в метрике `agent_actions_recent`.
  *
  * Обещание «dispatchAndAudit уже записал status='error'» стояло в обоих
- * вызывающих (`cmdApprove` ниже и Mini App) и для этих трёх путей было
+ * вызывающих (`cmdApprove` ниже и Mini App) и для этих четырёх путей было
  * неправдой: до `dispatchAndAudit` управление не доходило.
  *
  * `forbidden` — тот же статус и тот же смысл, что у отказа человека и у
  * протухшей заявки (докблок `closeGatedActionRow`): наружу не ушло, потому что
- * не разрешили. Четвёртый способ отказать — провал самого диспатча — сюда не
+ * не разрешили. Пятый способ отказать — провал самого диспатча — сюда не
  * заходит: у него своя пара строк с тем же `request_id`, и переписывать здесь
  * ещё и первую значило бы посчитать один ход дважды.
  */
@@ -180,7 +184,11 @@ export async function executeApproved(
 ): Promise<unknown> {
   const byAgent = approval.requested_by;
   if (!isActionType(approval.action_type)) {
-    throw new Error(`unknown action_type: ${approval.action_type}`);
+    // Не «не может случиться»: тип пишется в заявку при создании, а читается
+    // при нажатии — между этими двумя моментами тип успевают переименовать или
+    // убрать. Закрываем строку так же, как остальные отказы до диспатча,
+    // иначе она останется «ждёт аппрув» навсегда.
+    failBeforeDispatch(approval, `unknown action_type: ${approval.action_type}`);
   }
   const actionType = approval.action_type as ActionType;
   // Аудит 2026-08-12: возраст заявки не проверялся нигде. Санитар в db-maint
@@ -242,10 +250,10 @@ export async function executeApproved(
   // Аудит 2026-08-13: бакет «этот бот в этом чате» тратился не тем ботом или
   // не тратился вовсе. Вызов в Telegram делает бот запросившего агента —
   // `deps.resolveTg?.(byAgent)` строкой ниже. А сюда приходило: с
-  // Telegram-пути — id ОРКЕСТРАТОРА (`orchestrator-team.ts:86`, там регается
+  // Telegram-пути — id ОРКЕСТРАТОРА (там, в `orchestrator-team.ts`, регается
   // /approve), с Mini App — `undefined`, и `checkPerBotPerChatRateLimit` на
-  // undefined молча отвечает «ок» (`rate-limits.ts:312`). То есть очередь
-  // одобрений не трогала бакет отправителя ни на одном из двух путей — ровно
+  // undefined молча отвечает «ок» (ранний выход в `rate-limits.ts`). То есть
+  // очередь одобрений не трогала бакет отправителя ни на одном из двух путей — ровно
   // та дыра, которую комментарий выше считает закрытой. Берём бота по агенту,
   // deps.botId остаётся запасным вариантом.
   const execBotId = deps.resolveAgent?.(byAgent)?.id ?? deps.botId;
@@ -284,7 +292,7 @@ export async function executeApproved(
     // Как в gateOrDispatch: неудавшийся диспатч не должен съедать лимит.
     //
     // Аудит 2026-08-28: «как в gateOrDispatch» было неправдой ровно в одном
-    // месте. Там (`action-dispatch.ts:1686`) стоит `if (res.sideEffect)
+    // месте. Там (`gateOrDispatch` в action-dispatch.ts) стоит `if (res.sideEffect)
     // refundNeeded = false;` — провал, уже оставивший след снаружи, не
     // рефандится. Частичная доставка (`sendChunked` бросает после k из N
     // частей) приходит сюда обычным `!ok` с `sideEffect: true`, и рефанд
@@ -339,8 +347,11 @@ export async function cmdApprove(args: {
     await executeApproved(approved, args.deps ?? {});
   } catch (e) {
     // Строку действия закрыл тот, кто отказал: `dispatchAndAudit` пишет свою
-    // пару `attempted` → `error`, а три отказа ДО него — `failBeforeDispatch`
+    // пару `attempted` → `error`, а отказы ДО него — `failBeforeDispatch`
     // (аудит 2026-09-11). Прежний комментарий обещал первое на все случаи.
+    // Числа отказов тут не называем: их четыре, но каждый новый ранний выход
+    // добавляет пятый, а прозу поправить забудут — смотри вызовы
+    // `failBeforeDispatch` выше.
     const msg = (e as Error).message;
     // Аудит 2026-08-07: сообщение в чат — единственный след провала, если не
     // пометить строку. Иначе апрув навсегда остаётся `approved`, и потом не
@@ -400,8 +411,9 @@ export function cmdReject(args: {
 }
 
 export function cmdTasks(args: { chatId: number; agentKey?: string }): string {
-  // Аудит 2026-08-27: параметр был, а звать его было некому — обработчик в
-  // admin-commands.ts:104 глотал аргументы (`_args`) и всегда звал без роли.
+  // Аудит 2026-08-27: параметр был, а звать его было некому — обработчик
+  // `tasks` в `ADMIN_COMMANDS` (admin-commands.ts) глотал аргументы (`_args`)
+  // и всегда звал без роли.
   // `/tasks smm` печатал ВЕСЬ чат под заголовком, который человек читает как
   // «задачи smm»: список ролевой на вид, общий по сути. Молчаливое расширение
   // выборки хуже отказа — по нему делают вывод «у smm семь задач».
@@ -529,9 +541,9 @@ export function cmdGrant(args: {
     return `Неизвестный mode: ${mode}. Допустимо: auto | approval`;
   }
   // Аудит 2026-08-27: два статических рубежа стоят ВЫШЕ таблицы permissions —
-  // `checkPermission` отвечает `deny` по ним ещё до чтения строки
-  // (permissions.ts:735 и :760). То есть `/grant smm GENERATE_IMAGE auto`
-  // писал строку, рапортовал «права обновлены» и не менял НИЧЕГО: владелец
+  // `evaluateGate` отвечает `deny` по ним ещё до чтения строки
+  // (`CALLER_RESTRICTED` и `ROLE_EXPOSED_TOOLS` в permissions.ts). То есть
+  // `/grant smm GENERATE_IMAGE auto` писал строку, рапортовал «права обновлены» и не менял НИЧЕГО: владелец
   // считал, что выдал доступ, агент продолжал получать отказ, и разбирались с
   // этим по логам гейта. Строка при этом оставалась в БД и всплывала в
   // `/perms` как выданное право. Обе карты — решения владельца в КОДЕ, из чата
@@ -618,7 +630,7 @@ export function cmdPerms(args: { args: string[] }): string {
           ? "approval"
           : "auto";
     // Аудит 2026-08-27: таблица — не последнее слово. Гейт сначала смотрит
-    // CALLER_RESTRICTED и ROLE_EXPOSED_TOOLS (permissions.ts:735, :760), и
+    // CALLER_RESTRICTED и ROLE_EXPOSED_TOOLS (обе карты — в permissions.ts), и
     // строка `allowed=1` под ними мертва. Миграция 010 засеяла GENERATE_IMAGE
     // всем 12 ролям — `/perms` показывал двенадцать «auto» на инструменте,
     // который выдан двоим. Отчёт о правах, расходящийся с гейтом, хуже

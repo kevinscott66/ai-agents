@@ -17,6 +17,7 @@ import {
   type GhRunner,
   type GhRunResult,
 } from "../lib/dispatch/github.ts";
+import { TRUSTED_PR_IDENTITY } from "./helpers/pr-view-fixture.ts";
 
 const ORCH = { agentKey: "orchestrator", chatId: -1 };
 
@@ -44,6 +45,7 @@ describe("REVIEW_AND_MERGE_PR: усечённый список файлов", ()
     const { runGh, calls } = fakeGh({
       "pr view": {
         stdout: JSON.stringify({
+          ...TRUSTED_PR_IDENTITY,
           state: "OPEN",
           mergeable: "MERGEABLE",
           changedFiles: 120,
@@ -65,6 +67,7 @@ describe("REVIEW_AND_MERGE_PR: усечённый список файлов", ()
     const { runGh, calls } = fakeGh({
       "pr view": {
         stdout: JSON.stringify({
+          ...TRUSTED_PR_IDENTITY,
           state: "OPEN",
           mergeable: "MERGEABLE",
           changedFiles: 101,
@@ -83,6 +86,7 @@ describe("REVIEW_AND_MERGE_PR: усечённый список файлов", ()
     const { runGh, calls } = fakeGh({
       "pr view": {
         stdout: JSON.stringify({
+          ...TRUSTED_PR_IDENTITY,
           state: "OPEN",
           mergeable: "MERGEABLE",
           changedFiles: 100,
@@ -101,6 +105,7 @@ describe("REVIEW_AND_MERGE_PR: усечённый список файлов", ()
     const { runGh, calls } = fakeGh({
       "pr view": {
         stdout: JSON.stringify({
+          ...TRUSTED_PR_IDENTITY,
           state: "OPEN",
           mergeable: "MERGEABLE",
           files: [{ path: "docs/readme.md" }],
@@ -115,7 +120,7 @@ describe("REVIEW_AND_MERGE_PR: усечённый список файлов", ()
   test("changedFiles запрашивается у gh — иначе усечение необнаружимо", async () => {
     const { runGh, calls } = fakeGh({
       "pr view": {
-        stdout: JSON.stringify({ state: "OPEN", mergeable: "MERGEABLE", files: [] }),
+        stdout: JSON.stringify({ ...TRUSTED_PR_IDENTITY, state: "OPEN", mergeable: "MERGEABLE", files: [] }),
       },
     });
     await handleReviewAndMergePr({ pr_number: 11 }, ORCH, { runGh, authority: "approved-action" });
@@ -129,6 +134,7 @@ describe("REVIEW_AND_MERGE_PR: risky-PR без комментария не от�
     const { runGh } = fakeGh({
       "pr view": {
         stdout: JSON.stringify({
+          ...TRUSTED_PR_IDENTITY,
           state: "OPEN",
           mergeable: "MERGEABLE",
           changedFiles: 1,

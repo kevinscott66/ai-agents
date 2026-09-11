@@ -2,9 +2,15 @@
  * T-320: Background-service wiring extracted from main() in orchestrator-team.ts.
  *
  * startBackgroundServices() starts all background services (watchdog, health,
- * miniapp, self-diag, backup, digest, db-maint, userbot, mac-bridge) and returns
- * a handle whose stop() tears them all down (except bots and process.exit, which
- * stay in main's own signal handler).
+ * miniapp, self-diag, backup, digest, db-maint, userbot, userbot-router,
+ * mac-bridge) and returns a handle whose stop() tears them all down (except
+ * bots and process.exit, which stay in main's own signal handler).
+ *
+ * Аудит 2026-09-11: роутера юзерботов (`buildUserbotRouter`/`setUserbotRouter`)
+ * в списке не было. Ищущий, кто на старте поднимает MTProto-сессии ролей (T-401),
+ * решал по этому перечню, что файл про них не знает, и заводил второй
+ * источник — при живом singleton это подмена личности в исходящих, то есть
+ * ровно то, что T-401 запрещает.
  */
 import Anthropic from "@anthropic-ai/sdk";
 import { dirname } from "node:path";
@@ -69,10 +75,27 @@ export interface BackgroundServicesHandle {
  * `undefined` (переменная не задана) возвращаем как есть — у каждого шедулера
  * свой дефолт, и подменять его здесь значило бы держать вторую копию.
  *
- * Санитайзер стоит здесь, а не внутри шедулеров: services.ts — единственное
- * место, где env вообще читается, остальные вызовы передают литералы. Исключение
- * — digest и db-maint: там негодное значение ломает не частоту, а смысл (окно
- * часа, граница архивации), поэтому проверка живёт внутри них.
+ * Санитайзер стоит здесь, а не внутри шедулеров: почти все вызовы шедулеров
+ * передают литералы, и разбор env собран в этом файле.
+ *
+ * Аудит 2026-09-11: здесь стояло «services.ts — единственное место, где env
+ * вообще читается». Это неправда дважды, и оба контрпримера рядом.
+ * `parseMessagesRetentionDays` (db-maint.ts) читает `MESSAGES_RETENTION_DAYS`
+ * сама, дефолтным значением параметра, и вызывается через `gcMessages` из
+ * шедулера, который поднимает как раз этот файл. А блок `DB_MAINT_ENABLED`
+ * ниже до той же правки обходил этот санитайзер тернарником
+ * `process.env.X ? Number(process.env.X) : def` — буквально формой, разобранной
+ * тремя абзацами выше как баг. Утверждение было основанием НЕ ставить
+ * санитайзеры внутрь шедулеров, и, оставшись ложным, приглашало следующего
+ * автора завести env-чтение мимо этой функции.
+ *
+ * Это не значит, что внутри шедулеров проверок нет: `sanitizeHourUTC` (digest.ts)
+ * и `sanitizeMaintOpt` (db-maint.ts) стоят на своих местах и стерегут значение,
+ * пришедшее литералом. Но env-вход у DIGEST_HOUR_UTC / DB_MAINT_HOUR_UTC
+ * разбирает всё-таки этот файл — соседней `_envHour`, а не этой функцией: час
+ * законно бывает нулём, и «не задано» от «задан ноль» отличимо только до
+ * `Number()`. Почему обоих санитайзеров внутри шедулеров для этого мало —
+ * в докблоке `_envHour` ниже.
  */
 
 export function _envPositiveInt(
@@ -103,13 +126,13 @@ export function _envPositiveInt(
  * systemd `EnvironmentFile=` отдаёт строку `KEY=` как ПУСТУЮ СТРОКУ, а не как
  * отсутствие ключа, а `KEY= ` (случайный пробел после `=`, глазом не видный) —
  * как `" "`. Пустая строка falsy, и её тернарник переживал. Пробел truthy, и
- * `Number(" ")` — ноль. Ноль проходит и `sanitizeHourUTC` (digest.ts:285), и
- * `sanitizeMaintOpt` (db-maint.ts:979): у обоих нижняя граница 0, оба молчат.
+ * `Number(" ")` — ноль. Ноль проходит и `sanitizeHourUTC` (digest.ts), и
+ * `sanitizeMaintOpt` (db-maint.ts): у обоих нижняя граница 0, оба молчат.
  *
  * Итог: дайджест команды и суточное обслуживание БД (archive + VACUUM) молча
  * переезжают на 00:00 UTC с 06:00 и 04:00 — из-за пробела в конфиге и без
- * единой строки в логе. Прецедент того же класса уже исправлен в
- * lib/alerting.ts:79-95 (`envInt` с `.trim()`).
+ * единой строки в логе. Прецедент того же класса уже исправлен в `envInt`
+ * (lib/alerting.ts) — там тоже `.trim()` перед `Number()`.
  *
  * Соседние `_envPositiveInt`/`_envPort` этой дырой не страдают: у них ноль
  * негодное значение, `" "` до них доезжает как 0 и честно уходит в warn.
@@ -138,7 +161,7 @@ const MAX_PORT = 65535;
  * — никакая: `MINIAPP_PORT=87878` (лишняя цифра в 8787) проходит проверку
  * целиком. Bun при этом НЕ бросает, а молча зажимает значение в 65535
  * (проверено на рантайме проекта: 70000, 65536, 131072 и 1e10 — все дают
- * `server.port === 65535`). В логе бодрое «Mini App backend on :87878», nginx
+ * `server.port === 65535`). В логе бодрое «Mini App backend on `:87878`», nginx
  * стучится в 8787 и не находит никого.
  *
  * Ровно та же дыра, что была у MAC_BRIDGE_PORT до аудита 2026-08-08, и лечится
@@ -336,9 +359,12 @@ export async function startBackgroundServices(
     try {
       maint = startMaintScheduler({
         dailyHourUTC: _envHour("DB_MAINT_HOUR_UTC", 4),
-        archiveDays: process.env.DB_MAINT_ARCHIVE_DAYS
-          ? Number(process.env.DB_MAINT_ARCHIVE_DAYS)
-          : 30,
+        // Через `_envPositiveInt`, а не тернарником с `Number()`: последний
+        // отдаёт NaN на опечатке вроде `3O`. Здесь его ловит `sanitizeMaintOpt`
+        // (db-maint.ts), то есть провала не было, — но форма ровно та, что
+        // разобрана как баг в докблоке `_envPositiveInt`, и держать её в
+        // двадцати строках от него значит приглашать скопировать.
+        archiveDays: _envPositiveInt("DB_MAINT_ARCHIVE_DAYS", 30),
       });
     } catch (e) {
       log.error("[db-maint] failed to start", { error: String(e) });
