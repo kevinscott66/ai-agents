@@ -28,6 +28,7 @@ import {
   createTask,
   failTask,
   updateTaskStatus,
+  DIAG_ASSIGNEE,
   type Task,
 } from "./tasks.ts";
 import { dispatchAndAudit } from "./action-dispatch.ts";
@@ -426,13 +427,13 @@ export function recoverStrandedDiagTasks(
   const rows = db
     .prepare(
       `SELECT id, input FROM tasks
-       WHERE assigned_to = 'aieng' AND status = 'running'
+       WHERE assigned_to = ? AND status = 'running'
          AND input LIKE '%"_diag":true%'
          AND updated_at < ?
        ORDER BY updated_at ASC
        LIMIT 20`,
     )
-    .all(cutoff) as Array<{ id: string; input: string | null }>;
+    .all(DIAG_ASSIGNEE, cutoff) as Array<{ id: string; input: string | null }>;
 
   const out: RecoverStrandedResult = { requeued: [], failed: [] };
   for (const row of rows) {
@@ -521,12 +522,12 @@ function listPendingDiagTasks(limit = 5): Task[] {
   const rows = db
     .prepare(
       `SELECT * FROM tasks
-       WHERE assigned_to = 'aieng' AND status = 'pending'
+       WHERE assigned_to = ? AND status = 'pending'
          AND input LIKE '%"_diag":true%'
        ORDER BY priority DESC, created_at ASC, rowid ASC
        LIMIT ?`,
     )
-    .all(limit) as Array<{
+    .all(DIAG_ASSIGNEE, limit) as Array<{
       id: string;
       parent_id: string | null;
       depth: number;

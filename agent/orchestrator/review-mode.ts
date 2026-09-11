@@ -324,7 +324,15 @@ export async function runReviewMode(deps: ReviewModeDeps = {}): Promise<ReviewMo
   };
 }
 
-/** Renders a review pass as a Markdown block for the STATUS.md "Control loop" section. */
+/**
+ * Проход ревью как Markdown-блок.
+ *
+ * Аудит 2026-09-11, круг 51: здесь было сказано «for the STATUS.md "Control
+ * loop" section». Файла STATUS.md в дереве нет; единственный вызывающий —
+ * `agent.ts` в режиме review — печатает результат в stdout, откуда его
+ * забирает внешний сборщик статуса. Обещание «вот куда это попадёт» было
+ * ложным адресом: пошедший править вёрстку искал бы несуществующий файл.
+ */
 export function formatReviewSummary(result: ReviewModeResult, isoTimestamp: string): string {
   const lines: string[] = [];
   lines.push(`## Control loop — ${isoTimestamp}`);

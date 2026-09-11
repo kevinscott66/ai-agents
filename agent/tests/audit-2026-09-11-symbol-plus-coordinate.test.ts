@@ -22,10 +22,9 @@
  * и это по-прежнему стережёт tests/audit-2026-09-11-stale-line-coordinates.
  */
 import { test, expect, describe } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
-
-const ROOTS = ["lib", "orchestrator", "tests", "tools", "mac-daemon", "miniapp/src"];
+import { readFileSync } from "node:fs";
+// Корни и обход — одни на четыре докблок-сторожа, см. докблок хелпера.
+import { gateFiles } from "./helpers/docblock-gate-scope.ts";
 
 /**
  * Имя в обратных кавычках, сразу за ним — скобка с координатой.
@@ -49,18 +48,6 @@ const SYMBOL_THEN_COORD =
 /** Дефект — врущий комментарий; в коде такая строка это фикстура. */
 const COMMENT_LINE = /^\s*(\/\/|\*|\/\*)/;
 
-function walk(dir: string, out: string[] = []): string[] {
-  for (const e of readdirSync(dir)) {
-    if (e === "node_modules" || e === "dist" || e.startsWith(".")) continue;
-    // `fixtures` — данные, а не контракт: там связка лежит НАРОЧНО, как образец
-    // дефекта для проверки ниже. Ровно та же оговорка, что и про COMMENT_LINE.
-    if (e === "fixtures") continue;
-    const p = join(dir, e);
-    if (statSync(p).isDirectory()) walk(p, out);
-    else if (p.endsWith(".ts") || p.endsWith(".tsx")) out.push(p);
-  }
-  return out;
-}
 
 /**
  * Связные куски комментария: `{ text, line }` на каждый идущий подряд блок.
@@ -103,12 +90,10 @@ function commentBlocks(file: string): { text: string; line: number }[] {
 describe("имя символа и номер строки не ходят парой", () => {
   test("после имени в кавычках не стоит координата", () => {
     const found: string[] = [];
-    for (const root of ROOTS) {
-      for (const file of walk(root)) {
-        for (const { text, line } of commentBlocks(file)) {
-          const m = text.match(SYMBOL_THEN_COORD);
-          if (m) found.push(`${file}:${line} → ${m[0]}`);
-        }
+    for (const file of gateFiles({ skipFixtures: true })) {
+      for (const { text, line } of commentBlocks(file)) {
+        const m = text.match(SYMBOL_THEN_COORD);
+        if (m) found.push(`${file}:${line} → ${m[0]}`);
       }
     }
     expect(found).toEqual([]);

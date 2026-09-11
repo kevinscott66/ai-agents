@@ -540,8 +540,15 @@ export function findExistingDiagnostic(
 /**
  * Create an auto-diagnostic task for a failed action. See module docstring.
  *
- * Idempotent: returns the existing-task path with skippedReason='duplicate'
- * if a live (non-terminal) diag for the same (action, category) pair exists.
+ * Аудит 2026-09-11: здесь стояло «Idempotent: … skippedReason='duplicate'»,
+ * и это обещание в проде не выполняется ни разу. Дедуп ключуется на
+ * `failedActionId`, а живой вызывающий берёт его из logAction — свежий
+ * `crypto.randomUUID()` на каждый вызов, совпасть пара не может в принципе
+ * (разбор — в шапке модуля и у самого дедупа ниже). Ветка `'duplicate'`
+ * достижима только для вызывающего, который ПЕРЕДАЛ устойчивый id: сейчас
+ * такой один — тесты. Единственная реальная граница потока — троттл
+ * `isDiagTaskThrottled` по title, и снимать его «как дублирующую защиту»
+ * нельзя.
  */
 export function createDiagnosticTask(
   input: CreateDiagnosticTaskInput,
@@ -559,10 +566,11 @@ export function createDiagnosticTask(
   // отдают ровно `rate_limited` и `network` (pickResponsibleRole), а обе
   // категории уже вернулись выше со своими причинами. Оставлено намеренно:
   // это последний рубеж, если в ErrorCategory добавят имя и забудут строку в
-  // pickResponsibleRole. Соседний вызывающий (dispatch/diagnostic-action.ts:
-  // 205-218) сознательно устроен наоборот — там условие ровно `!responsible`,
-  // без перечисления категорий; расхождение здесь не случайно: там нужен один
-  // отказ, здесь — разные `skippedReason` для разных причин.
+  // pickResponsibleRole. Соседний вызывающий (`handleCreateDiagnosticTask` в
+  // dispatch/diagnostic-action.ts) сознательно устроен наоборот — там условие
+  // ровно `!responsible`, без перечисления категорий; расхождение не
+  // случайно: там нужен один отказ, здесь — разные `skippedReason` для
+  // разных причин.
   if (!responsible) {
     return { task: null, category, skippedReason: "no_role" };
   }

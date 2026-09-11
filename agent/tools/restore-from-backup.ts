@@ -4,7 +4,7 @@
  * 
  * Performs a complete restore drill to verify backup integrity:
  * 1. Finds latest backup files in specified backup directory
- * 2. Restores database snapshot to test location (/tmp/restore-test/)
+ * 2. Restores database snapshot to a fresh temp dir (`restore-test-<ts>` в os.tmpdir())
  * 3. Extracts memory wiki backup to test location
  * 4. Verifies data integrity by comparing row counts and file structure
  * 5. Cleans up test data after verification

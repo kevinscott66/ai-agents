@@ -64,7 +64,11 @@ describe("задача самопочинки адресована aieng", () =>
     const raw = JSON.stringify(getTask(t.id)?.input);
     expect(raw).toContain('"_diag":true');
     const src = readFileSync(new URL("../lib/self-diag.ts", import.meta.url), "utf-8");
-    expect(src).toContain(`assigned_to = 'aieng'`);
+    // Круг 51: имя исполнителя уехало в DIAG_ASSIGNEE (lib/tasks.ts) и
+    // связывается параметром — литерала в SQL больше нет и быть не должно,
+    // см. tests/audit-2026-09-11-diag-assignee-single-source.test.ts.
+    expect(src).toContain(`assigned_to = ?`);
+    expect(src).toContain(`.all(DIAG_ASSIGNEE, `);
     expect(src).toContain(`"_diag":true`);
   });
 

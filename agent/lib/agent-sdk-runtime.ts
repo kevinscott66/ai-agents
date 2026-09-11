@@ -308,13 +308,19 @@ export async function* singleUserMessage(content: any[]): AsyncGenerator<any> {
  * Аудит 2026-08-28: `enum` терялся. Raw-путь отдаёт модели `input_schema` как
  * есть, а SDK-путь пересобирает схему в zod — и всякий `enum: [...]` схлопывался
  * в `z.string()`. Модель на проде (USE_AGENT_SDK=true) не видела допустимых
- * значений ни у одного из пятнадцати мест: `role` у ASSIGN_TASK и
+ * значений ни в одном месте, где схема их перечисляет: `role` у ASSIGN_TASK и
  * DELEGATE_TO_ROLE (это ROLE_KEYS — угадать их нельзя, а промах роняет
  * делегирование), `status` у UPDATE_TASK_STATUS, `roles` у SPLIT_TASK и
  * CREATE_TEAM_CHANNEL, size/quality/background у GENERATE_IMAGE, coverStyle,
  * фильтр статусов у GET_LOGS и режим разрешений у MAC_RUN_CLAUDE. Хуже того,
  * произвольная строка доезжала до executeTool и падала уже там — ходом позже и
  * без подсказки, чем её заменить.
+ *
+ * Аудит 2026-09-11, круг 51: здесь стояло «ни у одного из пятнадцати мест».
+ * Мест с `enum:` в lib/tools-schema.ts четырнадцать — счёт разъехался на одну
+ * правку схемы, которую никто не заметил, и разъехался бы снова. Число убрано
+ * по правилу круга 20: считать обязан grep по схеме, а не проза. Замер держит
+ * tests/audit-2026-09-11-lying-comments-tier3.test.ts.
  */
 function propToZod(prop: any): z.ZodTypeAny {
   const t = prop?.type;

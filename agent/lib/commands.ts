@@ -58,7 +58,10 @@ export type TelegramResolver = (agentKey: string) => Telegram | undefined;
  * Всё, что путь апрува обязан донести до dispatch помимо самой заявки.
  *
  * Аудит 2026-08-12: ctx собирался из трёх полей — `{ agentKey, chatId,
- * telegram }`, — тогда как `gateOrDispatch` получает одиннадцать. Замер (заявка
+ * telegram }`, — тогда как `gateOrDispatch` получает весь `DispatchCtx`.
+ * Числа здесь нет намеренно: в 2026-08-12 полей было одиннадцать, к
+ * 2026-09-11 стало восемнадцать, и копия счёта разъедется снова — считать
+ * обязан тип, а не проза. Замер (заявка
  * DELEGATE_TO_ROLE от orchestrator, права выданы, владелец нажал Approve):
  *
  *   DELEGATE_TO_ROLE бросил: no resolveAgent in dispatch ctx
@@ -344,8 +347,11 @@ export async function cmdApprove(args: {
     await executeApproved(approved, args.deps ?? {});
   } catch (e) {
     // Строку действия закрыл тот, кто отказал: `dispatchAndAudit` пишет свою
-    // пару `attempted` → `error`, а три отказа ДО него — `failBeforeDispatch`
+    // пару `attempted` → `error`, а отказы ДО него — `failBeforeDispatch`
     // (аудит 2026-09-11). Прежний комментарий обещал первое на все случаи.
+    // Числа отказов тут не называем: их четыре, но каждый новый ранний выход
+    // добавляет пятый, а прозу поправить забудут — смотри вызовы
+    // `failBeforeDispatch` выше.
     const msg = (e as Error).message;
     // Аудит 2026-08-07: сообщение в чат — единственный след провала, если не
     // пометить строку. Иначе апрув навсегда остаётся `approved`, и потом не

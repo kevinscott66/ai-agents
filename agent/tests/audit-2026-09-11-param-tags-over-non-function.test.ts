@@ -28,10 +28,9 @@
  * описывает, и оставить над константой одну честную строку про неё саму.
  */
 import { test, expect, describe } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
-
-const ROOTS = ["lib", "orchestrator", "tests", "tools", "mac-daemon", "miniapp/src"];
+import { readFileSync } from "node:fs";
+// Корни и обход — одни на три докблок-сторожа, см. докблок хелпера.
+import { gateFiles } from "./helpers/docblock-gate-scope.ts";
 
 /**
  * Тег только в начале строки докблока.
@@ -55,16 +54,6 @@ const DOC_ENDS = /\*\//;
  */
 const CALLABLE =
   /(\bfunction\b|=>|\)\s*(:[^=]*)?\{\s*$|\bconstructor\b|^\s*(export\s+)?(async\s+)?[A-Za-z_$][\w$]*\s*(<[^>]*>)?\s*\()/;
-
-function walk(dir: string, out: string[] = []): string[] {
-  for (const e of readdirSync(dir)) {
-    if (e === "node_modules" || e === "dist" || e.startsWith(".")) continue;
-    const p = join(dir, e);
-    if (statSync(p).isDirectory()) walk(p, out);
-    else if (p.endsWith(".ts") || p.endsWith(".tsx")) out.push(p);
-  }
-  return out;
-}
 
 /** Владелец блока: первая строка ниже, которая не пуста и не комментарий. */
 export function ownerLine(lines: string[], docEnd: number): string {
@@ -96,7 +85,7 @@ function misattached(file: string): string[] {
 describe("@param и @returns стоят над вызываемым", () => {
   test("по дереву — ни одного докблока с тегами над константой", () => {
     const found: string[] = [];
-    for (const root of ROOTS) for (const f of walk(root)) found.push(...misattached(f));
+    for (const f of gateFiles()) found.push(...misattached(f));
     expect(found).toEqual([]);
   });
 

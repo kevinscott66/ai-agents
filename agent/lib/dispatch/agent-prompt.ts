@@ -24,7 +24,7 @@
  */
 import { db } from "../db.ts";
 import type { Database } from "bun:sqlite";
-import { log } from "../log.ts";
+import { log, scrubSecretsDeep } from "../log.ts";
 import { insertActionRow, emitActionEvents } from "../audit.ts";
 import { CHARACTERS } from "../../characters/index.ts";
 import type { UpdateAgentPromptPayload } from "../action-payload.ts";
@@ -470,14 +470,22 @@ export function handleUpdateAgentPromptRejected(args: {
     id,
     args.payload.target_agent_key,
     args.chatId,
-    JSON.stringify({
-      target_agent_key: args.payload.target_agent_key,
-      reason: args.payload.reason,
-      requested_by: args.requestedBy,
-      approval_id: args.approvalId,
-      decided_by: args.decidedBy,
-      reject_reason: args.reason ?? null,
-    }),
+    // Аудит 2026-09-11: сюда payload уезжал сырым, хотя сток тот же, что и у
+    // `emitAlert` — `audit_logs.payload` отдаёт наружу /api/audit. И текст
+    // здесь недовереннее, чем там: `reason` пишет модель, `reject_reason` —
+    // человек в чате, то есть оба поля свободные. Соседний писатель в ту же
+    // колонку чистит с 2026-08-28; докблок `scrubSecretsDeep` называл его
+    // «вторым стоком», а писателей было два.
+    JSON.stringify(
+      scrubSecretsDeep({
+        target_agent_key: args.payload.target_agent_key,
+        reason: args.payload.reason,
+        requested_by: args.requestedBy,
+        approval_id: args.approvalId,
+        decided_by: args.decidedBy,
+        reject_reason: args.reason ?? null,
+      }),
+    ),
     now,
   );
   });

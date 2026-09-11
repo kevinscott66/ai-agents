@@ -4,8 +4,13 @@
  * 
  * This script measures typical operations to identify performance bottlenecks:
  * - Database query latency
- * - File I/O in hot paths  
- * - N+1 query patterns
+ * - N+1 query patterns vs. a single batched query
+ *
+ * Аудит 2026-09-11, круг 51: в списке стояло ещё «File I/O in hot paths».
+ * Ни один из шести замеров файлового ввода-вывода не трогает — все шесть
+ * работают с SQLite. Синхронный I/O по тому же T-303 меряет другой скрипт,
+ * tools/sync-io-audit.ts; строка здесь обещала покрытие, которого нет, и
+ * прочитавший её счёл бы горячие пути проверенными.
  */
 
 import { Database } from "bun:sqlite";

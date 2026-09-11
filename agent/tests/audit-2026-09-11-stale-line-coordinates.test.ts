@@ -31,12 +31,24 @@
  * ни одного файла Mini App — а это единственное место в репозитории, где
  * комментарий описывает то, что человек видит на экране. Расширение до `.tsx`
  * и до `tools`/`mac-daemon`/`miniapp/src` сразу нашло протухшее там.
+ *
+ * Круг 51 закрыл две дыры этого же рода, обе структурные.
+ *
+ * Первая: корни перечисляли подкаталоги `agent/`, а верхний уровень — восемь
+ * файлов, включая боевую точку входа прода, — не смотрел ни один из четырёх
+ * докблок-сторожей. Корни и обход переехали в общий хелпер, и верхний уровень
+ * теперь входит в область; см. tests/helpers/docblock-gate-scope.ts.
+ *
+ * Вторая: `COORD` матчился построчно, поэтому координата, у которой путь
+ * остался в конце одной строки комментария, а номер уехал в начало следующей,
+ * была невидима — при том что соседний сторож связки «имя + номер» такой
+ * перенос склеивал ещё с круга 29. Разбор шва — `wrappedCoords` ниже.
  */
 import { test, expect, describe } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, dirname, normalize, basename } from "node:path";
-
-const ROOTS = ["lib", "orchestrator", "tests", "tools", "mac-daemon", "miniapp/src"];
+// Корни и обход — одни на три докблок-сторожа, см. докблок хелпера.
+import { gateFiles } from "./helpers/docblock-gate-scope.ts";
 /** Куда ссылаются: там ищем цель, если путь ссылки не разрешился как есть. */
 const LOOKUP_DIRS = [
   "lib",
@@ -111,22 +123,6 @@ const EMPTY_TARGET = new Set([
  */
 const EMPTY_CATCH = /^\}?\s*catch\s*(\([^)]*\))?\s*\{$/;
 
-function walk(dir: string, out: string[] = []): string[] {
-  for (const e of readdirSync(dir)) {
-    if (e === "node_modules" || e === "dist" || e.startsWith(".")) continue;
-    // Круг 30: `fixtures` — данные, а не контракт. Symbol-сторож их пропускал,
-    // этот заходил, и в `tests/fixtures/symbol-coord-wrapped.ts` проверялась
-    // координата ОБРАЗЦА дефекта — при том что сама фикстура пишет «сторож
-    // сюда не заходит». Цель отстояла от пустой строки на одну: сдвиг
-    // `lib/mac-bridge.ts` вверх покрасил бы сторожа, и чинить пришлось бы
-    // подгонкой номера ровно там, где докстрока это запрещает.
-    if (e === "fixtures") continue;
-    const p = join(dir, e);
-    if (statSync(p).isDirectory()) walk(p, out);
-    else if (p.endsWith(".ts") || p.endsWith(".tsx")) out.push(p);
-  }
-  return out;
-}
 
 const cache = new Map<string, string[] | null>();
 function fileLines(p: string): string[] | null {
@@ -202,33 +198,92 @@ export function resolveTarget(from: string, ref: string): string | null {
   return hits.length === 1 ? hits[0] : null;
 }
 
+/** Тело строки комментария без открывашки: `* текст` → `текст`. */
+function commentBody(line: string): string {
+  return line.replace(/^\s*(\/\*\*?|\/\/|\*)\s?/, "").trimEnd();
+}
+
+/**
+ * Координаты, разорванные переносом строки внутри одного комментария.
+ *
+ * Аудит 2026-09-11, круг 51. Сторож матчил `COORD` построчно, и ссылка,
+ * у которой путь остался в конце одной строки, а номер уехал в начало
+ * следующей, была для него невидима. Замер: так жила протухшая ссылка на
+ * `dispatch/diagnostic-action.ts` в `lib/diagnostic.ts` — файл внутри корней,
+ * координата внутри комментария, и всё равно ноль срабатываний.
+ *
+ * Склеиваем пару соседних строк комментария и берём ТОЛЬКО те совпадения,
+ * которые пересекают шов. Всё, что уместилось в одну строку, уже посчитано
+ * основным проходом, и второй раз его считать нельзя.
+ */
+export function wrappedCoords(lines: string[], i: number): RegExpMatchArray[] {
+  const next = lines[i + 1];
+  if (next === undefined || !COMMENT_LINE.test(next)) return [];
+  const head = commentBody(lines[i]);
+  const glued = head + commentBody(next);
+  const out: RegExpMatchArray[] = [];
+  for (const m of glued.matchAll(COORD)) {
+    const start = m.index ?? 0;
+    if (start < head.length && start + m[0].length > head.length) out.push(m);
+  }
+  return out;
+}
+
+/** Приговор одной координате: пусто — ссылка жива. */
+function verdict(file: string, i: number, m: RegExpMatchArray): string[] {
+  const target = resolveTarget(file, m[1]);
+  if (!target) return []; // цель не из этого дерева — не наша ссылка
+  const body = fileLines(target)!;
+  const n = Number(m[2]);
+  if (n < 1 || n > body.length) {
+    return [`${file}:${i + 1} → ${m[0]} (в файле ${body.length} строк)`];
+  }
+  const at = body[n - 1].trim();
+  if (EMPTY_TARGET.has(at) || EMPTY_CATCH.test(at)) {
+    return [`${file}:${i + 1} → ${m[0]} указывает на ${JSON.stringify(at)}`];
+  }
+  return [];
+}
+
 describe("координаты строк в комментариях не протухли", () => {
   test("каждая ссылка `модуль.ts:N` указывает на строку с содержимым", () => {
     const stale: string[] = [];
-    for (const root of ROOTS) {
-      for (const file of walk(root)) {
-        const lines = fileLines(file);
-        if (!lines) continue;
-        lines.forEach((line, i) => {
-          if (!COMMENT_LINE.test(line)) return;
-          for (const m of line.matchAll(COORD)) {
-            const target = resolveTarget(file, m[1]);
-            if (!target) continue; // цель не из этого дерева — не наша ссылка
-            const body = fileLines(target)!;
-            const n = Number(m[2]);
-            if (n < 1 || n > body.length) {
-              stale.push(`${file}:${i + 1} → ${m[0]} (в файле ${body.length} строк)`);
-              continue;
-            }
-            const at = body[n - 1].trim();
-            if (EMPTY_TARGET.has(at) || EMPTY_CATCH.test(at)) {
-              stale.push(`${file}:${i + 1} → ${m[0]} указывает на ${JSON.stringify(at)}`);
-            }
-          }
-        });
-      }
+    for (const file of gateFiles({ skipFixtures: true })) {
+      const lines = fileLines(file);
+      if (!lines) continue;
+      lines.forEach((line, i) => {
+        if (!COMMENT_LINE.test(line)) return;
+        for (const m of line.matchAll(COORD)) stale.push(...verdict(file, i, m));
+        // Круг 51: та же координата, разложенная на две строки комментария.
+        for (const m of wrappedCoords(lines, i)) stale.push(...verdict(file, i, m));
+      });
     }
     expect(stale).toEqual([]);
+  });
+
+  test("координата, разорванная переносом строки, видна сторожу", () => {
+    // Та самая форма из круга 51: путь дописан до конца строки, номер уехал
+    // в начало следующей. Проверяем сам разбор, а не живой файл: образец,
+    // привязанный к чужим номерам, протухал бы вместе с ними.
+    const lines = [
+      " * Соседний вызывающий (dispatch/diagnostic-action.ts:",
+      " * 205-218) устроен наоборот",
+      "const x = 1;",
+    ];
+    expect(wrappedCoords(lines, 0).map((m) => m[0])).toEqual([
+      "dispatch/diagnostic-action.ts:205-218",
+    ]);
+  });
+
+  test("координата, целиком уместившаяся в строке, вторым проходом не считается", () => {
+    // Иначе каждая живая ссылка попала бы в улов дважды.
+    const lines = [" * см. lib/tasks.ts:10 — там", " * продолжение"];
+    expect(wrappedCoords(lines, 0)).toEqual([]);
+  });
+
+  test("шов с некомментарной строкой не склеивается", () => {
+    const lines = [" * хвост lib/tasks.ts:", "10;"];
+    expect(wrappedCoords(lines, 0)).toEqual([]);
   });
 
   test("ссылка с каталогом разрешается в файл ИЗ ЭТОГО каталога", () => {

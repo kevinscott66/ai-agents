@@ -329,9 +329,15 @@ export async function respondAs(
     };
   }
   // S1: жёсткий потолок суммарных handoff-вызовов на user-turn (общий budget).
-  // Если вызывающий счётчик не передал (путь DELEGATE_TO_ROLE — см. коммент к
-  // HANDOFF_MAX_INVOCATIONS), заводим свой на это дерево: ниже он уходит во все
-  // ветки, так что fan-out внутри делегата тоже ограничен.
+  // Если вызывающий счётчик не передал, заводим свой на это дерево: ниже он
+  // уходит во все ветки, так что fan-out внутри делегата тоже ограничен.
+  //
+  // Аудит 2026-09-11: здесь было сказано «путь DELEGATE_TO_ROLE» — это уже
+  // неправда и ровно наоборот. Счётчик заводит tool-loop один на ход (см.
+  // докблок HANDOFF_MAX_INVOCATIONS), а ветка DELEGATE_TO_ROLE в
+  // action-dispatch.ts передаёт его явно. Без счётчика сюда приходят только
+  // легаси-вызов по @-упоминанию мимо tool-loop и тесты; называть боевой путь
+  // тем, кто теряет потолок, опаснее всего — следующий пойдёт чинить починенное.
   const budget = opts.budget ?? { n: 0, max: HANDOFF_MAX_INVOCATIONS };
   if (budget.n >= budget.max) {
     log.warn("[handoff] invocation budget exhausted — skipping", {

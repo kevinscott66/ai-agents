@@ -47,20 +47,10 @@
  * lib/telegram-chunking.ts.
  */
 import { test, expect, describe } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
+// Корни и обход — одни на три докблок-сторожа, см. докблок хелпера.
+import { gateFiles } from "./helpers/docblock-gate-scope.ts";
 
-const ROOTS = ["lib", "orchestrator", "tests", "tools", "mac-daemon", "miniapp/src"];
-
-function walk(dir: string, out: string[] = []): string[] {
-  for (const e of readdirSync(dir)) {
-    if (e === "node_modules" || e === "dist" || e.startsWith(".")) continue;
-    const p = join(dir, e);
-    if (statSync(p).isDirectory()) walk(p, out);
-    else if (p.endsWith(".ts") || p.endsWith(".tsx")) out.push(p);
-  }
-  return out;
-}
 
 /** Открывашка докблока — с любым отступом, с хвостом текста или без. */
 const OPENS = /^\s*\/\*\*/;
@@ -109,8 +99,8 @@ function scan(lines: string[]): { blocks: Block[]; codeBefore: boolean[] } {
 
 function orphans(): string[] {
   const found: string[] = [];
-  for (const root of ROOTS) {
-    for (const file of walk(root)) {
+  {
+    for (const file of gateFiles()) {
       const lines = readFileSync(file, "utf8").split("\n");
       for (let i = 0; i < lines.length - 1; i++) {
         if (!OPENS.test(lines[i + 1])) continue;

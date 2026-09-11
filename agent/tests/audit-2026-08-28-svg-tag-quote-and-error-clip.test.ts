@@ -15,7 +15,7 @@
  *    длина атрибута, до 200 КБ (гард размера меряет весь документ). Замер: href
  *    в 150 018 символов доезжал как есть. Дальше строка идёт модели в
  *    tool_result и в `agent_actions.error` (handleGenerateSvgImage ошибку не
- *    ловит, audit.ts:195 пишет без обрезки).
+ *    ловит, `insertActionRow` в audit.ts пишет без обрезки).
  */
 import { describe, expect, test } from "bun:test";
 import { Resvg } from "@resvg/resvg-js";
