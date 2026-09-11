@@ -851,9 +851,44 @@ export async function executeTool(
     // нечем — своей резервации у инлайнового пути нет.
     const rl = checkAndConsumeRateLimit(ctx.agentKey, name);
     if (!rl.ok) {
+      const reason = rl.reason ?? "rate limited";
+      const retryInMs = rl.retryInMs ?? 0;
+      // Отказ пишется в журнал ровно так же, как это делает гейтованный путь
+      // (`action-dispatch.ts`, ветка `!rl.ok`): `log.info` плюс строка со
+      // статусом `rate_limited`. Иначе получилась бы дыра ровно того вида, о
+      // котором предупреждает комментарий у аудита QUERY_DB ниже: отсутствие
+      // записей читается как отсутствие запросов. И `checkRateLimitStorm`
+      // (alerting.ts) считает шторм по этим самым строкам — тихий отказ он бы
+      // не увидел вовсе, хотя зациклившийся агент — это ровно тот случай,
+      // ради которого сигнал написан. Вход в payload не кладём: у инлайновых
+      // тулз он не аудируется нигде (у QUERY_DB — только усечённый SQL и
+      // только на своей ветке), и отказ не повод заводить исключение.
+      log.info("rate limited", {
+        agentKey: ctx.agentKey,
+        actionType: name,
+        reason,
+        retryInMs,
+        requestId: ctx.requestId ?? null,
+      });
+      try {
+        logToolCall(name, {
+          agentKey: ctx.agentKey,
+          chatId: ctx.chatId ?? null,
+          payload: {},
+          status: "rate_limited",
+          error: reason,
+          requestId: ctx.requestId ?? null,
+        });
+      } catch (e) {
+        log.warn("[inline] не удалось записать аудит отказа лимитера", {
+          actionType: name,
+          error: getErrorMessage(e),
+        });
+      }
       return fmt({
         ok: false,
-        error: `rate_limited: ${rl.reason ?? "лимит инструментов исчерпан"}`,
+        error: `rate_limited: ${reason}`,
+        retryInMs,
       });
     }
   }

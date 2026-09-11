@@ -20,14 +20,29 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { executeTool } from "../lib/tools-schema.ts";
 import { _resetRateLimits, checkRateLimit } from "../lib/rate-limits.ts";
 import { INLINE_TOOL_NAMES } from "../lib/constants.ts";
+import { checkRateLimitStorm, _resetAlertCooldowns } from "../lib/alerting.ts";
+import { db } from "../lib/db.ts";
 
 const CTX = { agentKey: "_test_inline_rl", chatId: -1_000_911 };
 
 /** Потолок общего ведра — ALL_AGENT_TOOLS_RULE. */
 const ALL_TOOLS_MAX = 60;
 
-beforeEach(_resetRateLimits);
-afterEach(_resetRateLimits);
+function cleanRows(): void {
+  db.prepare(`DELETE FROM agent_actions WHERE agent_key LIKE '_test_inline_rl%'`).run();
+}
+
+beforeEach(() => {
+  _resetRateLimits();
+  // Кулдаун шторма процессный и ключуется по коду алерта: без сброса соседний
+  // файл, уже поднявший сигнал, погасил бы наш на час.
+  _resetAlertCooldowns();
+  cleanRows();
+});
+afterEach(() => {
+  _resetRateLimits();
+  cleanRows();
+});
 
 describe("инлайновые инструменты тратят общий минутный бакет", () => {
   test("READ_WIKI списывает слот так же, как гейтованное действие", async () => {
@@ -67,6 +82,39 @@ describe("инлайновые инструменты тратят общий м
       await executeTool("READ_WIKI", { scope: "_team", slug: "нет-такой" }, other),
     );
     expect(String(out.error ?? "")).not.toContain("rate_limited");
+  });
+
+  // Тихий отказ был бы дырой ровно того вида, о котором предупреждает
+  // комментарий у аудита QUERY_DB: отсутствие записей читается как отсутствие
+  // запросов. Плюс `checkRateLimitStorm` считает шторм именно по этим строкам.
+  test("отказ виден в журнале и детектору шторма", async () => {
+    for (let i = 0; i < ALL_TOOLS_MAX + 3; i++) {
+      await executeTool("READ_WIKI", { scope: "_team", slug: "нет-такой" }, CTX);
+    }
+    const rows = db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM agent_actions
+         WHERE agent_key = ? AND action_type = 'READ_WIKI' AND status = 'rate_limited'`,
+      )
+      .get(CTX.agentKey) as { n: number };
+    expect(rows.n).toBe(3);
+
+    // Тот же ряд, что читает сигнал о шторме, — порог опускаем до трёх.
+    // Проверка считает строки ВСЕХ агентов, поэтому она здесь дымовая: точное
+    // число отказов проверено выше, по своему agent_key.
+    expect(
+      checkRateLimitStorm({
+        thresholds: { rateLimitStormCount: 3, rateLimitStormWindowMinutes: 5 },
+      }),
+    ).toBe(true);
+  });
+
+  test("успешный вызов строки не заводит — журнал считает отказы", async () => {
+    await executeTool("READ_WIKI", { scope: "_team", slug: "нет-такой" }, CTX);
+    const rows = db
+      .prepare(`SELECT COUNT(*) AS n FROM agent_actions WHERE agent_key = ?`)
+      .get(CTX.agentKey) as { n: number };
+    expect(rows.n).toBe(0);
   });
 
   test("проверка стоит в общем блоке — значит накрывает весь список", () => {
