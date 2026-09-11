@@ -280,7 +280,12 @@ export async function handleMacRunClaude(
   }
   const chatId = ctx.chatId;
   const tg = ctx.telegram;
-  // Periodic system progress updates every 10s while the run is in flight.
+  // Уведомление о прогрессе — НЕ heartbeat. Оно уходит не чаще раза в десять
+  // секунд И только если вывод с прошлого раза вырос: молчащий прогон
+  // (компиляция, долгий сетевой вызов, ожидание ввода) не шлёт в чат ничего.
+  // Аудит 2026-09-11: здесь было написано «every 10s», и это ровно то
+  // обещание, на которое опереться нельзя — по отсутствию сообщений нельзя
+  // заключить, что прогон умер.
   let lastNoticeAt = Date.now();
   let lastLen = 0;
   const onProgress = (snap: {

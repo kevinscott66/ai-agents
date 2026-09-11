@@ -99,6 +99,7 @@ import {
   corsHeaders,
   applyCompressionAndEtag,
   applyCorsToResponse,
+  SECURITY_HEADERS,
   pickAllowedOrigin,
   parseIntOr,
   strictChatId,
@@ -931,9 +932,11 @@ export function startMiniappServer(
       const sseUserId = sseUser;
 
       // Потолок соединений ограничивает ОДНОВРЕМЕННОСТЬ, но не частоту: цикл
-      // open→abort проходит его насквозь, а каждый заход считает HMAC по
-      // initData, подписывается на шину и заводит интервал. Замер при
-      // повторном аудите: 500 последовательных циклов за 131 мс, все 200.
+      // open→abort проходит его насквозь, а каждый заход гасит билет,
+      // подписывается на шину и заводит интервал. Замер при повторном аудите:
+      // 500 последовательных циклов за 131 мс, все 200. (HMAC по initData
+      // считается не здесь, а на выдаче билета — POST /api/sse-ticket; там у
+      // маршрута свой рейт-лимит за auth-стеной.)
       // Поэтому здесь же снимаем токен из общего GET-ведра пользователя —
       // того самого, до которого маршрут не доходит, стоя выше стены.
       const sseRl = consumeRateToken(`get:${sseUserId}`, GET_LIMIT);
@@ -2405,7 +2408,12 @@ export function startMiniappServer(
           path: url.pathname,
           error: getErrorMessage(e),
         });
-        return json({ error: "internal error" }, 500);
+        // Аудит 2026-09-11: это единственный ответ сервера, который уходит
+        // МИМО applyCorsToResponse — тот сам стоит внутри try и мог бросить.
+        // Заголовки безопасности поэтому ставятся здесь прямо, а не повторным
+        // вызовом того же хвоста: повтор броска в catch ушёл бы в Bun.serve.
+        // ACAO не ставим намеренно: отказ читать не обязан никто.
+        return json({ error: "internal error" }, 500, SECURITY_HEADERS);
       }
     },
   });
