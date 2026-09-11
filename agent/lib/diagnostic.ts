@@ -91,9 +91,10 @@ export const DELEGATION_REFUSALS: readonly string[] = [
   "delegate_skipped:",
   // Исходы гейта. Аудит 2026-08-28: список знал отказы самой воронки и ни
   // одного решения гейта — а фан-аут сплита ходит через `gateOrDispatch` и
-  // получает именно их. Тексты собирает `gateRefusalText`
-  // (action-dispatch.ts:1390), вызывающий кладёт их как `<role>: <текст>`
-  // (:864). Все три означают «правила сказали нет» или «не сейчас».
+  // получает именно их. Тексты собирает `gateRefusalText` в
+  // action-dispatch.ts, а вызывающий — ветка SPLIT_TASK в `dispatchAction` —
+  // кладёт их как `<role>: <текст>`. Все три означают «правила сказали нет»
+  // или «не сейчас».
   //
   // Дороже всех обходился `pending_approval:`: при autonomy=manual его
   // возвращает КАЖДОЕ делегирование (DELEGATE_TO_ROLE не в
@@ -341,7 +342,8 @@ const CATEGORY_PRIORITY: readonly ErrorCategory[] = [
  * Аудит 2026-08-28: класс сбоя определялся по склейке, а не по сегментам.
  *
  * `res.error` у SPLIT_TASK и у фан-аута DELEGATE_TO_ROLE — это N сегментов
- * `role: причина`, склеенных `"; "` (action-dispatch.ts:873 и :889).
+ * `role: причина`, склеенных `joinDelegationErrors` (обе ветки —
+ * в `dispatchAction`, action-dispatch.ts).
  * `categorizeError` — регэкспы по всей строке, и порядок проверок в нём решал,
  * кто победит. Один сегмент с 429 делал `rate_limited` всю сводку: дальше
  * createDiagnosticTask отвечал `deferred_rate_limited` («ретраи разберутся»),

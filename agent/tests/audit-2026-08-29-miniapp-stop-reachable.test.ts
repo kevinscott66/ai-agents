@@ -129,10 +129,16 @@ describe("Mac.tsx: кнопка стопа переживает отказ чт�
 
   test("handleStopAll по-прежнему не трогает setError", () => {
     // Его отказы идут в тост: иначе неудачный стоп прятал бы кнопку стопа.
-    const body = MAC_SRC.slice(
-      MAC_SRC.indexOf("async function handleStopAll"),
-      MAC_SRC.indexOf("function statusBadge"),
-    );
+    const from = MAC_SRC.indexOf("async function handleStopAll");
+    const to = MAC_SRC.indexOf("function selectProps");
+    // Обе границы обязаны найтись. Аудит 2026-09-11: концом среза стояла
+    // `function statusBadge` — такого символа в Mac.tsx нет (есть
+    // `getStatusBadge`), `indexOf` отдавал −1, и `slice(from, -1)` резал до
+    // конца файла. Проверка «не трогает setError» тихо расширилась на всю
+    // остальную страницу, а проверять должна была одну функцию.
+    expect(from).toBeGreaterThan(-1);
+    expect(to).toBeGreaterThan(from);
+    const body = MAC_SRC.slice(from, to);
     expect(body.length).toBeGreaterThan(100);
     expect(codeLines(body).some((l) => l.includes("setError("))).toBe(false);
   });

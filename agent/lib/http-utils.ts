@@ -210,14 +210,6 @@ const GZIP_MIN_BYTES = 1024;
 const GZIP_MAX_BYTES = 2_000_000;
 
 /**
- * T-311 — strip wildcard ACAO and set the real allowed origin (or none).
- *
- * Call this as the final post-processing step on every response leaving the
- * Mini App. It consults `MINIAPP_ALLOWED_ORIGINS` (via `pickAllowedOrigin`)
- * to decide whether to echo the request Origin. Same-origin requests
- * (no Origin header) keep no ACAO header — they don't need one.
- */
-/**
  * SEC-6 / T-604 — security headers applied to every Mini App response.
  *
  * CSP is tuned for the Telegram WebApp embedding (see miniapp/index.html):
@@ -244,6 +236,14 @@ export const SECURITY_HEADERS: Record<string, string> = {
   "content-security-policy": MINIAPP_CSP,
 };
 
+/**
+ * T-311 — strip wildcard ACAO and set the real allowed origin (or none).
+ *
+ * Call this as the final post-processing step on every response leaving the
+ * Mini App. It consults `MINIAPP_ALLOWED_ORIGINS` (via `pickAllowedOrigin`)
+ * to decide whether to echo the request Origin. Same-origin requests
+ * (no Origin header) keep no ACAO header — they don't need one.
+ */
 export function applyCorsToResponse(req: Request, resp: Response): Response {
   const reqOrigin = req.headers.get("origin");
   const allowed = pickAllowedOrigin(reqOrigin);

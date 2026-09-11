@@ -196,27 +196,6 @@ interface MoveResult {
 }
 
 /**
- * Перенос строк старше cutoff в архив: INSERT ... SELECT + DELETE, одна
- * транзакция.
- *
- * Аудит 2026-08-04: DELETE был безусловным (`WHERE created_at < ?`) при
- * `INSERT OR IGNORE` выше. `OR IGNORE` на конфликте PRIMARY KEY не бросает — он
- * молча пропускает строку, и следующий стейтмент её всё равно удалял. Транзакция
- * от этого не спасает: откатывать нечего, сбоя не было. Поэтому DELETE теперь
- * привязан к факту наличия строки в архиве, а не к тому же предикату времени,
- * что и INSERT: удаляется ровно то, что доказуемо скопировано.
- *
- * Счётчик тоже врал: наружу шёл COUNT(*) отобранных строк, а не число вставок,
- * так что молчаливый пропуск отражался в логе как успешная архивация.
- *
- * `deleted > inserted` — это норма, а не ошибка: строку могли скопировать в
- * прошлый прогон, упавший между INSERT и DELETE. Тревожно обратное — когда после
- * прогона строки старше cutoff остались в источнике.
- *
- * Имена таблиц и колонок подставляются в SQL как есть; сюда приходят только
- * литералы из ARCHIVE_SPECS, никакого пользовательского ввода.
- */
-/**
  * Resolve the explicit column list only after checking both table schemas.
  * Any source column that is not copied, or is absent from the archive, makes
  * the move unsafe, so fail before opening a write transaction.
@@ -268,6 +247,27 @@ function resolveArchiveColumns(spec: ArchiveSpec): string[] {
   return columns;
 }
 
+/**
+ * Перенос строк старше cutoff в архив: INSERT ... SELECT + DELETE, одна
+ * транзакция.
+ *
+ * Аудит 2026-08-04: DELETE был безусловным (`WHERE created_at < ?`) при
+ * `INSERT OR IGNORE` выше. `OR IGNORE` на конфликте PRIMARY KEY не бросает — он
+ * молча пропускает строку, и следующий стейтмент её всё равно удалял. Транзакция
+ * от этого не спасает: откатывать нечего, сбоя не было. Поэтому DELETE теперь
+ * привязан к факту наличия строки в архиве, а не к тому же предикату времени,
+ * что и INSERT: удаляется ровно то, что доказуемо скопировано.
+ *
+ * Счётчик тоже врал: наружу шёл COUNT(*) отобранных строк, а не число вставок,
+ * так что молчаливый пропуск отражался в логе как успешная архивация.
+ *
+ * `deleted > inserted` — это норма, а не ошибка: строку могли скопировать в
+ * прошлый прогон, упавший между INSERT и DELETE. Тревожно обратное — когда после
+ * прогона строки старше cutoff остались в источнике.
+ *
+ * Имена таблиц и колонок подставляются в SQL как есть; сюда приходят только
+ * литералы из ARCHIVE_SPECS, никакого пользовательского ввода.
+ */
 function moveToArchive(
   spec: ArchiveSpec,
   cutoffMs: number,
@@ -1077,11 +1077,6 @@ export interface MaintSchedulerHandle {
 }
 
 /**
- * Шедулер: gcStaleTasks каждые 30 мин, archive+compact один раз в сутки в
- * `dailyHourUTC`. По аналогии с digest: tick каждые `dailyPollMs`, флаг
- * "уже сделано сегодня".
- */
-/**
  * Аудит 2026-08-08: оба значения приходят из env через голый `Number(...)`
  * (orchestrator/services.ts), а принимались через `??`, который ловит только
  * null/undefined.
@@ -1111,6 +1106,11 @@ function sanitizeMaintOpt(
   return v;
 }
 
+/**
+ * Шедулер: gcStaleTasks каждые 30 мин, archive+compact один раз в сутки в
+ * `dailyHourUTC`. По аналогии с digest: tick каждые `dailyPollMs`, флаг
+ * "уже сделано сегодня".
+ */
 export function startMaintScheduler(
   opts: MaintSchedulerOptions = {},
 ): MaintSchedulerHandle {

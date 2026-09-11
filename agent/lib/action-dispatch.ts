@@ -279,11 +279,6 @@ export type DispatchResult =
 
 
 /**
- * T-541: Get userbot handle with optional router support.
- * When USERBOT_ROUTER_ENABLED=true, attempts to use agent-specific session first.
- */
-
-/**
  * Сколько символов ответа делегата уходит наверх в tool_result DELEGATE_TO_ROLE
  * и в строку доски. Ответ целиком уже в чате — здесь он нужен оркестратору,
  * чтобы передать результат следующему шагу пайплайна, а не чтобы пересказать.
@@ -292,6 +287,15 @@ export type DispatchResult =
  */
 const DELEGATE_REPLY_MAX = 4000;
 
+/**
+ * С чьего аккаунта уходит действие (T-541).
+ *
+ * Исходов три, и «попробовать сессию агента, иначе общую» среди них нет: при
+ * `USERBOT_ROUTER_ENABLED=true` отдаём либо сессию агента, либо null — откат
+ * на личный аккаунт владельца был бы подменой личности (разбор 2026-08-28 —
+ * в теле функции). Без флага работает общий юзербот. `ctx.userbot` — шов для
+ * тестов, он старше обоих путей и перекрывает их оба.
+ */
 async function resolveUserbotHandle(ctx: DispatchCtx): Promise<UserbotHandle | null> {
   // Test seam override
   if (ctx.userbot !== undefined) {

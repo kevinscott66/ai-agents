@@ -26,17 +26,33 @@
  * Что делать, когда тест упал: НЕ подгонять номер. Убрать номер и назвать
  * символ — `permissions.ts`, запись `GENERATE_IMAGE` — такая ссылка не тухнет
  * вовсе. Номер оставляют только там, где называть нечего.
+ *
+ * Круг 27: проверка смотрела в три корня и только на `.ts`, то есть не видела
+ * ни одного файла Mini App — а это единственное место в репозитории, где
+ * комментарий описывает то, что человек видит на экране. Расширение до `.tsx`
+ * и до `tools`/`mac-daemon`/`miniapp/src` сразу нашло протухшее там.
  */
 import { test, expect, describe } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, dirname, normalize, basename } from "node:path";
 
-const ROOTS = ["lib", "orchestrator", "tests"];
+const ROOTS = ["lib", "orchestrator", "tests", "tools", "mac-daemon", "miniapp/src"];
 /** Куда ссылаются: там ищем цель, если путь ссылки не разрешился как есть. */
-const LOOKUP_DIRS = ["lib", "lib/dispatch", "orchestrator", "tests", "tools", "mac-daemon"];
+const LOOKUP_DIRS = [
+  "lib",
+  "lib/dispatch",
+  "orchestrator",
+  "tests",
+  "tools",
+  "mac-daemon",
+  "miniapp/src",
+  "miniapp/src/lib",
+  "miniapp/src/pages",
+  "miniapp/src/components",
+];
 
-/** Ссылка на строку файла: `путь/модуль.ts:471` либо `модуль.ts:471-480`. */
-const COORD = /([A-Za-z0-9_./-]+\.ts):(\d+)(?:-(\d+))?/g;
+/** Ссылка на строку файла: `путь/модуль.ts:471` либо `Страница.tsx:471-480`. */
+const COORD = /([A-Za-z0-9_./-]+\.tsx?):(\d+)(?:-(\d+))?/g;
 
 /**
  * Смотрим только комментарии.
@@ -61,7 +77,7 @@ function walk(dir: string, out: string[] = []): string[] {
     if (e === "node_modules" || e === "dist" || e.startsWith(".")) continue;
     const p = join(dir, e);
     if (statSync(p).isDirectory()) walk(p, out);
-    else if (p.endsWith(".ts")) out.push(p);
+    else if (p.endsWith(".ts") || p.endsWith(".tsx")) out.push(p);
   }
   return out;
 }

@@ -51,11 +51,6 @@ export const CHAT_PINNED_ACTIONS = new Set<string>([
 ]);
 
 /**
- * S4 (security 2026-06-10): для исходящих медиа (SEND_PHOTO/SEND_DOCUMENT) ПИНим
- * целевой чат к исходному — чтобы prompt-injected агент не мог унести контент в
- * произвольный чат (exfil). Игнорируем payload.chatId, только логируем попытку.
- */
-/**
  * Модель назвала чат, отличный от чата-источника. Отдельная функция, а не
  * `!== ctxChatId` по месту: тот же предикат нужен хендлеру, который обязан
  * СКАЗАТЬ о подмене (см. LIST_RECENT_MESSAGES), а разъехавшиеся копии условия
@@ -89,6 +84,11 @@ export function pinnedChatNote(
   );
 }
 
+/**
+ * S4 (security 2026-06-10): для исходящих медиа (SEND_PHOTO/SEND_DOCUMENT) ПИНим
+ * целевой чат к исходному — чтобы prompt-injected агент не мог унести контент в
+ * произвольный чат (exfil). Игнорируем payload.chatId, только логируем попытку.
+ */
 export function pinnedChatId(
   payloadChatId: number | undefined,
   ctxChatId: number,

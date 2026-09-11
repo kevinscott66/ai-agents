@@ -8,8 +8,8 @@
  * 1. Набор резолверов для исполнения собирался ДВАЖДЫ — `orchestrator-team.ts`
  *    для `/approve` в чате и `orchestrator/services.ts` для Mini App, — и
  *    разъехался: в веб-версии не было `handoffDeps`. Правка 2026-08-12 добавила
- *    туда `resolveAgent` и тем самым сдвинула отказ на семь строк ниже
- *    (`action-dispatch.ts:804` → `:811`), а не убрала его.
+ *    туда `resolveAgent` и тем самым сдвинула отказ ниже по ветке
+ *    HANDOFF_TO_ROLE в `dispatchAction` (action-dispatch.ts), а не убрала его.
  *
  * 2. Бакет «этот бот в этом чате» тратил не тот бот: с Telegram-пути приходил
  *    id ОРКЕСТРАТОРА (он регистрирует `/approve`), с Mini App — `undefined`, а

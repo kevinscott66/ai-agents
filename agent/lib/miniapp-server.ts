@@ -272,16 +272,16 @@ function cursorParam(url: URL, name: string): string | null {
   return trimmed === "" ? null : trimmed;
 }
 
-/**
- * Build the agents list (with health snapshots + paused flags) used by
- * /api/dashboard and /api/agents.
- */
 /** Полночь UTC — запасной отсчёт «сегодня», когда клиент не прислал свой. */
 function startOfUtcDay(): number {
   const d = new Date();
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
 }
 
+/**
+ * Build the agents list (with health snapshots + paused flags) used by
+ * /api/dashboard and /api/agents.
+ */
 function buildAgentsList(healthArr: MiniappHealthInfo[] | null) {
   const healthByKey = new Map<string, MiniappHealthInfo>();
   if (healthArr) {
@@ -660,7 +660,7 @@ export function startMiniappServer(
     }
   }
 
-  /**
+/**
    * Потолок для того, что обслуживается ДО стены аутентификации: статика,
    * OPTIONS, /healthz, /readyz, /metrics. Рейт-лимит по user.id туда по
    * определению не дотягивается, и повторный аудит 2026-08-04 это подтвердил
@@ -671,12 +671,11 @@ export function startMiniappServer(
    *
    * Ведро широкое: холодная загрузка Mini App — это index.html плюс десяток
    * ассетов, а probe'ы systemd/nginx стучатся раз в несколько секунд.
-   */
-  /**
+ *
    * `denyOnOverflow` — только здесь: число ключей этого ведра задаёт тот, кто
    * шлёт запросы (ключ = адрес клиента), а у вёдер по user.id оно ограничено
    * allowlist'ом. Подробнее — HARD_MAX_BUCKETS в http-utils.ts.
-   */
+ */
   const ANON_LIMIT: RateLimitOpts = {
     capacity: 300,
     refillPerSec: 20,
@@ -1424,8 +1423,8 @@ export function startMiniappServer(
         // молча возвращала всю доску — то есть ?status=pending без chat_id
         // работал как запрос вообще без фильтра, отвечая 200.
         //
-        // Это не гипотетика: Dashboard.tsx:166 зовёт ровно
-        // `api.tasks({ status: "pending", limit: 200 })` — без chat_id. Список
+        // Это не гипотетика: `load()` в miniapp/src/pages/Dashboard.tsx зовёт
+        // ровно `api.tasks({ status: "pending", limit: 200 })` — без chat_id. Список
         // «в очереди» на главной показывал задачи в любом статусе, включая
         // done и cancelled.
         const where = statuses?.length

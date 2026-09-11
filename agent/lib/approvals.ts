@@ -243,8 +243,7 @@ export function emitApprovalCreated(a: Pick<Approval, "id" | "chat_id" | "action
  * То есть заявка, одобренная через `/approve` в чате, теряла связь с ходом
  * агента, который её породил, и в аудит уходил свежий request_id. Джойн
  * общий, чтобы третий путь чтения не появился снова без него.
- */
-/**
+ *
  * Аудит 2026-08-14 (продолжение той же находки): джойн смотрел только в живую
  * `agent_actions`, а её строки уезжают в `agent_actions_archive` по тому же
  * 30-суточному отсечению, что и всё остальное (ADR-0007). Как только действие
@@ -271,14 +270,13 @@ export function getApproval(id: string): Approval | null {
 }
 
 /**
- * Resolve an approval by full id OR unique prefix. Orchestrator announces a
- * short prefix (e.g. `1921d74e`) in chat, but the stored id is a full UUID — a
- * bare `WHERE id = ?` made `/approve <prefix>` fail with «не найден». Tries
- * exact first, then a prefix match that is UNIQUE among PENDING approvals.
- * Returns null if not found or the prefix is ambiguous.
- */
-/**
  * Найти заявку по полному id или однозначному префиксу.
+ *
+ * В чате оркестратор называет короткий префикс, а хранится полный UUID, так
+ * что голое `WHERE id = ?` отвечало на `/approve <префикс>` «не найден».
+ * Порядок поиска: сначала точное совпадение, потом префикс — но только среди
+ * заявок в статусе `pending` и только если подходит РОВНО одна. Ни одной или
+ * больше одной — null, угадывать не будем.
  *
  * `chatId` сужает поиск по префиксу до одного чата — и это не удобство.
  * Очередь заявок чат-локальна: `/approvals` печатает
@@ -387,20 +385,6 @@ function join(parts: Array<string | false | null | undefined>): string {
 }
 
 /**
- * Аудит 2026-08-20: у структурных payload'ов решающее лежит НЕ в строковом
- * поле, а общий путь ниже выбрасывает всё нестроковое — каждый boolean и
- * каждое число. Владелец видел «smm» и жал /approve, не зная ни какое право
- * выдают, ни что `requires_approval: false` убирает человека из петли; у
- * REVIEW_AND_MERGE_PR (мёрдж в main, а из main идёт прод-деплой) строк в
- * payload'е нет вовсе — выжимка была пустой.
- *
- * Поэтому — по рендереру на тип действия. Каждый ставит вперёд то, ради чего
- * аппрув и существует. Неизвестный тип идёт прежним общим путём.
- *
- * Экранировать нечего: карточку шлют `ctx.reply(text)` без `parse_mode`
- * (admin-commands.ts), Mini App вставляет её текстом.
- */
-/**
  * Чем к посту приложат картинку — и приложат ли готовым чужим файлом.
  *
  * Порядок ветвей повторяет `dispatch/publish.ts:231-298` дословно: `photoUrl`
@@ -456,6 +440,20 @@ export interface PreviewCtx {
   chatId?: number;
 }
 
+/**
+ * Аудит 2026-08-20: у структурных payload'ов решающее лежит НЕ в строковом
+ * поле, а общий путь ниже выбрасывает всё нестроковое — каждый boolean и
+ * каждое число. Владелец видел «smm» и жал /approve, не зная ни какое право
+ * выдают, ни что `requires_approval: false` убирает человека из петли; у
+ * REVIEW_AND_MERGE_PR (мёрдж в main, а из main идёт прод-деплой) строк в
+ * payload'е нет вовсе — выжимка была пустой.
+ *
+ * Поэтому — по рендереру на тип действия. Каждый ставит вперёд то, ради чего
+ * аппрув и существует. Неизвестный тип идёт прежним общим путём.
+ *
+ * Экранировать нечего: карточку шлют `ctx.reply(text)` без `parse_mode`
+ * (admin-commands.ts), Mini App вставляет её текстом.
+ */
 const PREVIEW_BY_ACTION: Record<
   string,
   (p: Record<string, unknown>, ctx: PreviewCtx) => string

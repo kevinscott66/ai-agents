@@ -380,10 +380,6 @@ export function isMacOnline(): boolean {
 }
 
 /**
- * Send a run request to the Mac daemon. Resolves on daemon's final "result"
- * message, or rejects on timeout / disconnect / no client.
- */
-/**
  * Приняла ли отправка кадр.
  *
  * Аудит 2026-08-28: возврат `ServerWebSocket.send()` не смотрел никто, а он
@@ -397,6 +393,10 @@ function frameAccepted(ret: unknown): boolean {
   return ret !== 0;
 }
 
+/**
+ * Send a run request to the Mac daemon. Resolves on daemon's final "result"
+ * message, or rejects on timeout / disconnect / no client.
+ */
 export function sendToMac(req: MacRunRequest): Promise<MacRunResult> {
   return new Promise<MacRunResult>((resolve, reject) => {
     if (!activeSocket) {
@@ -712,10 +712,6 @@ function stopPinging(): void {
 }
 
 /**
- * Start the WebSocket bridge. Refuses to start if MAC_BRIDGE_SECRET is shorter
- * than 32 chars. Returns null if MAC_BRIDGE_SECRET is unset (no-op mode).
- */
-/**
  * Порт моста из env: целое 1..65535, иначе дефолт.
  *
  * Аудит 2026-08-08: было `Number(process.env.MAC_BRIDGE_PORT ?? DEFAULT)`.
@@ -764,6 +760,10 @@ export function _resolveBridgeHost(raw: string | undefined): string {
   return raw?.trim() || DEFAULT_MAC_BRIDGE_HOST;
 }
 
+/**
+ * Start the WebSocket bridge. Refuses to start if MAC_BRIDGE_SECRET is shorter
+ * than 32 chars. Returns null if MAC_BRIDGE_SECRET is unset (no-op mode).
+ */
 export function startMacBridge(): ServerHandle | null {
   const secret = process.env.MAC_BRIDGE_SECRET;
   if (!secret) return null;

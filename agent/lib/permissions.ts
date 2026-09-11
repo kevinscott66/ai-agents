@@ -201,11 +201,6 @@ export interface Permission {
 }
 
 /**
- * Действия, которые в режиме semi_auto всегда требуют approval,
- * даже если permissions.requires_approval=false.
- * Пока — только исходящие сообщения (внешний side-effect).
- */
-/**
  * Действия, у которых `via_userbot: true` означает «отправлено от лица живого
  * владельца» и потому требует человека, какой бы ни была autonomy.
  *
@@ -312,6 +307,11 @@ export function payloadForcesApproval(
   return null;
 }
 
+/**
+ * Действия, которые в режиме semi_auto всегда требуют approval,
+ * даже если permissions.requires_approval=false.
+ * Пока — только исходящие сообщения (внешний side-effect).
+ */
 export const SEMI_AUTO_RISKY: Set<ActionType> = new Set<ActionType>([
   "SEND_MESSAGE",
   "PIN_MESSAGE",

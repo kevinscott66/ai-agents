@@ -125,6 +125,8 @@ const CODE_SPAN_RE = /(```[\s\S]*?(?:```|$)|`[^`\n]*`)/g;
  * настоящие. Ограничение касается только хэндла — единственного правила,
  * которое путает синтаксис с персональными данными.
  */
+const HANDLE_RE = /(^|[\s(])@([A-Za-z0-9_]{4,})/g;
+
 /**
  * Аудит 2026-08-20: у правила почты не было понятия TLD, и спецификатор
  * пакета разбирался как адрес — `bun@1.1.30` это «локальная часть `bun`,
@@ -183,7 +185,7 @@ export function sanitizeWikiContent(input: string): string {
     .map((part, i) =>
       i % 2 === 1
         ? part
-        : part.replace(/(^|[\s(])@([A-Za-z0-9_]{4,})/g, "$1<handle-redacted>"),
+        : part.replace(HANDLE_RE, "$1<handle-redacted>"),
     )
     .join("");
 }

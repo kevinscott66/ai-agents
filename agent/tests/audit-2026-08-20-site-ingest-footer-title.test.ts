@@ -17,7 +17,8 @@
  *   title: "Copyright 2023-2026 [DeLabs](https://t.me/+GlWhq7pcZFkNjc6)"
  *
  * Это не косметика: все четыре выхода PUBLISH_TO_CHANNEL зовут
- * `ingestDigestToSite(fullText, …)` (`action-dispatch.ts:669,733,741,763`),
+ * `ingestDigestToSite(fullText, …)` (`handlePublishToChannel`,
+ * lib/dispatch/publish.ts),
  * страница уходит на delabs.space вместе с записью в RSS, и снять её обратно
  * нельзя — ровно класс инцидента T-743.
  *

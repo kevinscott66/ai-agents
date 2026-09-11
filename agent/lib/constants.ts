@@ -13,7 +13,6 @@
 // Network & Ports
 // ========================================
 
-/** Default port for the Mini App HTTP server / API endpoints. */
 /**
  * Потолок задержки таймера: setTimeout/setInterval держат её в 32-битном
  * знаковом int. Больше — Bun печатает одну строку TimeoutOverflowWarning в
@@ -34,6 +33,7 @@
  */
 export const MAX_TIMER_MS = 2_147_483_647;
 
+/** Default port for the Mini App HTTP server / API endpoints. */
 export const DEFAULT_MINIAPP_PORT = 8787;
 
 /** Default port for the Mac Bridge WebSocket server.
@@ -157,6 +157,10 @@ export const CONTROL_TOOL_STATUSES: ReadonlySet<string> = new Set([
  * Инструменты, которые диспатчер исполняет сам, не уходя в action-dispatch:
  * чтение без побочных эффектов (плюс CANCEL_SCHEDULED_POST — единственная
  * мутация в этом блоке, SEC-audit 2026-06-10 F1).
+ *
+ * Держим списком, а не выводим из диспатчера, чтобы тест мог утверждать
+ * TOOLS = TOOL_NAMES ∪ INLINE_TOOL_NAMES — иначе новый инструмент снова молча
+ * провалится в «unknown tool».
  *
  * Список живёт здесь, а не в tools-schema.ts, ради круга импортов: этот файл —
  * лист, его ни от кого не тянет. Аудит 2026-08-29: пока набор объявлялся в

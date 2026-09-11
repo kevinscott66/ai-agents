@@ -5,6 +5,12 @@
  * the event loop during file operations in action-dispatch.ts and other hot paths.
  * 
  * See T-303 for context on removing synchronous FS from hot path.
+ *
+ * Разбор slug → путь и канонический ключ берутся из memory.ts, своих копий
+ * здесь нет. Копия была — и уже разошлась с оригиналом: фикс канонического
+ * ключа 2026-08-08 доехал только до memory.ts, а через async идёт WRITE_WIKI,
+ * то есть все записи агентов. Теперь и ключ (`upsertWikiFts`), и путь
+ * (`pagePath`) выводятся в одном месте.
  */
 import { readFile, writeFile, appendFile, mkdir, access, open, rename, rm } from "node:fs/promises";
 import { constants } from "node:fs";
@@ -29,15 +35,6 @@ const MEMORY_DIR = resolveMemoryDir(process.env.MEMORY_DIR);
 function scopeDir(scope: Scope): string {
   return join(MEMORY_DIR, scope);
 }
-
-/**
- * Резолвинг slug → путь общий с синхронной половиной (memory.ts).
- *
- * Здесь была своя копия — и она уже расходилась с оригиналом: фикс
- * канонического ключа 2026-08-08 доехал только до memory.ts, а через async
- * идёт WRITE_WIKI, то есть все записи агентов. Копий больше нет: и ключ
- * (upsertWikiFts), и путь (pagePath) выводятся в одном месте.
- */
 
 /**
  * Async version of wikiRead

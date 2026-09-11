@@ -108,12 +108,6 @@ export function assistantText(m: any): string {
 }
 
 /**
- * Учёт токенов для подписочного (Agent SDK) пути. result-сообщение SDK несёт
- * `usage` (input/output + cache). Без этого `agent_token_usage` пуст на проде
- * (USE_AGENT_SDK=true), из-за чего Mini App и дайджест WorkSpace показывали 0
- * затраченных токенов (raw-путь callAnthropic писал usage, а SDK-путь — нет).
- */
-/**
  * Писатель расхода «нарастающим итогом»: принимает суммы за прогон целиком и
  * дописывает в БД только то, чего там ещё нет.
  *
@@ -130,6 +124,11 @@ export function assistantText(m: any): string {
  * Аргументы — накопленные суммы, а не приращения: у SDK есть два источника
  * (сумма по assistant-сообщениям и накопительный usage у result), и они могут
  * разойтись. Кто больше — тот и записан; отрицательная разница игнорируется.
+ *
+ * Учёт токенов для подписочного (Agent SDK) пути. result-сообщение SDK несёт
+ * `usage` (input/output + cache). Без этого `agent_token_usage` пуст на проде
+ * (USE_AGENT_SDK=true), из-за чего Mini App и дайджест WorkSpace показывали 0
+ * затраченных токенов (raw-путь callAnthropic писал usage, а SDK-путь — нет).
  */
 export function usageWriter(
   agentKey: string,
@@ -412,7 +411,6 @@ export function isFailureResult(out: string): boolean {
   }
 }
 
-/** MCP-сервер из наших TOOLS, отфильтрованных по роли + allowedTools. */
 /**
  * Сколько раз один и тот же инструмент может отработать за один прогон SDK.
  *
@@ -434,6 +432,7 @@ export function isFailureResult(out: string): boolean {
  */
 export const SDK_MAX_CALLS_PER_TOOL = MAX_CALLS_PER_TOOL_PER_RUN;
 
+/** MCP-сервер из наших TOOLS, отфильтрованных по роли + allowedTools. */
 export function buildTeamMcp(opts: RunWithToolsOpts, ctx: ExecCtx) {
   const stats: ToolRunStats = { executed: 0 };
   // Счётчик на прогон: buildTeamMcp зовётся один раз из runViaAgentSdk.
@@ -666,7 +665,6 @@ const DISALLOWED = [
  * путь к бинарю приходит из CLAUDE_BIN, модель задаётся явно.
  */
 const SETTING_SOURCES: never[] = [];
-/** Read-only веб-тулзы Claude Code, открытые агентам для ресёрча. */
 
 /**
  * Что кладём в `allowedTools` запроса к CLI.
