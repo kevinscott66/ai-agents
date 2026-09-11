@@ -1358,7 +1358,7 @@ export function startMiniappServer(
     // GET /api/db-stats — C31 DB maintenance / size dashboard.
     //
     // Аудит 2026-09-10: ручка была открыта любому допущенному, и это дороже,
-    // чем выглядит. `dbStats` (db-maint.ts) делает `COUNT(*)` по всем 19
+    // чем выглядит. `dbStats` (db-maint.ts) делает `COUNT(*)` по всем 18
     // таблицам STAT_TABLES — включая `messages`, `messages_archive` и
     // `agent_actions_archive` — плюс `dbstatByOwner`, про который его же
     // комментарий говорит прямо: «`dbstat` — полный скан БД». `bun:sqlite`
