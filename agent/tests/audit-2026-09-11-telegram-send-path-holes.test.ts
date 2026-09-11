@@ -286,10 +286,10 @@ describe("юзерботный путь диспетчера мерит то ж�
       { agentKey: "orchestrator", chatId: CHAT, userbot: ub, telegram: undefined } as never,
     );
     expect(res.ok).toBe(true);
-    // До правки: две части с префиксами «(1/2) » и «(2/2) », и два слота
+    // До правки: две части с префиксами «(1/2)» и «(2/2)», и два слота
     // из флуд-ведра владельца вместо одного.
     expect(calls).toHaveLength(1);
-    expect(calls[0]).not.toMatch(/^\(\d+\/\d+\) /);
+    expect(calls[0]).not.toMatch(/^\(\d+\/\d+\)\n/);
     expect(calls[0]).toBe(body);
   });
 
@@ -302,6 +302,6 @@ describe("юзерботный путь диспетчера мерит то ж�
     );
     expect(res.ok).toBe(true);
     expect(calls.length).toBeGreaterThan(1);
-    expect(calls[0]).toMatch(/^\(1\/\d+\) /);
+    expect(calls[0]).toMatch(/^\(1\/\d+\)\n/);
   });
 });
