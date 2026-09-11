@@ -64,6 +64,7 @@ import {
   buildWikiPagesSystemText,
   speakerLabel,
   defuseSpeakerLabels,
+  nowSystemText,
 } from "../lib/agent-prompts.ts";
 
 // P2 discussion-mode: предел глубины handoff-цепочки, когда режим включён.
@@ -588,6 +589,11 @@ export function registerMessageHandler(
           cache_control: { type: "ephemeral" },
         },
         ...(hitPages ? [{ type: "text" as const, text: hitPages }] : []),
+        // Аудит 2026-09-11: последним и БЕЗ cache_control — см. nowSystemText.
+        // Кэш режется по последней точке cache_control, поэтому меняющийся
+        // каждую минуту хвост здесь бесплатен, а среди блоков выше обнулял бы
+        // кэш каждый ход.
+        { type: "text" as const, text: nowSystemText() },
       ];
 
       const messages: Anthropic.MessageParam[] = recent.map((r) => {

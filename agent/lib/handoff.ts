@@ -35,6 +35,7 @@ import {
   speakerLabel,
   defuseSpeakerLabels,
   defuseTriggerText,
+  nowSystemText,
 } from "./agent-prompts.ts";
 
 export const MAX_HANDOFF_DEPTH = 3;
@@ -417,6 +418,10 @@ export async function respondAs(
         cache_control: { type: "ephemeral" },
       },
       ...(hitPages ? [{ type: "text" as const, text: hitPages }] : []),
+      // Аудит 2026-09-11: последним и БЕЗ cache_control — см. nowSystemText.
+      // Делегат планирует посты наравне с оркестратором, а «завтра» без даты
+      // считать не от чего.
+      { type: "text" as const, text: nowSystemText() },
     ];
 
     const messages = buildDelegateMessages(
