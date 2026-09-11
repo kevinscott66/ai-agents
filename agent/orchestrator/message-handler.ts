@@ -18,11 +18,21 @@
  * стоп-гейт стоит до дедупа и лимитов, чтобы поставленный на паузу агент не
  * жёг ни токены, ни чужие счётчики.
  *
- * Behaviour is unchanged from the inline version. Everything the handler
- * closed over at module scope is now passed explicitly via {@link MessageHandlerDeps}
- * (mutable `bots` array, the chat allowlist, the history limit, the Anthropic
- * client, the model id, and the shared HandoffDeps). The two pure helpers
- * (`isMentioned`/`tailLines`) come from ./helpers.ts to avoid a circular import.
+ * Всё, что обработчик замыкал на уровне модуля, передаётся явно через
+ * {@link MessageHandlerDeps} (растущий массив `bots`, allowlist чатов, размер
+ * окна истории, клиент Anthropic, id модели и общие HandoffDeps). Чистые
+ * хелперы — `isMentioned`, `mentionedHandles`, `tailLines` — живут в
+ * ./helpers.ts, чтобы не заводить круговой импорт.
+ *
+ * Аудит 2026-09-11: тут было «Behaviour is unchanged from the inline version»
+ * и «the two pure helpers». Ни то, ни другое давно не верно, и обе неправды
+ * дорогие. Поведение с выноса менялось многократно, и каждый раз — гейтом на
+ * раннем выходе (стоп-гейт, анти-дуп, лимит ingest, черта `turnStarted`); при
+ * разборе «почему роль не ответила» шапка уводила читателя искать причину в
+ * Telegram и SDK вместо трёх `return` внутри. Хелперов три, и пропущенный —
+ * `mentionedHandles`, который helpers.ts называет единственным источником
+ * правды об упоминаниях: доверившись шапке, следующий заведёт свой разбор
+ * entity и воспроизведёт рассинхрон, разобранный аудитом 2026-08-28.
  */
 import { Telegraf } from "telegraf";
 import Anthropic from "@anthropic-ai/sdk";
@@ -90,12 +100,8 @@ import { BudgetExceededError } from "../lib/token-budget.ts";
 import { getErrorMessage } from "../lib/errors.ts";
 import { isMentioned, mentionedHandles, tailLines } from "./helpers.ts";
 import { mediaNote } from "../lib/media-markers.ts";
+import { cutToCodeUnits } from "../lib/text-cut.ts";
 
-/**
- * Что сказать в чат, когда ход упал. Текст ошибки НЕ пересказываем: в нём
- * бывают URL с токенами и куски запроса. Пользователю нужно другое — понять,
- * ждать ли, повторять ли, звать ли человека.
- */
 /**
  * Сколько текста агента показываем вместе с отказом. Ход мог написать длинный
  * ответ; в чат он попадает вместе с объяснением, почему обрыв, — и не должен
@@ -161,6 +167,17 @@ export function attachmentLossNote(args: {
   );
 }
 
+/**
+ * Что сказать в чат, когда ход упал. Текст ошибки НЕ пересказываем: в нём
+ * бывают URL с токенами и куски запроса. Пользователю нужно другое — понять,
+ * ждать ли, повторять ли, звать ли человека.
+ *
+ * Аудит 2026-09-11: этот абзац стоял шестьюдесятью строками выше, вторым
+ * подряд `/** *\/`-блоком, — то есть прилипал к `PARTIAL_TEXT_MAX`, а
+ * функция, которую он охраняет, оставалась без документации вовсе. Правило
+ * «причину не пересказываем» — защита от утечки токенов из URL в чат, и
+ * висеть оно должно над той функцией, которая может их туда пустить.
+ */
 export function replyForTurnError(err: unknown): string {
   if (err instanceof BudgetExceededError) {
     const tail = "вернусь после сброса (00:00 UTC).";
@@ -178,13 +195,10 @@ export function replyForTurnError(err: unknown): string {
         // Аудит 2026-09-11: резали по code units без оглядки на суррогаты.
         // Эмодзи на границе оставлял в хвосте одинокий высокий суррогат, и
         // при кодировании в UTF-8 человек видел ромб вместо символа. Правило
-        // не новое — его уже держат `cutBlock` (lib/telegram-format.ts) и
-        // `sliceOneEnd` (lib/telegram-chunking.ts); третье место обрезки его
-        // не унаследовало.
-        let cut = t.slice(0, PARTIAL_TEXT_MAX - 1);
-        const last = cut.charCodeAt(cut.length - 1);
-        if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
-        parts.push(cut.trimEnd() + "…");
+        // не новое — но круг 25 держал его тремя копиями, и два места обрезки
+        // его не унаследовали: наследовать было нечего. Теперь оно одно, в
+        // lib/text-cut.ts, и туда же ходят те два.
+        parts.push(cutToCodeUnits(t, PARTIAL_TEXT_MAX - 1).trimEnd() + "…");
       } else {
         parts.push(t);
       }
@@ -362,7 +376,18 @@ export async function fetchTelegramAttachment(
 export interface MessageHandlerDeps {
   /** Mutable list of running bots (shared reference — grows as bots boot). */
   bots: RunningBot[];
-  /** Chat-id allowlist (empty = allow all). */
+  /**
+   * Chat-id allowlist. ПУСТОЙ ЗАПРЕЩАЕТ ВСЕХ — `isAllowlisted`
+   * (lib/allowlist.ts), fail-closed по SEC-5.
+   *
+   * Аудит 2026-09-11: здесь стояло «empty = allow all» — ровно наоборот.
+   * Формулировка уже дважды признана ошибкой и исправлена у соседей
+   * (`registerVoiceHandler` в voice-handler.ts, orchestrator-team.ts); этот
+   * файл при той зачистке пропустили. Опаснее не то, что читатель почистит
+   * TELEGRAM_ALLOWED_GROUP_IDS и пойдёт искать поломку в Telegram, а
+   * обратное: он по этой строке заведёт в новом месте `allowed.length ? … :
+   * true` — и откроет ботов всему свету.
+   */
   allowed: string[];
   /** Short-memory history window size. */
   historyLimit: number;
@@ -396,6 +421,25 @@ export function registerMessageHandler(
   const { bots, allowed, historyLimit, anthropic, model, handoffDeps } = deps;
 
   bot.on("message", async (ctx) => {
+    // Аудит 2026-09-11: `try` ниже открыт ДО всех гейтов, а его `catch`
+    // отвечает в чат. Значит любой сбой, случившийся РАНЬШЕ решения «отвечаем
+    // ли мы вообще», давал ответ мимо этого решения. Ближайшая незащищённая
+    // операция — запись входящего в короткую память (`recordMessage` бросает
+    // синхронно на SQLITE_BUSY во время бэкапа, на readonly-базе, на
+    // рассинхроне миграций), и стоит она выше стоп-гейта.
+    //
+    // Цена: поставленный на паузу агент заговаривал — ровно то, что запрещает
+    // докблок гейта («не должен ни говорить, ни жечь на это токены»). Тем же
+    // путём обходились ещё три решения: немой носитель, «нас не упомянули» и
+    // ТИХИЙ дроп по лимиту ingest, про который рядом написано «no reply —
+    // avoids an amplifiable bounce»: при бросающей записи каждый флудящий
+    // апдейт получал ответ, то есть усилитель включался именно там, где его
+    // выключали.
+    //
+    // Флаг поднимается в одной точке — когда все гейты пройдены и ход начат.
+    // Раньше неё `catch` только пишет в лог: сбой до этой черты означает, что
+    // роль ещё не решила говорить, и извиняться ей не за что.
+    let turnStarted = false;
     try {
       const chatId = ctx.chat.id.toString();
       // C7: отметка «апдейт получен» переехала в middleware на входе бота —
@@ -552,6 +596,10 @@ export function registerMessageHandler(
       log.info(
         `[in][${def.key}] chat=${chatId} from=${redactSender(ctx.from?.id, ctx.from?.username)} text=${redactText(text)}`
       );
+
+      // Черта: гейты позади, ход наш. Отсюда сбой — это сбой ХОДА, и о нём
+      // человеку сообщают (разбор — в `catch` внизу).
+      turnStarted = true;
 
       await ctx.sendChatAction("typing");
 
@@ -715,8 +763,10 @@ export function registerMessageHandler(
             } else {
               let content = Buffer.from(ab).toString("utf8");
               if (content.length > MAX_DOC_CHARS) {
+                // Через `cutToCodeUnits`, а не `slice`: половина суррогатной
+                // пары на границе уезжает в промпт модели и в короткую память.
                 content =
-                  content.slice(0, MAX_DOC_CHARS) +
+                  cutToCodeUnits(content, MAX_DOC_CHARS) +
                   "\n…[файл обрезан по лимиту контекста]";
               }
               const filename =
@@ -962,6 +1012,10 @@ export function registerMessageHandler(
       });
     } catch (err) {
       log.error(`[err][${def.key}]`, { error: String(err) });
+      // Сбой ДО черты `turnStarted` — не сбой хода: роль ещё не решила, её ли
+      // это сообщение и можно ли ей говорить. Ответ здесь обошёл бы то самое
+      // решение; лога довольно.
+      if (!turnStarted) return;
       // Раньше здесь всё и заканчивалось: любой сбой хода — исчерпанный
       // дневной бюджет, 429 после ретраев, 400 от API — превращался в молчание.
       // Пользователь видел не ошибку, а бота, который просто не ответил, и

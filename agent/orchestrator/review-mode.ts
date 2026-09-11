@@ -4,9 +4,20 @@
  * Runs the orchestrator in a one-shot "review-only" pass: it lists the PRs that
  * were opened/updated recently and runs each one through the pre-push checklist
  * by reusing the T-511 `REVIEW_AND_MERGE_PR` handler (`handleReviewAndMergePr`).
- * Every PR gets a validation comment and is left for a human. The control-loop
- * authority cannot reach the merge command. The pass then prints a summary for
- * the internal supervisor/status collector ("Control loop" section).
+ * Разбор НИЧЕГО не мержит — merge закрыт для полномочия `control-loop` ранним
+ * возвратом в lib/dispatch/github.ts — и оставляет PR человеку. В разбор
+ * попадают только свои ветки: список фильтруется по префиксу `agent/`
+ * (`headRefName` в `listRecentOpenPrs`), и это граница безопасности автономного
+ * цикла, а не оптимизация. Итог печатается для внутреннего наблюдателя
+ * (раздел «Control loop»).
+ *
+ * Аудит 2026-09-11: здесь стояло «Every PR gets a validation comment». Это
+ * неправда в трёх ветках, и файл опровергает себя двадцатью строками ниже, в
+ * разборе `COMMENT_LOST`: «уже рассмотрен» выходит через `skipped` без
+ * комментария; `comment_failed`/`validation_failed` — это «проверка
+ * отработала, но до PR не доехала»; придержанный человеком PR тоже уходит
+ * `skipped`. Цена — мониторинг, построенный на «PR без комментария = цикл не
+ * работал»: токен, потерявший право писать, читается как «PR-ов не было».
  *
  * Fully hermetic: all GitHub access goes through an injectable {@link GhRunner},
  * so unit tests pass a fake runner and never touch the network or real PRs.
@@ -62,7 +73,20 @@ export interface ReviewModeResult {
   truncated?: boolean;
   /** PR numbers reviewed, in list order. */
   pr_numbers: number[];
-  /** Per-PR review outcome (merged / commented / failed). */
+  /**
+   * Исход разбора каждого PR.
+   *
+   * Встречаются пять: `commented`, `skipped` (уже рассмотрен, либо придержан
+   * человеком), `comment_failed`, `validation_failed` — и `merged`, которого
+   * ЭТОТ режим не достигает никогда: merge закрыт для полномочия
+   * `control-loop` (lib/dispatch/github.ts).
+   *
+   * Аудит 2026-09-11: было «merged / commented / failed». Из трёх названных
+   * реально встречается одно, а `skipped` — самый частый исход спокойного
+   * прогона — не назван вовсе. Разбор, написанный по этой строке (`merged →
+   * … иначе провал`), схлопывает «нечего делать» в «сломалось» — ровно та
+   * ошибка, которую двадцатью строками ниже уже разбирал `COMMENT_LOST`.
+   */
   results: ReviewedPr[];
   /**
    * Сколько PR разбор уронил (`outcome.ok === false`). Необязательное — как и
@@ -82,10 +106,10 @@ export interface ReviewModeResult {
  * `else reviewed++` сгребала все успешные исходы, а среди них есть
  * `comment_failed` и `validation_failed` — «проверка отработала, но до PR не
  * доехала» (три ветки `posted ? "commented" : …` в lib/dispatch/github.ts).
- * Комментарий и есть единственный внешний след разбора: нет его — нет и маркера, значит следующий
- * прогон разберёт тот же PR заново. Хуже того, fail-closed в agent.ts:70
- * считает по этой же разбивке: токен, потерявший право писать, давал
- * «Commented: 5 · failed: 0» и exit 0.
+ * Комментарий и есть единственный внешний след разбора: нет его — нет и
+ * маркера, значит следующий прогон разберёт тот же PR заново. Хуже того, по
+ * этой же разбивке считает fail-closed в agent.ts — строка `nothingWorked`:
+ * токен, потерявший право писать, давал «Commented: 5 · failed: 0» и exit 0.
  */
 const COMMENT_LOST: ReadonlySet<string> = new Set(["comment_failed", "validation_failed"]);
 

@@ -8,6 +8,7 @@
  */
 
 import { log } from "./log.ts";
+import { dropLoneHighSurrogate } from "./text-cut.ts";
 import { withTelegramRateLimitRetry, type RetryOptions } from "./telegram-retry.ts";
 
 function escapeHtml(s: string): string {
@@ -564,9 +565,7 @@ export function danglingLinkStart(s: string, rest = ""): number {
  */
 export function cutBlock(block: string, fits: (candidate: string) => boolean): string {
   const clean = (raw: string): string => {
-    let s = raw;
-    const last = s.charCodeAt(s.length - 1);
-    if (last >= 0xd800 && last <= 0xdbff) s = s.slice(0, -1);
+    let s = dropLoneHighSurrogate(raw);
     // Обрыв внутри ссылки: `](` ещё не закрыт — отрезаем ссылку целиком.
     const open = danglingLinkStart(s);
     if (open !== -1) s = s.slice(0, open);

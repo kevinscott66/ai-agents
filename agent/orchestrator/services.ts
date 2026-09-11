@@ -2,9 +2,15 @@
  * T-320: Background-service wiring extracted from main() in orchestrator-team.ts.
  *
  * startBackgroundServices() starts all background services (watchdog, health,
- * miniapp, self-diag, backup, digest, db-maint, userbot, mac-bridge) and returns
- * a handle whose stop() tears them all down (except bots and process.exit, which
- * stay in main's own signal handler).
+ * miniapp, self-diag, backup, digest, db-maint, userbot, userbot-router,
+ * mac-bridge) and returns a handle whose stop() tears them all down (except
+ * bots and process.exit, which stay in main's own signal handler).
+ *
+ * Аудит 2026-09-11: десятой, `buildUserbotRouter`/`setUserbotRouter`, в списке
+ * не было. Ищущий, кто на старте поднимает MTProto-сессии ролей (T-401),
+ * решал по этому перечню, что файл про них не знает, и заводил второй
+ * источник — при живом singleton это подмена личности в исходящих, то есть
+ * ровно то, что T-401 запрещает.
  */
 import Anthropic from "@anthropic-ai/sdk";
 import { dirname } from "node:path";

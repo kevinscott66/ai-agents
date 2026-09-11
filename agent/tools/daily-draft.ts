@@ -25,6 +25,7 @@ import { renderBannerPng } from "../lib/cover-banner.ts";
 import { mdToUserbotHtml } from "../lib/telegram-format.ts";
 import { buildCustomEmojiEntities } from "../lib/custom-emoji-map.ts";
 import { extractMessageId } from "../lib/userbot.ts";
+import { cutToCodeUnits } from "../lib/text-cut.ts";
 import { delabsChannelId, delabsSiteBase, delabsPendingPath } from "../lib/delabs-env.ts";
 // Текстовые примитивы поста живут отдельным чистым модулем: их делят три
 // шаблона (дайджест, отработка активностей, итоги недели), а этот файл тянет
@@ -461,23 +462,29 @@ export function buildDraftReviewText(articles: DraftArticle[]): string {
 }
 
 /**
+ * Граница жёсткой дорезки, не разрывающая суррогатную пару.
+ *
+ * Аудит 2026-09-11, круг 26: правило здесь было выписано в пятый раз — своими
+ * `0xd800`/`0xdbff`, как в `cutBlock` (lib/telegram-format.ts), `sliceOneEnd`
+ * (lib/telegram-chunking.ts) и `replyForTurnError` (orchestrator/
+ * message-handler.ts). Пятая копия и есть объяснение, почему ДВА места
+ * обрезки правила не знали вовсе: импортировать было нечего. Теперь оно одно,
+ * в lib/text-cut.ts; здесь остаётся только перевод «строка → индекс», нужный
+ * вызывающему из `chunkForTelegram`: тот режет по границе ОБЕ стороны и без
+ * номера не обойдётся.
+ *
+ * Эмодзи вне BMP (🔥 💰 🌐 — те самые, что расставляет дайджест) занимает две
+ * кодовые единицы UTF-16, и срез ровно между ними Telegram рисует как «�».
+ */
+function safeCut(line: string, limit: number): number {
+  return cutToCodeUnits(line, limit).length;
+}
+
+/**
  * Нарезать текст на сообщения. Режем по границам строк; строку длиннее лимита
  * (один абзац body теоретически может быть таким) дорезаем жёстко — потерять
  * кусок текста, который владелец должен прочитать, хуже, чем разорвать абзац.
  */
-/**
- * Граница жёсткой дорезки, не разрывающая суррогатную пару. `String.length` —
- * это кодовые единицы UTF-16, а эмодзи вне BMP (🔥 💰 🌐 — те самые, что
- * расставляет дайджест) занимает две: срез ровно между ними даёт два одиноких
- * суррогата, которые Telegram показывает как «�». Сдвигаемся на один символ
- * назад — это законно, лимит от этого только уменьшается.
- */
-function safeCut(line: string, limit: number): number {
-  const code = line.charCodeAt(limit - 1);
-  const isHigh = code >= 0xd800 && code <= 0xdbff;
-  return isHigh && limit > 1 ? limit - 1 : limit;
-}
-
 export function chunkForTelegram(
   text: string,
   limit: number = TG_MESSAGE_LIMIT,
