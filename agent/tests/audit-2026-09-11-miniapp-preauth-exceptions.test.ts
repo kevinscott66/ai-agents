@@ -21,11 +21,18 @@
  * списка. Ошибка того же рода, что и ловимая: счёт вёлся не по тому, про что
  * утверждение. Теперь список выбирается вводной фразой.
  *
- * ЧЕГО СТОРОЖ НЕ ДЕЛАЕТ. Он не проверяет маршруты вне /api/ (`/healthz`,
- * `/metrics`, `/readyz`, статика) — докблок про них не говорит, и они
- * аутентификации и не обещают. Он не проверяет, что сама стена достаточна, и
- * не разбирает ветки, где путь собирается из переменной: pattern-маршруты
- * (regex) стоят ниже стены, и если такой поставят выше, тест этого не увидит.
+ * Круг 51: повторный аудит показал, что «не проверяем маршруты вне /api/» —
+ * само по себе дефект того же рода. Читающий шапку ищет в ней ответ на вопрос
+ * «что отвечает неаутентифицированному», а не «что отвечает неаутентифицированному
+ * среди путей под /api/»; ровно поэтому внешний аудитор насчитал шесть входов
+ * там, где шапка обещала три, и три лишних оказались /healthz, /readyz и
+ * /metrics. Числа в шапке больше нет (правило круга 20), а сторож теперь
+ * требует, чтобы назван был КАЖДЫЙ путь выше стены, а не только /api/-шный.
+ *
+ * ЧЕГО СТОРОЖ НЕ ДЕЛАЕТ. Он не проверяет статику (она обслуживается вне
+ * route()), не проверяет, что сама стена достаточна, и не разбирает ветки,
+ * где путь собирается из переменной: pattern-маршруты (regex) стоят ниже
+ * стены, и если такой поставят выше, тест этого не увидит.
  */
 import { describe, test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -50,7 +57,7 @@ const PRE_WALL = LINES.slice(ROUTE, WALL).join("\n");
  * списков, то есть про не тот список. Границу списка задаёт отступ: строки
  * продолжения буллета идут с отступом от `*`, обычная проза — сразу за ним.
  */
-function docBullets(intro = "Исключений"): string[] {
+function docBullets(intro = "Выше этой стены стоит"): string[] {
   const head = SRC.slice(0, SRC.indexOf("*/")).split("\n");
   const from = head.findIndex((l) => l.includes(intro));
   if (from < 0) return [];
@@ -64,26 +71,21 @@ function docBullets(intro = "Исключений"): string[] {
   return out;
 }
 
-const NUMERALS: Record<string, number> = {
-  ОДНО: 1,
-  ДВА: 2,
-  ТРИ: 3,
-  ЧЕТЫРЕ: 4,
-  ПЯТЬ: 5,
-};
-
 describe("докблок miniapp-server сходится со стеной authOr401", () => {
   test("предпосылка: стена и начало route() найдены, стена ниже начала", () => {
     expect(ROUTE).toBeGreaterThan(0);
     expect(WALL).toBeGreaterThan(ROUTE);
   });
 
-  test("прописью названо ровно столько исключений, сколько буллетов", () => {
-    const m = SRC.slice(0, SRC.indexOf("*/")).match(/Исключений\s+([А-ЯЁ]+)/);
-    expect(m).toBeTruthy();
-    const claimed = NUMERALS[m![1]!];
-    expect(claimed).toBeDefined();
-    expect(docBullets().length).toBe(claimed);
+  test("числа исключений в действующей части шапки нет", () => {
+    // Правило круга 20: счёт, который разъезжается, надо убирать, а не
+    // подгонять. Прежние «ДВА»/«ТРИ» уцелели только внутри разбора — там они
+    // цитаты, а не утверждение о сегодняшнем коде.
+    const head = SRC.slice(0, SRC.indexOf("*/"));
+    const active = head.slice(0, head.indexOf("Числа исключений здесь нет"));
+    expect(docBullets().length).toBeGreaterThan(0);
+    expect(active).not.toMatch(/Исключений\s+[А-ЯЁ]+/);
+    expect(head).toContain("Числа исключений здесь нет намеренно");
   });
 
   test("каждая ветка под /api/ выше стены названа в докблоке", () => {
@@ -105,9 +107,14 @@ describe("докблок miniapp-server сходится со стеной authO
 
   test("докблок не называет входа, которого нет выше стены", () => {
     for (const b of docBullets()) {
-      const p = b.match(/(\/api\/[a-z0-9/-]+)/);
-      if (p) {
-        expect(PRE_WALL).toContain(`path === "${p[1]}"`);
+      const paths = [...b.matchAll(/(\/[a-z0-9/-]+)/g)]
+        .map((m) => m[1]!.replace(/\/$/, ""))
+        // «пути не под /api/» — упоминание префикса, а не маршрута. Отличаем
+        // по тому, что это ровно префикс: маршрута с таким путём нет и быть
+        // не может, стена ровно на нём и стоит.
+        .filter((x) => x !== "/api");
+      if (paths.length > 0) {
+        for (const p of paths) expect(PRE_WALL).toContain(`path === "${p}"`);
       } else {
         // Единственный неадресный буллет — это OPTIONS.
         expect(b).toContain("OPTIONS");
@@ -124,6 +131,26 @@ describe("докблок miniapp-server сходится со стеной authO
     expect(neighbour.length).toBeGreaterThan(0);
     expect(own.length + neighbour.length).toBe(all);
     expect(own.join("\n")).not.toContain("/api/mac/stop");
+  });
+
+  test("каждый не-/api/ путь выше стены тоже назван", () => {
+    // Именно эти три шапка молчала, пока считала «исключения из-под /api/».
+    // Стена их не закрывает по построению — значит, перечислять обязана шапка.
+    const outside = new Set<string>();
+    for (const m of PRE_WALL.matchAll(/path === "(\/[a-z0-9/-]+)"/g)) {
+      if (!m[1]!.startsWith("/api/")) outside.add(m[1]!);
+    }
+    expect(outside.size).toBeGreaterThan(0);
+    const doc = docBullets().join("\n");
+    for (const p of outside) expect(doc).toContain(p);
+  });
+
+  test("оракул /readyz назван как осознанный, а не забытый", () => {
+    // Код ответа 200/503 виден неаутентифицированному — тело под METRICS_TOKEN,
+    // а статус нет. Пока это так, шапка обязана говорить об этом вслух.
+    const head = SRC.slice(0, SRC.indexOf("*/"));
+    expect(head).toContain("КОД ответа /readyz (200/503) виден всем");
+    expect(PRE_WALL).toContain('path === "/readyz"');
   });
 
   test("OPTIONS отвечает 204 без тела — почему это не дыра", () => {
