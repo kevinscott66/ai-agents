@@ -5,8 +5,9 @@ Telegram group. Each role is an autonomous agent with its own system prompt,
 permission envelope and audit trail; a shared orchestrator routes conversation,
 delegates work and escalates anything risky to a human.
 
-Built as a working system, not a demo — 53k lines of TypeScript, 798 test files,
-a fail-closed permission gate and a six-view operator dashboard.
+Built as a working system, not a demo — over 200k lines of TypeScript across more
+than 900 test files, a fail-closed permission gate and a six-view operator
+dashboard.
 
 ## What it does
 
@@ -104,10 +105,10 @@ Minimum configuration — see `agent/.env.example` for the annotated full set:
 ```bash
 TELEGRAM_BOT_TOKEN=
 CLAUDE_CODE_OAUTH_TOKEN=      # or ANTHROPIC_API_KEY with USE_AGENT_SDK=false
-ALLOWED_CHAT_IDS=
-TG_API_ID=
-TG_API_HASH=
-TG_PHONE=
+TELEGRAM_ALLOWED_GROUP_IDS=   # fail-closed: empty means the bots answer nowhere
+TELEGRAM_API_ID=
+TELEGRAM_API_HASH=
+TELEGRAM_USERBOT_PHONE=
 USERBOT_SESSION_KEY=
 ```
 
@@ -118,7 +119,7 @@ bun test          # full suite
 bun run typecheck # tsc --noEmit
 ```
 
-798 test files cover the permission gate, approval dispatch, deployment units,
+The suite covers the permission gate, approval dispatch, deployment units,
 database path resolution, secret scrubbing and userbot flood control. A large
 share are regression tests written against specific production incidents and
 named for the date they were found.
