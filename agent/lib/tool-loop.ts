@@ -1,14 +1,23 @@
 /**
  * Anthropic tool_use loop: на каждом шаге пушим ассистент-блок в messages,
  * выполняем все tool_use → пушим user-сообщение с tool_result, повторяем.
- * Прерываемся, когда stop_reason !== 'tool_use' или превышен лимит.
+ * Прерываемся, когда stop_reason !== 'tool_use' или превышен лимит. Одно
+ * исключение: 'pause_turn' — серверный веб-поиск приостановил ход, и цикл
+ * идёт дальше тем же контекстом (аудит 2026-09-11: шапка про это молчала, и
+ * из неё следовало, что запросов к API за ход ровно столько же, сколько
+ * раундов с tool_use, — а именно на паузах и набегал лишний счёт).
  * Возвращаем сконкатенированный финальный text.
  */
 import { getErrorMessage } from "./errors.ts";
 import Anthropic from "@anthropic-ai/sdk";
 import { TOOLS, executeTool } from "./tools-schema.ts";
 import { callAnthropic } from "./anthropic-client.ts";
-import { webSearchTool, webCapabilityAllowed } from "./web-search.ts";
+import {
+  webSearchTool,
+  webCapabilityAllowed,
+  webSearchRequestsUsed,
+  webSearchRunBudget,
+} from "./web-search.ts";
 import { isToolExposedToRole } from "./permissions.ts";
 import { log } from "./log.ts";
 import { logToolCall } from "./audit.ts";
@@ -382,6 +391,25 @@ export async function runWithTools(opts: RunWithToolsOpts): Promise<string> {
    * размазанных по ходу, — это разгон, его ловит эта.
    */
   const runCallCounts = new Map<string, number>();
+  /**
+   * Бюджет серверного веб-поиска на ВЕСЬ прогон.
+   *
+   * Аудит 2026-09-11: та же ошибка масштаба, что у `runCallCounts` выше, но
+   * стоящая денег напрямую. `max_uses` у серверного инструмента Anthropic
+   * действует на ОДИН HTTP-запрос, а свежий `webSearchTool()` приклеивался
+   * перед каждым из до MAX_TOOL_ITERS запросов плюс к финализирующему — то
+   * есть настоящий потолок был `WEB_SEARCH_MAX_USES × 15`, при дефолте 45
+   * поисков вместо трёх. Усугубляла пауза: `pause_turn` порождает именно
+   * серверный поиск, и каждая пауза гарантированно давала новый запрос с
+   * новым нетронутым `max_uses`.
+   *
+   * Ни `token-budget.ts`, ни бакеты `rate-limits.ts` поисков не считают —
+   * это единственное место, где перерасход вообще виден. Считаем по
+   * `usage.server_tool_use.web_search_requests`, по которому считает и
+   * биллинг; когда остаток дошёл до нуля, инструмент просто не приклеиваем.
+   */
+  const webSearchBudget = webSearchRunBudget();
+  let webSearchUsed = 0;
   for (let i = 0; i < MAX_TOOL_ITERS; i++) {
     const req: Anthropic.MessageCreateParamsNonStreaming = {
       model,
@@ -396,7 +424,7 @@ export async function runWithTools(opts: RunWithToolsOpts): Promise<string> {
     // Аудит 2026-08-27: web_search приклеивался мимо capabilityAllowlist —
     // см. webCapabilityAllowed() в web-search.ts.
     const ws = webCapabilityAllowed("WebSearch", opts.capabilityAllowlist)
-      ? webSearchTool()
+      ? webSearchTool(webSearchBudget - webSearchUsed)
       : null;
     if (ws && req.tools) req.tools = [...req.tools, ws];
     // Автономность Step 3: на ПЕРВОЙ итерации делегированного «производящего»
@@ -435,6 +463,10 @@ export async function runWithTools(opts: RunWithToolsOpts): Promise<string> {
       }
       throw e;
     }
+    // Списываем ДО всякого разбора ответа: любая ветка ниже — return, throw,
+    // `continue` по паузе — уже не вернётся сюда, а поиски состоялись и
+    // оплачены независимо от того, чем ход кончился.
+    webSearchUsed += webSearchRequestsUsed(resp);
     messages.push({ role: "assistant", content: resp.content });
     lastText = resp.content
       .filter((b): b is Anthropic.TextBlock => b.type === "text")
@@ -632,8 +664,13 @@ export async function runWithTools(opts: RunWithToolsOpts): Promise<string> {
     if (toolsForCall && toolsForCall.length > 0) {
       // web_search тоже возвращаем: если он отработал в цикле, в messages лежат
       // server_tool_use-блоки, и его определение в запросе так же обязательно.
+      // Остаток тот же, что и в цикле: финализирующий вызов идёт с
+      // `tool_choice:"none"`, но определение инструмента в запросе обязано
+      // быть — иначе API не примет server_tool_use-блоки из истории. Нулевой
+      // остаток даёт null, и тогда определения нет вовсе; это верно, потому
+      // что при нуле поиск в этом прогоне ни разу и не приклеивался.
       const finalWs = webCapabilityAllowed("WebSearch", opts.capabilityAllowlist)
-        ? webSearchTool()
+        ? webSearchTool(webSearchBudget - webSearchUsed)
         : null;
       finalReq.tools = finalWs ? [...toolsForCall, finalWs] : toolsForCall;
       finalReq.tool_choice = { type: "none" };

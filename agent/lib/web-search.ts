@@ -6,7 +6,7 @@
  * by default (it costs ~$10 / 1000 searches on the Anthropic API on top of
  * tokens). Enable per deployment:
  *   WEB_SEARCH_ENABLED=true
- *   WEB_SEARCH_MAX_USES=3          # cap searches per agent turn (default 3)
+ *   WEB_SEARCH_MAX_USES=3          # cap searches per agent RUN (default 3)
  *   WEB_SEARCH_ALLOWED_DOMAINS=…   # optional CSV allowlist
  *   WEB_SEARCH_BLOCKED_DOMAINS=…   # optional CSV blocklist
  */
@@ -88,6 +88,16 @@ function readMaxUses(): number {
   return 3;
 }
 
+/**
+ * Потолок поисков на прогон — то, что оператор задаёт в WEB_SEARCH_MAX_USES.
+ *
+ * Отдельный экспорт, чтобы вызывающий мог держать остаток: сам `max_uses`
+ * в запросе считает только этот запрос (аудит 2026-09-11).
+ */
+export function webSearchRunBudget(): number {
+  return readMaxUses();
+}
+
 export function webSearchEnabled(): boolean {
   return process.env.WEB_SEARCH_ENABLED === "true";
 }
@@ -120,14 +130,26 @@ export function webCapabilityAllowed(
   );
 }
 
-/** The web_search tool config, or null when disabled. */
-export function webSearchTool(): Anthropic.Messages.WebSearchTool20250305 | null {
+/**
+ * Конфиг инструмента web_search, либо null, когда он недоступен.
+ *
+ * `remaining` — сколько поисков ещё разрешено на ЭТОМ прогоне. Параметр не
+ * косметика: `max_uses` у серверного инструмента Anthropic действует на один
+ * HTTP-запрос, а прогон агента делает их до `MAX_TOOL_ITERS` штук плюс
+ * финализирующий. Без остатка, который считает вызывающий, потолок в 3 поиска
+ * превращался в 3 × 15 (аудит 2026-09-11, см. `runToolLoop`). Кто передать
+ * остаток не может — не передаёт, и получает прежнее «на запрос»; таких мест
+ * быть не должно.
+ */
+export function webSearchTool(
+  remaining?: number,
+): Anthropic.Messages.WebSearchTool20250305 | null {
   if (!webSearchEnabled()) return null;
   if (domainConfigBroken()) {
     warnBrokenDomainConfig();
     return null;
   }
-  const maxUses = readMaxUses();
+  const maxUses = remaining === undefined ? readMaxUses() : Math.max(0, remaining);
   // Ноль — это «нельзя», а не «сколько-то». Инструмент с max_uses: 0 API либо
   // отвергнет, либо истолкует по-своему; не предлагать его честнее.
   if (maxUses === 0) return null;
@@ -347,9 +369,32 @@ function warnSdkDomainsUnenforceable(
  * разрешён. Считаем только сам `WebSearch`: `mcp__team__WebFetch` — другая
  * способность со своим контуром, и общий бюджет у них разный.
  *
- * Лимитер создаётся на прогон, а не на модуль: `max_uses` у raw-пути тоже
- * «на ход», и общий счётчик на процесс тихо резал бы соседние диалоги.
+ * Лимитер создаётся на прогон, а не на модуль: общий счётчик на процесс тихо
+ * резал бы соседние диалоги.
+ *
+ * Аудит 2026-09-11: здесь было написано, что `max_uses` у raw-пути тоже «на
+ * ход». Это неправда — он на ОДИН запрос к API, и raw-путь держит бюджет
+ * прогона сам (`webSearchTool(remaining)` в `runToolLoop`). Утверждение было
+ * не только ложным, но и опасным: из него следовало, что две ветки одной
+ * способности считают одинаково, тогда как raw-ветка не считала вовсе.
  */
+/**
+ * Сколько серверных поисков стоил ОДИН ответ API.
+ *
+ * Считать по блокам `server_tool_use` в контенте нельзя: часть из них может
+ * прийти уже из истории, а часть ответов приходит с `stop_reason:"pause_turn"`,
+ * где поиск состоялся, но результат ещё не разложен. `usage` — единственное
+ * место, где Anthropic называет число обращений прямо, и биллинг считает по
+ * нему же. Поле необязательное: старый ответ, мок в тестах или ветка без
+ * серверных инструментов дают 0.
+ */
+export function webSearchRequestsUsed(resp: {
+  usage?: { server_tool_use?: { web_search_requests?: number } | null } | null;
+}): number {
+  const n = resp.usage?.server_tool_use?.web_search_requests;
+  return typeof n === "number" && Number.isFinite(n) && n > 0 ? n : 0;
+}
+
 export function makeSdkWebSearchLimiter(): (toolName?: string) => string | null {
   const max = readMaxUses();
   let used = 0;
