@@ -23,7 +23,7 @@ import {
 export { isSpawnRoleTaskInput };
 import { getErrorMessage } from "./errors.ts";
 import { db } from "./db.ts";
-import { log } from "./log.ts";
+import { log, scrubSecretString, scrubSecretsDeep } from "./log.ts";
 
 export type { TaskStatus };
 
@@ -96,6 +96,43 @@ function parseJSON(v: string | null): unknown | null {
   } catch {
     return v;
   }
+}
+
+/**
+ * Предел текста ошибки в `tasks.error`. Взят у прежнего единственного места,
+ * где обрезка была явной (`failRoleTask` в role-runtime.ts).
+ */
+export const TASK_ERROR_MAX = 4000;
+
+/**
+ * Единственное определение «что кладётся в свободные текстовые колонки
+ * `tasks`»: `error`, `description`, `input`.
+ *
+ * Аудит 2026-09-11, круг 51. Тем же кругом скраб секретов поставили на границу
+ * записи в `agent_actions` (`lib/audit.ts`) — потому что чинить каждого
+ * вызывающего по отдельности значит чинить только известных, а следующего
+ * писателя не чинит никто. В `tasks` ровно та же дыра и ровно тот же выход
+ * наружу: доску задач отдаёт Mini App (`/api/tasks`), а список — сама модель
+ * через LIST_TASKS. Течёт сюда то же самое, что текло в аудит: при падении
+ * действия `action-dispatch.ts` копирует `res.error` В ДВА поля разом —
+ * `description` и `input.error`, — а `failRoleTask` кладёт в `error` текст
+ * исключения прогона роли. Оба источника содержат то, что вернул упавший
+ * HTTP-вызов, вместе с URL и заголовком.
+ *
+ * Скраб ПЕРЕД обрезкой, а не после: обрезанный секрет перестаёт совпадать с
+ * правилом, и наружу уходит его начало нетронутым (та же каверза, что у
+ * `scrubbedHead` в lib/log.ts и у `closeGatedActionRow` в lib/audit.ts).
+ *
+ * Не все писатели `tasks.error` идут сюда, и это осознанно: константные тексты
+ * санитаров (`gc_stale` в db-maint.ts, «lease expired» в role-runtime.ts, пять
+ * сообщений self-diag.ts) собираются на месте из литералов, недоверенного в
+ * них нет по построению. Сторож
+ * (`tests/audit-2026-09-11-tasks-scrub-boundary.test.ts`) держит границу
+ * именно так: через помощник обязаны идти те три места, где текст приходит
+ * снаружи.
+ */
+export function taskErrorValue(error: string): string {
+  return scrubSecretString(error).slice(0, TASK_ERROR_MAX);
 }
 
 /**
@@ -305,10 +342,17 @@ export function createTask(input: CreateTaskInput): Task {
       input.createdBy,
       input.assignedTo ?? null,
       input.title,
-      input.description ?? null,
+      // `title` не чистим: его собирает код из имени действия («Tool error:
+      // SEND_MESSAGE»), свободного текста в нём нет. `description` и
+      // `input` — свободные, см. докблок `taskErrorValue`.
+      input.description === undefined || input.description === null
+        ? null
+        : taskErrorValue(input.description),
       input.priority ?? 0,
       input.deadline ?? null,
-      input.inputPayload === undefined ? null : JSON.stringify(input.inputPayload),
+      input.inputPayload === undefined
+        ? null
+        : JSON.stringify(scrubSecretsDeep(input.inputPayload)),
       now,
       now,
     );
@@ -471,18 +515,20 @@ export function assignTask(id: string, assignedTo: string): Task {
 }
 
 /**
- * Кому адресована задача самопочинки.
+ * Кому адресована задача самопочинки. Единственное место, где это имя записано.
  *
- * C15-петля (`action-dispatch.ts`) держала здесь свой литерал и теперь берёт
- * эту константу. Остальные места импортировать её не могут, не заводя цикл, и
- * счётом их тут НЕ называем — прежняя проза говорила «в трёх местах», а их
- * было пять:
- *   - оба SQL поллера в `self-diag.ts` — подбор осиротевших и выборка pending
- *     (строка зашита внутрь текста запроса, подставить константу нечем);
- *   - дефолт параметра `assignedTo` у `isDiagTaskThrottled` (`fix-chain.ts`).
+ * Аудит 2026-09-11: прежняя редакция говорила, что остальные места «не могут
+ * импортировать её, не заводя цикл», и что их пять. Ни то, ни другое не было
+ * правдой. Цикла нет и быть не может: `tasks.ts` импортирует только
+ * task-fsm/errors/db/log, а `self-diag.ts` импортирует `tasks.ts` уже давно.
+ * Копий было три, а не пять: два SQL поллера в `self-diag.ts` (подбор
+ * осиротевших и выборка pending) и дефолт параметра `assignedTo` у
+ * `isDiagTaskThrottled` (`fix-chain.ts`).
  *
- * Связь держится этим комментарием и тестом
- * `tests/audit-2026-09-10-assign-task-guards.test.ts`.
+ * Копия правила — это правило, действующее на N−1 из N мест, поэтому копий
+ * больше нет: оба запроса связывают имя параметром `?`, троттл берёт дефолт
+ * отсюда. Сверку держит `tests/audit-2026-09-11-diag-assignee-single-source.test.ts`,
+ * запрет на переадресацию — `tests/audit-2026-09-10-assign-task-guards.test.ts`.
  */
 export const DIAG_ASSIGNEE = "aieng";
 
@@ -708,7 +754,9 @@ function forceTerminalStatus(
   let sql = `UPDATE tasks SET status=?, updated_at=?`;
   if (error != null) {
     sql += `, error=?`;
-    vals.push(error);
+    // Единственная запись `tasks.error` из tasks.ts — и она же путь `failTask`,
+    // которым закрываются упавшие задачи. См. докблок `taskErrorValue`.
+    vals.push(taskErrorValue(error));
   }
   // `AND status=?` — CAS, см. комментарий у транзакции ниже. Ожидаемое
   // значение подставляется на вызове: для первого шага это снимок вызывающего,

@@ -7,6 +7,7 @@
 import { db } from "./db.ts";
 import type { ActionType } from "./permissions.ts";
 import { emit as busEmit } from "./events-bus.ts";
+import { scrubSecretString, scrubSecretsDeep } from "./log.ts";
 
 export type { ActionType };
 
@@ -197,6 +198,32 @@ export interface InsertedAction {
  */
 const TERMINAL_STATUSES: ReadonlySet<string> = new Set(["ok", "error"]);
 
+/**
+ * Скраб на границе записи в `agent_actions`.
+ *
+ * Аудит 2026-09-11, круг 51: здесь скраба не было вовсе, и чистота колонок
+ * `error`/`payload`/`result` держалась на дисциплине каждого вызывающего.
+ * Трое её уже не соблюдали, и все трое — одного рода: сообщение чужой
+ * библиотеки вклеивалось в строку как есть. `tgDeleteMessage` отдаёт
+ * исключение telegraf, а telegraf на сетевом сбое говорит «request to
+ * https://api.telegram.org/bot<ТОКЕН>/deleteMessage failed» — то есть токен
+ * бота уезжал в SQLite на диске, оттуда в /api/actions админу и в контекст
+ * модели через GET_LOGS. Ровно этот сценарий дословно описан у
+ * `getErrorMessage` (lib/errors.ts), но там защита опциональна: её надо не
+ * забыть позвать.
+ *
+ * Поэтому чистим здесь, а не по вызывающим: запись в таблицу — точка, мимо
+ * которой не проходит ни один из них, и новый вызывающий получает защиту, не
+ * зная о ней. Довод тот же, которым обоснован сам `getErrorMessage`.
+ *
+ * `payload` и `result` идут через `scrubSecretsDeep`: это структуры, и секрет
+ * в них бывает не только строкой в тексте, но и значением под говорящим
+ * ключом.
+ */
+function scrubbedError(e: string | null | undefined): string | null {
+  return e === undefined || e === null ? null : scrubSecretString(e);
+}
+
 /** Insert only; callers that open a larger transaction emit after commit. */
 export function insertActionRow(
   actionType: string,
@@ -228,10 +255,10 @@ export function insertActionRow(
     chatId,
     input.tgMessageId ?? null,
     actionType,
-    input.payload === undefined ? null : JSON.stringify(input.payload),
+    input.payload === undefined ? null : JSON.stringify(scrubSecretsDeep(input.payload)),
     input.status,
-    input.result === undefined ? null : JSON.stringify(input.result),
-    input.error ?? null,
+    input.result === undefined ? null : JSON.stringify(scrubSecretsDeep(input.result)),
+    scrubbedError(input.error),
     now,
     input.requestId ?? null,
   );
@@ -302,8 +329,8 @@ export function finalizeActionRow(
     )
     .get(
       input.status,
-      input.result === undefined ? null : JSON.stringify(input.result),
-      input.error ?? null,
+      input.result === undefined ? null : JSON.stringify(scrubSecretsDeep(input.result)),
+      scrubbedError(input.error),
       input.taskId ?? null,
       id,
     ) as
@@ -369,7 +396,10 @@ export function closeGatedActionRow(actionId: string, error: string): boolean {
       `UPDATE agent_actions SET status='forbidden', error=?
        WHERE id=? AND status='pending_approval'`,
     )
-    .run(error.slice(0, 2000), actionId);
+    // Скраб ПЕРЕД обрезкой, а не после: обрезанный секрет перестаёт совпадать
+    // с правилом, и наружу уходит его начало нетронутым (см. `scrubbedHead`
+    // в lib/log.ts — тот же помощник, та же каверза).
+    .run(scrubSecretString(error).slice(0, 2000), actionId);
   return res.changes > 0;
 }
 

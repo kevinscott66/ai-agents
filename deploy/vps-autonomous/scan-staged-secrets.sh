@@ -31,7 +31,8 @@ PATTERNS=(
   'sk-[a-z]{2,12}-[A-Za-z0-9_-]{20,}'
   'ghp_[A-Za-z0-9]{36}'
   'github_pat_[A-Za-z0-9_]{40,}'
-  '(TOKEN|SECRET|PASSWORD|API_KEY|APIKEY|SESSION)[A-Z0-9_]*[[:space:]]*=[[:space:]]*["'"'"']?[A-Za-z0-9_/+.:-]{16,}'
+  '(TOKEN|SECRET|PASSWORD|API_KEY|APIKEY|API_HASH|SESSION)[A-Z0-9_]*[[:space:]]*=[[:space:]]*["'"'"']?[A-Za-z0-9_/+.:-]{16,}'
+  '(^|[^A-Za-z0-9+/=])1[A-Za-z0-9+/=_-]{250,}'
 )
 LABELS=(
   "telegram-bot-token"
@@ -41,6 +42,7 @@ LABELS=(
   "github-pat-classic"
   "github-pat-fine-grained"
   "secret-assignment"
+  "telegram-string-session"
 )
 
 # Строки-заглушки: .env.example, документация, подстановки воркфлоу. Без этого

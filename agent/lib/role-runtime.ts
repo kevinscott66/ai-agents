@@ -9,6 +9,10 @@ import type { Database } from "bun:sqlite";
 import { emitAlert } from "./alerting.ts";
 import { db } from "./db.ts";
 import { log } from "./log.ts";
+// Скраб+обрезка `tasks.error` живут в одном месте на весь репозиторий — см.
+// докблок `taskErrorValue`. Цикла нет: tasks.ts тянет только
+// task-fsm/errors/db/log, role-runtime среди них не значится.
+import { taskErrorValue } from "./tasks.ts";
 
 export const ROLE_PROVIDERS = ["internal", "claude", "codex"] as const;
 export type RoleProvider = (typeof ROLE_PROVIDERS)[number];
@@ -588,7 +592,7 @@ export function failRoleTask(
     if (leaseId && activeLease?.leaseId !== leaseId) throw new Error("role task lease lost");
     database.prepare(`UPDATE role_runtime_queue SET state='failed' WHERE task_id=? AND state='running'`).run(taskId);
     if (task?.status === "running") {
-      database.prepare(`UPDATE tasks SET status='failed', error=?, updated_at=? WHERE id=? AND status='running'`).run(error.slice(0, 4000), now, taskId);
+      database.prepare(`UPDATE tasks SET status='failed', error=?, updated_at=? WHERE id=? AND status='running'`).run(taskErrorValue(error), now, taskId);
     }
   });
   tx.immediate();

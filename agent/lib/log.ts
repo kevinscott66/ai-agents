@@ -192,7 +192,43 @@ const OPENAI_PREFIXED_KEY = /\b(sk-[a-z]{2,12}-)[A-Za-z0-9_-]{20,}/g;
  * символов: ниже неё это счётчик, а не секрет.
  */
 const SECRET_ASSIGNMENT =
-  /((?:TOKEN|SECRET|PASSWORD|API_KEY|APIKEY|SESSION)[A-Z0-9_]*\s*=\s*["']?)[A-Za-z0-9_/+.:-]{16,}/g;
+  /((?:TOKEN|SECRET|PASSWORD|API_KEY|APIKEY|API_HASH|SESSION)[A-Z0-9_]*\s*=\s*["']?)[A-Za-z0-9_/+.:-]{16,}/g;
+
+/**
+ * StringSession юзербота — по форме, а не по имени.
+ *
+ * Аудит 2026-09-11, круг 51: у самого дорогого секрета проекта правила по
+ * форме не было вовсе, в отличие от `ghp_`, `github_pat_` и `sk-ant-`. Ловилась
+ * только запись `TELEGRAM_SESSION=…`; `session: 1BQ…` в YAML или JSON проходил
+ * насквозь, потому что слово `session` из LABELED_SECRET_NAME исключено
+ * намеренно (обоснование — в докблоке того правила). А сессия MTProto — это
+ * полная имперсонация владельца: ни TTL, ни второго фактора у неё нет.
+ *
+ * Порог длины высокий (250) именно затем, чтобы правило было про сессию, а не
+ * про «любой base64». Живая строка gramjs — около 350 символов; хвост короче
+ * порога бесполезен и тому, кто его перехватил.
+ */
+const TELEGRAM_STRING_SESSION = /(?<![A-Za-z0-9+/=])1[A-Za-z0-9+/=_-]{250,}/g;
+
+/**
+ * Та же форма «имя: значение», но в camelCase.
+ *
+ * Аудит 2026-09-11: `LABELED_SECRET` требует, чтобы перед ключевым словом
+ * стоял разделитель `_`, `-` или `.` либо начало слова — из-за lookbehind
+ * `(?<![A-Za-z0-9])`. Поэтому `api_key: …` чистился, а `accessToken: …` —
+ * самое обычное имя поля в JS-экосистеме — нет. Внутри объекта такой ключ
+ * закрыт `SENSITIVE_KEY` (там границы нет), а вот в строке — например, в
+ * сериализованном теле чужого ответа внутри текста ошибки — уезжал целиком.
+ *
+ * Правило РЕГИСТРОЗАВИСИМО и требует горба: `[a-z0-9]` перед заглавной. Без
+ * этого оно повторяло бы `LABELED_SECRET` и ловило бы любое слово,
+ * кончающееся на token, — скажем, monkeyToken, — наравне с `accessToken`,
+ * чего мы как раз избегаем в соседнем правиле. Слово-пример намеренно без
+ * обратных кавычек: в этом репозитории кавычки — обещание, что символ
+ * найдётся, а такого символа нет и не должно быть.
+ */
+const CAMEL_LABELED_SECRET =
+  /((?<=[a-z0-9])(?:Token|Secret|Password|Passphrase|ApiKey|AccessKey|PrivateKey|Authorization|InitData|Credentials?)["']?\s*:\s*(?:(?:Bearer|Basic|Token)\s+)?["']?)[^\s,;"'`}\]@]+/g;
 
 /**
  * Вычистить секреты из произвольной строки. Экспортируется, чтобы у «как
@@ -203,6 +239,7 @@ const SECRET_ASSIGNMENT =
 export function scrubSecretString(s: string): string {
   return s
     .replace(LABELED_SECRET, "$1***")
+    .replace(CAMEL_LABELED_SECRET, "$1***")
     .replace(CURL_USERPASS, "$1***")
     .replace(INLINE_QS_SECRET, "$1***")
     .replace(BEARER, "$1***")
@@ -215,7 +252,11 @@ export function scrubSecretString(s: string): string {
     .replace(ANTHROPIC_KEY, "$1***")
     .replace(OPENAI_PREFIXED_KEY, "$1***")
     .replace(OPENAI_KEY, "$1***")
-    .replace(SECRET_ASSIGNMENT, "$1***");
+    .replace(SECRET_ASSIGNMENT, "$1***")
+    // Последним: к этому моменту `TELEGRAM_SESSION=…` уже превращено в
+    // `TELEGRAM_SESSION=***` правилом выше, и ловить остаётся голую строку —
+    // ту, что лежит в YAML или прилетела в тексте чужой ошибки.
+    .replace(TELEGRAM_STRING_SESSION, "***");
 }
 
 /**
@@ -245,8 +286,14 @@ export function scrubbedHead(s: string, max: number): string {
  * Тот же скраббер, но по произвольной структуре: строки чистятся правилами
  * выше, значения под «говорящими» ключами (`token`, `secret`, …) заменяются
  * целиком. Экспортируется по той же причине, что и `scrubSecretString`:
- * определение «как выглядит секрет» на проекте одно. Второй сток — строка
- * `audit_logs.payload` в `emitAlert`, которая уходит наружу по /api/audit.
+ * определение «как выглядит секрет» на проекте одно.
+ *
+ * Кто зовёт, здесь не перечислен намеренно. Тут было сказано «второй сток —
+ * строка `audit_logs.payload` в `emitAlert`», и это прочли как «в эту колонку
+ * пишет emitAlert»; писателей в неё было два, и второй (отказ
+ * UPDATE_AGENT_PROMPT в lib/dispatch/agent-prompt.ts) полтора месяца не чистил
+ * ничего. Перечень вызывающих в докблоке устаревает молча — смотреть надо
+ * вызовы, а не этот абзац (аудит 2026-09-11, круг 51).
  */
 export function scrubSecretsDeep<T>(value: T): T {
   return scrubSecrets(value) as T;
