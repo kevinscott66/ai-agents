@@ -664,7 +664,8 @@ export async function dispatchAction<T extends ActionType>(
           log.error("[delegate] failed to create task row", { error: String(e) });
         }
         if (delegatedTaskId) {
-          // FSM запрещает pending → done напрямую (agent/lib/tasks.ts:63).
+          // FSM запрещает pending → done напрямую: таблица `TASK_TRANSITIONS`
+          // в lib/task-fsm.ts.
           // Переводим в running сразу после создания, иначе закрыть не сможем.
           try {
             updateTaskStatus(delegatedTaskId, "running");

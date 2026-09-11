@@ -542,8 +542,8 @@ const PREVIEW_BY_ACTION: Record<
   FORWARD_MESSAGE: (p, c) =>
     join([
       `переслать сообщение ${num(p, "messageId")}`,
-      // Оба конца пересылки пиннятся к чату заявки (dispatch/telegram.ts:441-442),
-      // поэтому источник и назначение — один и тот же чат.
+      // Оба конца пересылки пиннятся к чату заявки (`handleForwardMessage`
+      // в dispatch/telegram.ts), поэтому источник и назначение — один чат.
       pinnedChatPart(p, "fromChatId", c, "внутри чата"),
     ]),
   SET_REACTION: (p) =>

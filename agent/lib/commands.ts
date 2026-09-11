@@ -242,10 +242,10 @@ export async function executeApproved(
   // Аудит 2026-08-13: бакет «этот бот в этом чате» тратился не тем ботом или
   // не тратился вовсе. Вызов в Telegram делает бот запросившего агента —
   // `deps.resolveTg?.(byAgent)` строкой ниже. А сюда приходило: с
-  // Telegram-пути — id ОРКЕСТРАТОРА (`orchestrator-team.ts:86`, там регается
+  // Telegram-пути — id ОРКЕСТРАТОРА (там, в `orchestrator-team.ts`, регается
   // /approve), с Mini App — `undefined`, и `checkPerBotPerChatRateLimit` на
-  // undefined молча отвечает «ок» (`rate-limits.ts:312`). То есть очередь
-  // одобрений не трогала бакет отправителя ни на одном из двух путей — ровно
+  // undefined молча отвечает «ок» (ранний выход в `rate-limits.ts`). То есть
+  // очередь одобрений не трогала бакет отправителя ни на одном из двух путей — ровно
   // та дыра, которую комментарий выше считает закрытой. Берём бота по агенту,
   // deps.botId остаётся запасным вариантом.
   const execBotId = deps.resolveAgent?.(byAgent)?.id ?? deps.botId;
@@ -284,7 +284,7 @@ export async function executeApproved(
     // Как в gateOrDispatch: неудавшийся диспатч не должен съедать лимит.
     //
     // Аудит 2026-08-28: «как в gateOrDispatch» было неправдой ровно в одном
-    // месте. Там (`action-dispatch.ts:1686`) стоит `if (res.sideEffect)
+    // месте. Там (`gateOrDispatch` в action-dispatch.ts) стоит `if (res.sideEffect)
     // refundNeeded = false;` — провал, уже оставивший след снаружи, не
     // рефандится. Частичная доставка (`sendChunked` бросает после k из N
     // частей) приходит сюда обычным `!ok` с `sideEffect: true`, и рефанд
@@ -530,8 +530,8 @@ export function cmdGrant(args: {
   }
   // Аудит 2026-08-27: два статических рубежа стоят ВЫШЕ таблицы permissions —
   // `checkPermission` отвечает `deny` по ним ещё до чтения строки
-  // (permissions.ts:735 и :760). То есть `/grant smm GENERATE_IMAGE auto`
-  // писал строку, рапортовал «права обновлены» и не менял НИЧЕГО: владелец
+  // (`CALLER_RESTRICTED` и `ROLE_EXPOSED_TOOLS` в permissions.ts). То есть
+  // `/grant smm GENERATE_IMAGE auto` писал строку, рапортовал «права обновлены» и не менял НИЧЕГО: владелец
   // считал, что выдал доступ, агент продолжал получать отказ, и разбирались с
   // этим по логам гейта. Строка при этом оставалась в БД и всплывала в
   // `/perms` как выданное право. Обе карты — решения владельца в КОДЕ, из чата
@@ -618,7 +618,7 @@ export function cmdPerms(args: { args: string[] }): string {
           ? "approval"
           : "auto";
     // Аудит 2026-08-27: таблица — не последнее слово. Гейт сначала смотрит
-    // CALLER_RESTRICTED и ROLE_EXPOSED_TOOLS (permissions.ts:735, :760), и
+    // CALLER_RESTRICTED и ROLE_EXPOSED_TOOLS (обе карты — в permissions.ts), и
     // строка `allowed=1` под ними мертва. Миграция 010 засеяла GENERATE_IMAGE
     // всем 12 ролям — `/perms` показывал двенадцать «auto» на инструменте,
     // который выдан двоим. Отчёт о правах, расходящийся с гейтом, хуже

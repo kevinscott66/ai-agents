@@ -140,7 +140,7 @@ process.on("uncaughtException", (err: any) => {
   // sendMessage failed, reason: …` (форма, ради которой в скруббере заведён
   // TELEGRAM_TOKEN), а snapshotOf из mac-bridge.ts — `https://x-access-token:
   // ghp_…@github.com/…`. Ни та, ни другая под isTelegrafNoise не подходит:
-  // стек указывает в node-fetch, не в telegraf. Инвариант lib/log.ts:13
+  // стек указывает в node-fetch, не в telegraf. Инвариант из шапки lib/log.ts
   // («ALWAYS on — secrets must never log») на этом пути не исполнялся.
   try {
     // @ts-ignore

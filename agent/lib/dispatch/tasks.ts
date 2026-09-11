@@ -225,8 +225,8 @@ export function handleAssignTask(
  * У aieng; эта проверка держит её В ТОМ СТАТУСЕ, в котором её ищут. Обе
  * половины нужны вместе, потому что оба поставщика работы смотрят на статус
  * в упор: `listPendingDiagTasks` берёт строго `status='pending'`
- * (self-diag.ts:492), подборщик осиротевших — строго `status='running'`
- * (self-diag.ts:397), а `processDiagTask` пишет терминал сам, каждым UPDATE'ом
+ * (self-diag.ts), подборщик осиротевших — строго `status='running'`
+ * (там же), а `processDiagTask` пишет терминал сам, каждым UPDATE'ом
  * с `AND status='running'` (:430, :442, :461, :476).
  *
  * Что ломалось. Пока задача в `running` (поллер поставил его ДО вызова

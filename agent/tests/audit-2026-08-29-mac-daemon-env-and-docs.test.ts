@@ -21,11 +21,12 @@
  *    четырём: `auto` — синоним `accept_edits`). Читающий README выбирает
  *    `auto`, считая его уровнем «без спроса, но без MAC_ALLOW_BYPASS».
  *
- * 4. Ссылки на номера строк в комментариях протухли (`mac-bridge.ts:141`,
- *    `dispatch/mac.ts:130`, `tools-schema.ts:1175`). Первая опаснее прочих:
- *    из `PING_INTERVAL_MS` выведен `STALE_MS` watchdog'а, а строка 141 — это
- *    середина `_envIntInRange`, то есть ссылка выглядит протухшей целиком и
- *    связь двух констант теряется.
+ * 4. Ссылки на номера строк в комментариях протухли (`mac-bridge.ts`,
+ *    `dispatch/mac.ts`, `tools-schema.ts`). Первая опаснее прочих: из
+ *    `PING_INTERVAL_MS` выведен `STALE_MS` watchdog'а, а номер указывал в
+ *    середину `_envIntInRange` — ссылка выглядит протухшей целиком, и связь
+ *    двух констант теряется. Номера с тех пор убраны в пользу имён; тот же
+ *    класс дефекта ловит tests/audit-2026-09-11-stale-line-coordinates.test.ts.
  */
 import { describe, test, expect } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";

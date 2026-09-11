@@ -110,7 +110,8 @@ export const DELEGATION_REFUSALS: readonly string[] = [
   "pending_approval:",
   "rate_limited:",
   "forbidden:",
-  // Прямое делегирование под отменённого родителя (action-dispatch.ts:568).
+  // Прямое делегирование под отменённого родителя: отказ
+  // `parent task is cancelled` в action-dispatch.ts.
   // Текст сам говорит агенту, что делать вместо этого. Соседний `parent task
   // not found:` намеренно НЕ здесь: отменённая задача есть, ненайденной нет —
   // это висячая ссылка, то есть поломка.
@@ -304,8 +305,8 @@ export function categorizeError(error: string | null | undefined): ErrorCategory
 }
 
 /**
- * Регэксп агрегирующей обёртки сплита. Пишет её action-dispatch.ts:889,
- * читают отсюда двое: isByDesignRefusal и categorizeAggregateError.
+ * Регэксп агрегирующей обёртки сплита. Пишет её ветка `SPLIT_TASK`
+ * в action-dispatch.ts, читают отсюда двое: isByDesignRefusal и categorizeAggregateError.
  */
 const SPLIT_AGGREGATE_RE = /^split failed: no roles accepted the task \((.*)\)$/s;
 

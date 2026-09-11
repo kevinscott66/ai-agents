@@ -132,8 +132,8 @@ export const MAX_CALLS_PER_TOOL_PER_RESPONSE = 2;
  * Статусы `ok:false`, которые НЕ являются провалом инструмента.
  *
  * `pending_approval` — действие поставлено на согласование, строка в
- * `approvals` уже закоммичена (`action-dispatch.ts:1528`). `rate_limited` —
- * действие отложено, есть `retryInMs`, ждать надо, а не чинить. Если отдать
+ * `approvals` уже закоммичена (ветка `pending_approval` в `gateOrDispatch`).
+ * `rate_limited` — действие отложено, есть `retryInMs`, ждать надо, а не чинить. Если отдать
  * их модели как ошибку, она читает это как провал и зовёт тот же инструмент
  * снова: MAX_CALLS_PER_TOOL_PER_RESPONSE не мешает (вызов в каждом ответе
  * один), так что до MAX_CALLS_PER_TOOL_PER_RUN набегает до восьми карточек

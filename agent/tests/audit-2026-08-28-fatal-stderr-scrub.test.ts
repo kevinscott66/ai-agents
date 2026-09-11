@@ -14,8 +14,8 @@
  * Ни одна не отсеивается `isTelegrafNoise`: стек указывает в node-fetch или в
  * чужую программу, не в telegraf.
  *
- * Инвариант lib/log.ts:13 — «ALWAYS on — secrets must never log» — на этом
- * пути не исполнялся.
+ * Инвариант из шапки lib/log.ts — «ALWAYS on — secrets must never log» —
+ * на этом пути не исполнялся.
  */
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";

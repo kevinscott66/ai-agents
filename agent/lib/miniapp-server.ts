@@ -557,11 +557,11 @@ export function startMiniappServer(
    *
    * Достижимо тем же путём, что и утечка через `decided_by`. `setPermission`
    * пишет строку аудита `logAction({ agentKey: audit.changedBy })`
-   * (permissions.ts:523), а `changedBy` для `/grant` и `/revoke` в Telegram —
+   * (permissions.ts), а `changedBy` для `/grant` и `/revoke` в Telegram —
    * это `deciderIdentity` (admin-commands.ts:172), то есть
    * `tg:<id> (@username)`; для Mini App — `miniapp:<id>`. `logAction` сразу же
    * шлёт в шину `action.executed` с полем `agent: agent_key`
-   * (audit.ts:186,324). Наблюдатель, которому `GET /api/actions` отдаёт ту же
+   * (оба конструктора `InsertedAction.event` в audit.ts). Наблюдатель, которому `GET /api/actions` отдаёт ту же
    * строку уже укороченной, получал её целиком через открытый поток — и
    * получал первым, ещё до того, как список успевал перезагрузиться.
    *
@@ -1303,7 +1303,7 @@ export function startMiniappServer(
     // GET /api/db-stats — C31 DB maintenance / size dashboard.
     //
     // Аудит 2026-09-10: ручка была открыта любому допущенному, и это дороже,
-    // чем выглядит. `dbStats` (db-maint.ts:930) делает `COUNT(*)` по всем 19
+    // чем выглядит. `dbStats` (db-maint.ts) делает `COUNT(*)` по всем 19
     // таблицам STAT_TABLES — включая `messages`, `messages_archive` и
     // `agent_actions_archive` — плюс `dbstatByOwner`, про который его же
     // комментарий говорит прямо: «`dbstat` — полный скан БД». `bun:sqlite`

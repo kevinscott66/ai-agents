@@ -290,14 +290,14 @@ export function _resetBudgetEnvWarnings(): void {
  *
  * Аудит 2026-08-21: единственный писатель в этом файле, который НЕ приводил
  * ключ к владельцу. Читатели приводят все — `getBudget` ищет строку по
- * `budgetOwner(agentKey)` (:148), туда же смотрят `recordUsage`,
+ * `budgetOwner(agentKey)`, туда же смотрят `recordUsage`,
  * `getDailyUsage`, `checkBudget`, `budgetRemaining`. Значит запись по
  * производному ключу (`design:svg-fallback`) ложилась строкой, которую не
  * прочитает никто: лимит выставлен, в `GET /api/budget-settings` он виден, а
  * на расход не влияет — то есть ровно та тихая поломка потолка, ради которой
  * `budgetOwner` и заводили.
  *
- * Сейчас недостижимо: `badAgentKey` в miniapp-server.ts:302 пропускает только
+ * Сейчас недостижимо: `badAgentKey` в miniapp-server.ts пропускает только
  * ключи из CHARACTERS, а в них двоеточия нет. Но охрана стоит у вызывающего, а
  * не у функции, и следующий вызывающий её не унаследует. В проде строк в
  * `budget_settings` ноль, так что осиротить нормализацией нечего.

@@ -15,8 +15,8 @@
  *
  * Цена промаха выше, чем у тела: заголовки видны шире. wikiSearch отдаёт title
  * каждым хитом, а хиты подмешиваются в контекст КАЖДОГО хода
- * (orchestrator/message-handler.ts:269, lib/handoff.ts:265) и показываются в
- * Mini App (lib/miniapp-server.ts:851, wikiList). Тело при этом приходит
+ * (orchestrator/message-handler.ts, lib/handoff.ts) и показываются в
+ * Mini App (lib/miniapp-server.ts, wikiList). Тело при этом приходит
  * отредактированным — то есть фильтр создаёт видимость защиты, обходясь ровно
  * там, где утечка расходится по всем двенадцати ролям и по вебу.
  *

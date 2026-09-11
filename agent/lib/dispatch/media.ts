@@ -113,7 +113,7 @@ export async function generateCoverPng(
   if (!isToolExposedToRole("GENERATE_IMAGE", agentKey)) {
     // Аудит 2026-08-27: ниже стоял `cheapCover`, который для такой роли ВСЕГДА
     // бросает. `ROLE_EXPOSED_TOOLS.GENERATE_IMAGE` и `.GENERATE_SVG_IMAGE` —
-    // один и тот же список `["design","orchestrator"]` (permissions.ts:156-157),
+    // один и тот же список `["design","orchestrator"]` (permissions.ts),
     // а `isToolExposedToRole` читает статическую карту без БД-оверрайдов; значит
     // «нет растра» ⟹ «нет и SVG», и `cheapCover` упирается в собственный гейт.
     // То есть каждый заведомо безнадёжный вызов сначала СПИСЫВАЛ слот

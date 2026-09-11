@@ -20,8 +20,8 @@
  * `categorizeError` видит «forbidden» и раскладывает в permission_denied.
  *
  * Отдельно — прямое делегирование под отменённого родителя
- * (action-dispatch.ts:568). Текст сам объясняет агенту, что делать вместо
- * этого; чинить в нём нечего.
+ * (отказ `parent task is cancelled` в action-dispatch.ts). Текст сам
+ * объясняет агенту, что делать вместо этого; чинить в нём нечего.
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";

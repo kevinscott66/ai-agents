@@ -13,7 +13,7 @@
  *   • «Ввод» пуст → в `input` ложится `{"type":"general"}`, которое не читает
  *     никто. `input` — не свалка меток: по нему живут self-diag
  *     (`input.type === "diagnostic"`, lib/diagnostic.ts:21) и учёт делегаций
- *     (`_delegation_*`, lib/tasks.ts:436), и он же режется редактором контента
+ *     (`_delegation_*`, lib/tasks.ts), и он же режется редактором контента
  *     не-админам (TASK_CONTENT_FIELDS, miniapp-server.ts:347).
  *
  * Ни одного потребителя у general/feature/bug/research в репозитории нет:
