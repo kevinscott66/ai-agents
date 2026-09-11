@@ -3,7 +3,8 @@
  * который не делал ничего.
  *
  * Сервер кладёт тип в `tasks.input` — и только если поля «Ввод» нет вовсе
- * (lib/miniapp-server.ts:1043-1048):
+ * (ветка `POST /api/tasks` в lib/miniapp-server.ts, поле `inputPayload`
+ * у вызова `createTask`):
  *
  *   inputPayload: body.input !== undefined ? body.input
  *               : body.type ? { type: body.type } : undefined

@@ -412,9 +412,19 @@ export function grantIneffectiveReason(
     return `${action} не выдан роли '${agentKey}' (ROLE_EXPOSED_TOOLS, lib/permissions.ts)`;
   }
   if (mode === "approval" && LOW_FRICTION_ACTIONS.has(action)) {
+    // Аудит 2026-09-11: тут было сказано «гейт отвечает allow … во всех
+    // режимах автономии». Вывод (строку писать бессмысленно) верен, а
+    // объяснение врало: `locked` и forceApproval стоят в evaluateGate ВЫШЕ
+    // LOW_FRICTION_ACTIONS и отвечают deny и approval соответственно. Эту
+    // строку человек читает дословно в четырёх местах — /grant и /perms
+    // (commands.ts), POST /api/permissions (miniapp-server.ts) и валидация
+    // GRANT_PERMISSION (dispatch/permissions.ts), — поэтому она называет то,
+    // что действительно общее для всех режимов: requires_approval не читают
+    // нигде.
     return (
-      `${action} — low-friction (LOW_FRICTION_ACTIONS, lib/permissions.ts): гейт ` +
-      `отвечает allow ДО того, как прочтёт requires_approval, во всех режимах автономии`
+      `${action} — low-friction (LOW_FRICTION_ACTIONS, lib/permissions.ts): до ` +
+      `requires_approval гейт по нему не доходит ни в одном режиме автономии ` +
+      `(в locked — deny, при forceApproval — approval, в остальных — allow)`
     );
   }
   if (mode === "auto" && ALWAYS_APPROVE_ACTIONS.has(action)) {
@@ -521,7 +531,7 @@ export interface PermissionChangeAudit {
   /** Актор: `miniapp:<user_id>`, `tg:<user_id>`, agent_key инициатора. */
   changedBy: string;
   /** Чат, из которого пришло изменение. Для Mini App — id пользователя. */
-  chatId?: number | string | null;
+  chatId?: number | null;
   /** Канал изменения: `miniapp` | `command` | `dispatch`. */
   source: string;
   /** Причина, если её спрашивают у вызывающего. */

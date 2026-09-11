@@ -134,7 +134,7 @@ export function rowToAction(row: AgentActionRow): AgentAction {
 export interface LogActionInput {
   agentKey: string;
   taskId?: string | null;
-  chatId?: number | string | null;
+  chatId?: number | null;
   tgMessageId?: number | null;
   actionType: ActionType;
   payload?: unknown;
@@ -204,12 +204,19 @@ export function insertActionRow(
 ): InsertedAction {
   const id = crypto.randomUUID();
   const now = Date.now();
-  const chatId =
-    input.chatId == null
-      ? null
-      : typeof input.chatId === "string"
-        ? Number(input.chatId)
-        : input.chatId;
+  // Аудит 2026-09-11: тут стояло приведение `typeof input.chatId === "string"
+  // ? Number(input.chatId) : …` под тип `number | string | null`. Строку в
+  // chatId не передавал ни один вызывающий — все идут от `DispatchCtx.chatId:
+  // number` или от `user.id`, уже проверенного `Number.isSafeInteger` в
+  // miniapp-auth. Ветка была мёртвой И незащищённой: `Number("abc")` — NaN,
+  // проверки нет, а драйвер bun:sqlite кладёт NaN в колонку как NULL. То есть
+  // первая же строка аудита с непарсящимся чатом стала бы невидимой для
+  // чат-скоупных фильтров (`chat_id = ?` в listActions и /api/actions) — тихо,
+  // без ошибки. Вместо проверки убран сам тип: строка сюда больше не
+  // представима, и tsc скажет об этом на вызывающей стороне, а не SQLite
+  // молчанием. Предикат для разбора недоверенного ввода в проекте свой —
+  // `strictChatId` (lib/http-utils.ts), и применяют его ДО аудита.
+  const chatId = input.chatId ?? null;
   db.prepare(
     `INSERT INTO agent_actions(
       id, agent_key, task_id, chat_id, tg_message_id, action_type, payload, status, result, error, created_at, request_id

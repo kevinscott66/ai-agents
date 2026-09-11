@@ -141,4 +141,39 @@ describe("POST /api/autonomy — отчёт совпадает с записью
     expect(r.status).toBe(200);
     expect(r.body.scope).toBe("chat");
   });
+
+  // Аудит 2026-09-11 — второй виток того же дефекта. Адрес записи считать по
+  // коду научились год назад, а САМ РЕЖИМ так и брался из тела: `inherit`
+  // снимает строку (clearAutonomy), не записав ничего, а ответ и шина всё
+  // равно отдавали `mode: "inherit"` — значение, которого нет ни в одной
+  // строке autonomy_modes и нет в AUTONOMY_MODES. Потребителей payload'а
+  // сегодня нет (Agents.tsx на событие зовёт refresh и перечитывает GET), так
+  // что это дефект контракта, а не эксплуатируемая дыра; закрепляем, пока
+  // первый читатель шины не поверил выдуманному режиму.
+  test("inherit не выдумывает режим: mode=null, inherit=true", async () => {
+    await post({ mode: "locked", agent: "backend" });
+    expect(getAutonomy(undefined, "backend")).toBe("locked");
+
+    const r = await post({ mode: "inherit", agent: "backend" });
+    expect(r.status).toBe(200);
+    expect(r.body.mode).toBeNull();
+    expect(r.body.inherit).toBe(true);
+    expect(r.body.scope).toBe("agent");
+    expect(r.body.agent).toBe("backend");
+    // Строка действительно снята, а не переписана на «inherit» — которое в
+    // эту колонку и не легло бы: CHECK в миграции 003_autonomy_modes
+    // перечисляет ровно locked/manual/semi_auto/auto.
+    const row = db
+      .prepare(
+        `SELECT mode FROM autonomy_modes WHERE scope = 'agent' AND scope_id = ?`,
+      )
+      .get("backend") as { mode?: string } | undefined;
+    expect(row).toBeFalsy();
+  });
+
+  test("обычный режим по-прежнему называет себя, inherit=false", async () => {
+    const r = await post({ mode: "manual", agent: "backend" });
+    expect(r.body.mode).toBe("manual");
+    expect(r.body.inherit).toBe(false);
+  });
 });

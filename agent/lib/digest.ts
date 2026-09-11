@@ -4,8 +4,11 @@
  * Once a day at DIGEST_HOUR_UTC, the orchestrator posts an aggregated status
  * summary to all ALLOWED chats. No LLM call — pure SQL + string templating.
  *
- * Tracks last-posted UTC date in a file (default `.digest-last`) so a process
- * restart on the same day does not re-post.
+ * Tracks last-posted UTC date in a marker file so a process restart on the same
+ * day does not re-post. The default path is NOT a bare `.digest-last` in the
+ * cwd — that default was removed on 2026-08-08 precisely because the cwd is
+ * read-only under the unit's `ProtectSystem=strict`. See `_defaultMarkerPath`:
+ * the marker lands next to the DB.
  *
  * All time math is honest UTC. "Today" / "last 24h" means UTC.
  */
@@ -225,7 +228,11 @@ export interface StartDigestSchedulerOptions {
   hourUTC?: number;
   /** Polling interval, ms. Default 5min. */
   intervalMs?: number;
-  /** Path to last-posted-date marker file. Default `.digest-last`. */
+  /**
+   * Path to last-posted-date marker file. Defaults to `_defaultMarkerPath()`
+   * — next to the DB, not to the cwd. Read the docblock there before passing a
+   * relative path: the unit can only write `data`, `backups` and `/tmp`.
+   */
   markerPath?: string;
   /** Override "now" provider, used by tests. */
   nowProvider?: () => Date;
