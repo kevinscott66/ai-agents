@@ -3,7 +3,7 @@
  * и последовательная отправка через произвольный sender.
  */
 
-import { plainTelegramLength as plainLength } from "./telegram-format.ts";
+import { plainTelegramLength as plainLength, danglingLinkStart } from "./telegram-format.ts";
 
 const TG_LIMIT = 4000; // запас под markdown-обёртки
 
@@ -134,9 +134,17 @@ function sliceOneEnd(
       const c = line.charCodeAt(end - 1);
       if (c >= 0xd800 && c <= 0xdbff) end--; // граница попала внутрь пары
       const chunk = line.slice(i, end);
-      const open = chunk.lastIndexOf("[");
       // Незакрытая `[текст](url` — отводим границу к её началу.
-      if (open > chunk.lastIndexOf(")") && i + open > i) end = i + open;
+      //
+      // Аудит 2026-09-11: условие было `open > chunk.lastIndexOf(")")`, то
+      // есть сравнивало позицию `[` с позицией ЛЮБОЙ круглой скобки. Кусок
+      // без единой круглой скобки давал справа `-1`, и граница отводилась к
+      // каждой `[` в прозе: «Статус дропа [ANNOUNCED] …» на длинной строке
+      // выдавало первой частью 13 символов и лишнее сообщение в чате. Тот же
+      // дефект аудит 2026-08-29 уже чинил в `cutBlock` — сюда правило тогда
+      // не перенесли, поэтому теперь оно одно на оба места.
+      const open = danglingLinkStart(chunk, line.slice(end, end + 1));
+      if (open > 0) end = i + open;
     }
     if (end <= i) end = Math.min(i + 2, line.length);
     return end;

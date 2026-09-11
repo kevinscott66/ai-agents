@@ -169,8 +169,16 @@ let lastEvict = 0;
  * старта до первого такого вызова — но именно на старте лимит и важен.
  *
  * Поэтому окно передаётся сюда параметром: всякий, кто вытесняет, обязан
- * назвать правило, по которому работает. `commit` вызывается только следом за
- * `checkBucket`, который окно уже учёл, — ему называть нечего.
+ * назвать правило, по которому работает.
+ *
+ * Аудит 2026-09-11: дальше стояло «`commit` вызывается только следом за
+ * `checkBucket`, ему называть нечего». Это неправда: повтор в
+ * `withUserbotFloodGuard` при `skipBucket` списывает попытку
+ * (`commitUserbotFloodLimit`) без всякого `checkBucket`. Порог всё равно не
+ * занижается — контракт `skipBucket` требует прошедшего
+ * `reserveUserbotFloodSlots`, а тот уже поднял `maxWindowMs` настоящим
+ * окном правила, и `maxWindowMs` не убывает. То есть `windowMs = 0` здесь
+ * значит «порога не касаюсь», а не «окна нет».
  */
 function evictExpiredBuckets(now: number, windowMs = 0): void {
   if (windowMs > maxWindowMs) maxWindowMs = windowMs;

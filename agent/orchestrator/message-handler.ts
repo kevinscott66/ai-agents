@@ -174,7 +174,20 @@ export function replyForTurnError(err: unknown): string {
     const parts: string[] = [];
     if (err.partialText) {
       const t = err.partialText.trim();
-      parts.push(t.length > PARTIAL_TEXT_MAX ? t.slice(0, PARTIAL_TEXT_MAX - 1).trimEnd() + "…" : t);
+      if (t.length > PARTIAL_TEXT_MAX) {
+        // Аудит 2026-09-11: резали по code units без оглядки на суррогаты.
+        // Эмодзи на границе оставлял в хвосте одинокий высокий суррогат, и
+        // при кодировании в UTF-8 человек видел ромб вместо символа. Правило
+        // не новое — его уже держат `cutBlock` (lib/telegram-format.ts) и
+        // `sliceOneEnd` (lib/telegram-chunking.ts); третье место обрезки его
+        // не унаследовало.
+        let cut = t.slice(0, PARTIAL_TEXT_MAX - 1);
+        const last = cut.charCodeAt(cut.length - 1);
+        if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
+        parts.push(cut.trimEnd() + "…");
+      } else {
+        parts.push(t);
+      }
     }
     parts.push(
       err.sideEffects

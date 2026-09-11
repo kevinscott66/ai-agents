@@ -1566,10 +1566,11 @@ export async function executeTool(
       inputDocuments: ctx.inputDocuments,
       triggerUserId: ctx.triggerUserId,
       requestId: ctx.requestId,
-      // T-240: без botId checkPerBotPerChatRateLimit сразу возвращает {ok:true}
-      // (rate-limits.ts:258) — то есть весь per-bot-per-chat лимит был
+      // T-240: без botId `checkPerBotPerChatRateLimit` (lib/rate-limits.ts)
+      // сразу возвращает {ok:true} — то есть весь per-bot-per-chat лимит был
       // выключен для tool-пути и падал открытым, без единой строки в логе.
-      // handoff.ts:223 старательно прокидывает botId делегата — сюда.
+      // `respondAs` в handoff.ts старательно прокидывает botId делегата —
+      // сюда.
       botId: ctx.botId,
     });
     return formatGateResult(at, res);

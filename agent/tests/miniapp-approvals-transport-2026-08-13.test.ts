@@ -13,8 +13,8 @@
  *
  * 2. Бакет «этот бот в этом чате» тратил не тот бот: с Telegram-пути приходил
  *    id ОРКЕСТРАТОРА (он регистрирует `/approve`), с Mini App — `undefined`, а
- *    на `undefined` `checkPerBotPerChatRateLimit` молча отвечает «ок»
- *    (`rate-limits.ts:312`).
+ *    на `undefined` `checkPerBotPerChatRateLimit` в lib/rate-limits.ts молча
+ *    отвечает «ок».
  *
  * 3. `Bun.serve` без `idleTimeout`: дефолт 10 секунд при keepalive SSE в 25.
  *
