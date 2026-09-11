@@ -62,6 +62,7 @@ import {
   buildMemorySystemText,
   buildWikiPagesSystemText,
   speakerLabel,
+  defuseSpeakerLabels,
 } from "../lib/agent-prompts.ts";
 
 // P2 discussion-mode: предел глубины handoff-цепочки, когда режим включён.
@@ -576,11 +577,12 @@ export function registerMessageHandler(
         // `agent_key` — наш собственный ключ роли, он не из чата. Имя
         // человека — из чата, и метку из него собирает `speakerLabel`.
         const speaker = r.agent_key ? `[${r.agent_key}]` : speakerLabel(r.from_name);
+        // Тело реплики — тоже канал подделки метки, см. defuseSpeakerLabels.
         return {
           role: r.is_bot && r.agent_key === def.key ? "assistant" : "user",
           content: r.is_bot && r.agent_key === def.key
             ? r.text
-            : `${speaker} ${r.text}`,
+            : `${speaker} ${defuseSpeakerLabels(r.text)}`,
         };
       });
       // Аудит 2026-08-12: условие было про РОЛЬ последнего сообщения. Триггер в
@@ -590,10 +592,13 @@ export function registerMessageHandler(
       // реплика, то есть role "user", проверка молчала, и агент отвечал на
       // предыдущую строку чата, ни разу не увидев вопроса, на который позван.
       // Признак — факт доставки; правило общее с buildDelegateMessages.
-      if (!isTriggerDelivered(messages, text)) {
+      // Обезвреживаем ДО сравнения: собственная копия триггера в истории уже
+      // прошла ту же чистку, и сырой текст разошёлся бы с ней на пустом месте.
+      const triggerLine = defuseSpeakerLabels(text);
+      if (!isTriggerDelivered(messages, triggerLine)) {
         messages.push({
           role: "user",
-          content: `${speakerLabel(ctx.from?.username ?? ctx.from?.first_name)} ${text}`,
+          content: `${speakerLabel(ctx.from?.username ?? ctx.from?.first_name)} ${triggerLine}`,
         });
       }
 
@@ -852,7 +857,7 @@ export function registerMessageHandler(
 
         const recentSummary = recent.slice(-10).map((r) => {
           const who = r.agent_key ? `[${r.agent_key}]` : speakerLabel(r.from_name);
-          return `${who} ${r.text.slice(0, 200)}`;
+          return `${who} ${defuseSpeakerLabels(r.text).slice(0, 200)}`;
         }).join("\n");
         runCompactor(anthropic, {
           agentKey: def.key,

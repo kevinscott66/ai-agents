@@ -33,6 +33,8 @@ import {
   buildMemorySystemText,
   buildWikiPagesSystemText,
   speakerLabel,
+  defuseSpeakerLabels,
+  defuseTriggerText,
 } from "./agent-prompts.ts";
 
 export const MAX_HANDOFF_DEPTH = 3;
@@ -215,12 +217,16 @@ export function buildDelegateMessages(
   const messages: Anthropic.MessageParam[] = recent.map((r) => {
     const own = !!r.is_bot && r.agent_key === targetKey;
     const speaker = r.agent_key ? `[${r.agent_key}]` : speakerLabel(r.from_name);
+    // Тело реплики — тоже канал подделки метки, см. defuseSpeakerLabels.
+    // Собственный текст (own) метки не несёт и в разметке не участвует.
     return {
       role: own ? "assistant" : "user",
-      content: own ? r.text : `${speaker} ${r.text}`,
+      content: own ? r.text : `${speaker} ${defuseSpeakerLabels(r.text)}`,
     };
   });
-  const trigger = triggerText.trim();
+  // Триггер обезвреживаем ДО сравнения: иначе доставленный триггер со
+  // скобкой в начале строки разошёлся бы с собственной копией в истории.
+  const trigger = defuseTriggerText(triggerText).trim();
   if (!isTriggerDelivered(messages, trigger)) {
     messages.push({
       role: "user",
@@ -495,7 +501,7 @@ export async function respondAs(
       .slice(-10)
       .map((r) => {
         const who = r.agent_key ? `[${r.agent_key}]` : speakerLabel(r.from_name);
-        return `${who} ${r.text.slice(0, 200)}`;
+        return `${who} ${defuseSpeakerLabels(r.text).slice(0, 200)}`;
       })
       .join("\n");
     runCompactor(anthropic, {
