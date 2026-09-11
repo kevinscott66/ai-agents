@@ -7,7 +7,11 @@ import { plainTelegramLength as plainLength, danglingLinkStart } from "./telegra
 
 const TG_LIMIT = 4000; // запас под markdown-обёртки
 
-/** Жёсткие лимиты самого Telegram — наши 4000/1000 это запас под них. */
+/**
+ * Жёсткий лимит сообщения у самого Telegram; `TG_LIMIT = 4000` выше — наш запас
+ * под markdown-обёртки. Пара лимитов ПОДПИСИ (1000/1024) живёт не здесь, а в
+ * telegram-actions.ts — заводить ей вторую копию рядом не надо.
+ */
 export const TELEGRAM_MESSAGE_HARD_LIMIT = 4096;
 
 /**
@@ -15,10 +19,14 @@ export const TELEGRAM_MESSAGE_HARD_LIMIT = 4096;
  *
  * Видимую длину здесь мерить нельзя: на плейн-пути Telegram считает символы как
  * есть, а `[текст](url)` весит всю ссылку. Живёт рядом с самим лимитом, потому
- * что была третьей копией одного правила: `telegram-actions.ts` держал свою
- * приватную (`MESSAGE_PLAIN_FITS`), а `handoff.ts` пытался обойтись без неё и
+ * что правило разъезжалось: `handoff.ts` пытался обойтись без предиката и
  * передавал в `sendWithHtml` третьим аргументом сам ЧИСЛОВОЙ лимит — см. фикс
  * там же.
+ *
+ * Приватный `CAPTION_PLAIN_FITS` в telegram-actions.ts сюда сводить НЕ надо и
+ * копией этого правила он не является: тот меряет подпись под жёсткий лимит
+ * подписи (1024), этот — сообщение под жёсткий лимит сообщения (4096). Числа
+ * разные, пути разные; общее у них только имя формы.
  */
 export const messagePlainFits = (t: string): boolean =>
   t.length <= TELEGRAM_MESSAGE_HARD_LIMIT;

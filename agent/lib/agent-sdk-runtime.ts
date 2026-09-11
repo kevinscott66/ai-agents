@@ -849,8 +849,13 @@ export async function runTextViaAgentSdk(opts: {
   // «aieng response not parseable as JSON: », обвиняя модель в сбое CLI.
   // Поэтому теперь: подтип запоминаем, текст ассистента копим отдельно и на
   // неуспешном подтипе либо отдаём накопленный текст, либо бросаем с именем
-  // подтипа. Оба вызывающих (compactor.ts:98 — try/catch с log.error,
-  // self-diag.ts:588 — try/catch с updateTaskStatus "failed") исключение ждут.
+  // подтипа. Круг 29: здесь стояло «оба вызывающих», и названы были двое —
+  // `compactor.ts` (try/catch с log.error) и `self-diag.ts` (try/catch с
+  // updateTaskStatus "failed"). Вызывающих ПЯТЬ: сверх этих двух — svg-fallback
+  // (ленивый import), orchestrator-bot и orchestrator-userbot. Исключение ждут
+  // все пятеро, но закрытый список из двух имён врал сразу двумя способами:
+  // счётом и составом — правящий поведение сверялся бы с ним и не увидел трёх
+  // путей, по которым отказ CLI уходит в чат.
   let subtype = "";
   let sawResult = false;
   let lastAssistant = "";

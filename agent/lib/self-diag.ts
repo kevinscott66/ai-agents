@@ -14,7 +14,11 @@
  *  - approval-gated actions are skipped (those belong in the approvals queue).
  *  - rate-limited actions are skipped (anthropic-client retries those itself).
  *  - aieng response must be valid JSON; on parse failure → task = failed.
- *  - aieng call capped at max_tokens = 1024.
+ *  - the deprecated compat seam (`deps.callAnthropicImpl`) caps the call at
+ *    max_tokens = 1024. The production path does NOT: it goes through
+ *    `runTextViaAgentSdk`, which passes no token cap at all — the only bound
+ *    there is `maxTurns: 1` plus SELF_DIAG_LLM_TIMEOUT_MS. Sizing cost or
+ *    truncation of aieng output off «1024» is wrong by construction.
  */
 import { getErrorMessage } from "./errors.ts";
 import Anthropic from "@anthropic-ai/sdk";
@@ -55,8 +59,10 @@ import { log, scrubbedHead } from "./log.ts";
  * subprocess останавливал весь self-heal бессрочно и без единой строки в лог:
  * следующий тик выходил по `if (running) return`.
  *
- * Пять минут — с запасом: запрос одношаговый (`maxTurns: 1`,
- * `max_tokens: 1024`), нормальный ответ приходит за секунды.
+ * Пять минут — с запасом: запрос одношаговый (`maxTurns: 1`), нормальный
+ * ответ приходит за секунды. Именно с запасом, а не впритык: потолка на длину
+ * ответа у продовой ветки нет — `max_tokens: 1024` стоит только в compat-сеаме
+ * `deps.callAnthropicImpl`, и этот дедлайн — единственная граница сверху.
  */
 export const SELF_DIAG_LLM_TIMEOUT_MS = 5 * 60_000;
 
@@ -156,8 +162,8 @@ export interface AiengFixResponse {
  * закрыли гейт, личность исполнителя и лимиты — форму payload не закрыл никто.
  *
  * Что именно ломалось:
- *  - `createdBy` — `dispatch/tasks.ts:110` читает `payload.createdBy ??
- *    ctx.agentKey`, а `buildPayload` для CREATE_TASK жёстко ставит
+ *  - `createdBy` — `handleCreateTask` в dispatch/tasks.ts читает
+ *    `payload.createdBy ?? ctx.agentKey`, а `buildPayload` для CREATE_TASK ставит
  *    `createdBy: ctx.agentKey` и модели этого поля не отдаёт. Значит здесь
  *    модель назначала автора задачи. Дальше — отмывание полномочий: поллер
  *    берёт авторитет из `task.created_by` (см. gateFor ниже), и задача,
@@ -303,7 +309,7 @@ export interface SelfDiagPollerHandle {
  * Потолок, после которого diag-задача в `running` считается брошенной.
  *
  * Аудит 2026-08-21. `processDiagTask` переводит задачу в `running` ДО вызова
- * aieng (:404), а `listPendingDiagTasks` выбирает строго `status='pending'`.
+ * aieng, а `listPendingDiagTasks` выбирает строго `status='pending'`.
  * Пока процесс жив, дыры нет: тик сериализован флагом `running`, и каждый
  * выход из `processDiagTask` пишет терминальный статус. Но kill процесса или
  * рестарт systemd ровно в этом окне оставляет задачу в `running` НАВСЕГДА:
@@ -313,8 +319,8 @@ export interface SelfDiagPollerHandle {
  * таймауту» вместо «прервана рестартом». Замер до фикса: два тика подряд по
  * задаче в `running` — ноль вызовов aieng, статус не меняется.
  *
- * Тот же класс, что и мост статусов в tasks.ts:400-415, но там окно
- * схлопывается транзакцией, а здесь между `running` и терминалом стоит вызов
+ * Тот же класс, что и мост статусов (`forceTerminalStatus` в tasks.ts), но
+ * там окно схлопывается транзакцией, а здесь между `running` и терминалом стоит вызов
  * модели — атомарным его не сделать. Значит нужен подбор осиротевших.
  *
  * 15 минут — с запасом от любого честного тика: сам вызов одношаговый, а

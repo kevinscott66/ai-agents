@@ -94,15 +94,31 @@ function fileLines(p: string): string[] | null {
   return cache.get(p) ?? null;
 }
 
-/** Путь ссылки → реальный файл, либо null (цель вне проверки: фикстуры, чужие деревья). */
-function resolveTarget(from: string, ref: string): string | null {
+/**
+ * Путь ссылки → реальный файл, либо null (цель вне проверки: фикстуры, чужие деревья).
+ *
+ * Круг 29: добор по имени файла отбрасывал каталог из ссылки целиком, и
+ * `dispatch/tasks.ts:43` сверялся с `lib/tasks.ts` — LOOKUP_DIRS перечисляет
+ * `lib` раньше `lib/dispatch`, а имя там совпадает. Это хуже, чем пропуск:
+ * сторож не молчал, он ОТВЕЧАЛ, только про другой файл. Обе ссылки на
+ * `lib/dispatch/tasks.ts` протухли давно и держались зелёными ровно потому,
+ * что в `lib/tasks.ts` на тех же номерах случайно лежал текст.
+ *
+ * Поэтому ссылка с каталогом принимается только как ХВОСТ настоящего пути:
+ * `dispatch/tasks.ts` ← `lib/dispatch/tasks.ts` да, `lib/tasks.ts` нет. Голое
+ * имя файла — давняя идиома репозитория (`commands.ts:N` из теста про
+ * `lib/commands.ts`), её добор по имени и обслуживает.
+ */
+export function resolveTarget(from: string, ref: string): string | null {
   for (const c of [normalize(join(dirname(from), ref)), normalize(ref)]) {
     if (fileLines(c)) return c;
   }
-  const base = basename(ref);
+  const suffix = normalize(ref);
   for (const d of LOOKUP_DIRS) {
-    const c = join(d, base);
-    if (fileLines(c)) return c;
+    const c = join(d, basename(ref));
+    if (!fileLines(c)) continue;
+    if (suffix.includes("/") && c !== suffix && !c.endsWith("/" + suffix)) continue;
+    return c;
   }
   return null;
 }
@@ -134,5 +150,23 @@ describe("координаты строк в комментариях не пр�
       }
     }
     expect(stale).toEqual([]);
+  });
+
+  test("ссылка с каталогом разрешается в файл ИЗ ЭТОГО каталога", () => {
+    // Оба файла существуют и называются одинаково; до круга 29 добор по имени
+    // отдавал первый по списку LOOKUP_DIRS, то есть `lib/tasks.ts`.
+    expect(fileLines("lib/tasks.ts")).not.toBeNull();
+    expect(fileLines("lib/dispatch/tasks.ts")).not.toBeNull();
+    expect(resolveTarget("tests/x.test.ts", "dispatch/tasks.ts")).toBe("lib/dispatch/tasks.ts");
+  });
+
+  test("голое имя файла по-прежнему добирается по каталогам", () => {
+    // Идиома репозитория: из теста пишут `commands.ts:N` про `lib/commands.ts`.
+    expect(resolveTarget("tests/x.test.ts", "commands.ts")).toBe("lib/commands.ts");
+  });
+
+  test("каталог, которого нет ни у одного настоящего пути, целью не считается", () => {
+    // Иначе сторож снова начнёт отвечать про чужой файл.
+    expect(resolveTarget("tests/x.test.ts", "нет-такого/tasks.ts")).toBeNull();
   });
 });

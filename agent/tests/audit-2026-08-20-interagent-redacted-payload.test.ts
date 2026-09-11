@@ -19,8 +19,9 @@
  * сводку, которой не существует. Строка `redacted: true` в ответе уже была —
  * фронт её просто не читал (`Approval` в types.ts даже не объявлял поле).
  *
- * Прецедент правильного поведения рядом: `lib/mac-session.ts:39-63,98` тот же
- * флаг читает и отдаёт `REDACTED_NOTE` вместо выдуманных значений.
+ * Прецедент правильного поведения рядом: `toMacSession` и `macOutputView` в
+ * miniapp/src/lib/mac-session.ts тот же флаг читают и отдают `REDACTED_NOTE`
+ * вместо выдуманных значений.
  */
 import { describe, test, expect } from "bun:test";
 import { readFileSync } from "node:fs";

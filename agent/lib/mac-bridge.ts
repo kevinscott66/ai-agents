@@ -9,6 +9,13 @@
  *   client → server:  { type: "result", id, ok, code, error? }
  *   server → client:  { type: "ping" }
  *   client → server:  { type: "pong" }
+ *   server → client:  { type: "cancel", id }   (cancelOnMac — snuff one run)
+ *   server → client:  { type: "stop" }         (stopMac — snuff every run)
+ *
+ * The last two are not optional extras: a daemon written to this list without
+ * `cancel` leaves an orphaned `claude --permission-mode bypassPermissions`
+ * running on the owner's machine after `mac_timeout` — the exact defect
+ * `cancelOnMac` was added to close. Both are parsed in mac-daemon/protocol.ts.
  *
  * Only one active Mac client is held; a new authenticated connection replaces
  * the previous one. sendToMac() returns a promise that resolves with the
@@ -737,8 +744,9 @@ export function _resolveBridgePort(raw: string | undefined): number {
  *
  * Аудит 2026-08-28: было `process.env.MAC_BRIDGE_HOST ?? "127.0.0.1"`. `??`
  * ловит только отсутствие имени, а systemd для строки вида `KEY=` отдаёт
- * пустую строку — и `agent/.env.example:107` отгружает переменную ровно так,
- * с инструкцией «Copy to .env». То есть пустая строка здесь не экзотика, а
+ * пустую строку — и `agent/.env.example` отгружает переменную ровно так,
+ * строкой `MAC_BRIDGE_HOST=` без значения, с инструкцией «Copy to .env». То
+ * есть пустая строка здесь не экзотика, а
  * поставляемое по умолчанию значение.
  *
  * Что делает с ней Bun (замер на рантайме проекта, `lsof` по собственному

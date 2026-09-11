@@ -205,7 +205,7 @@ export async function restoreFromBackup(options: RestoreOptions): Promise<Restor
     // одними `memory-*.tgz` (снапшот БД перестал делаться) доходил до конца с
     // success: true — потому что success требовал `dbRestored || wikiRestored`.
     // Это ровно тот случай, на который сам бэкап поднимает `backup_partial`
-    // (lib/backup.ts:579): учебный restore обязан говорить то же самое, иначе
+    // (lib/backup.ts): учебный restore обязан говорить то же самое, иначе
     // он подтверждает наличие копии, которой нет.
     if (!backups.dbBackup) {
       result.errors.push(

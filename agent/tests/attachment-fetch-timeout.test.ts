@@ -6,7 +6,8 @@
  *   const resp = await fetch(link.toString());   // ← ни signal, ни таймаута
  *   const ab   = await resp.arrayBuffer();
  *
- * Два вызова: картинка (:372) и текстовый документ (:407). Оба стоят ПОСЛЕ
+ * Два вызова — картинка и текстовый документ, обе ветки в
+ * orchestrator/message-handler.ts. Оба стоят ПОСЛЕ
  * `sendChatAction("typing")`. Зависший сокет на CDN Telegram (без RST, без
  * FIN) — это промис хендлера, который не завершится никогда: catch рядом не
  * сработает, runWithTools не позовётся, ответа не будет, а в логе не появится

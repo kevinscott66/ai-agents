@@ -2,8 +2,9 @@
  * Аудит 2026-08-28 — `isFailureResult` в agent/lib/agent-sdk-runtime.ts.
  *
  * `pending_approval` и `rate_limited` приходят от `formatGateResult`
- * (`action-dispatch.ts:1773`, `:1782`) с `ok:false`, но провалом инструмента
- * не являются: строка в `approvals` уже закоммичена (`:1528`), а отложенное
+ * (action-dispatch.ts) с `ok:false`, но провалом инструмента не являются:
+ * строка в `approvals` уже закоммичена к этому моменту (`dispatchAndAudit`
+ * в том же файле), а отложенное
  * действие несёт `retryInMs`. Если отдать их модели как ошибку, она читает
  * это как провал и зовёт тот же инструмент снова — MAX_CALLS_PER_TOOL_PER_RESPONSE
  * не мешает (вызов в каждом ответе один), так что до

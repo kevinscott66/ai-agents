@@ -284,6 +284,38 @@ type ServerLike = { requestIP?: (r: Request) => { address: string } | null };
 const LOOPBACK_PEERS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 
 /**
+ * Ключ ведра для адреса, ПРИСЛАННОГО клиентом (заголовок владельца или XFF).
+ *
+ * Аудит 2026-08-20: пул SHARED_LOCAL_KEYS сделан для случая «клиентской
+ * идентичности нет вовсе» (ADNL через ton-прокси с петли), и владелец на VPS
+ * поднимает ему ёмкость до 600. Но `clientIpKey` возвращал значение заголовка
+ * как есть, а гейт доверия — «сокет пришёл с петли» — за nginx выполняется
+ * ВСЕГДА. Значит запрос с `CF-Connecting-IP: 127.0.0.1` попадал ровно в этот
+ * привилегированный пул: посторонний получал ёмкость, предназначенную
+ * .ton-трафику, и заодно мог выпить её у самого ton-прокси.
+ *
+ * Утверждение «я — петля», пришедшее в заголовке, бессмысленно по построению:
+ * через Cloudflare или внешний nginx адрес 127.0.0.1 прийти не может. Такие
+ * запросы сводим в один отдельный ключ обычной ёмкости — он не пересекается ни
+ * с общим локальным пулом, ни с чьим-то настоящим адресом.
+ *
+ * Это только вторая линия. Первая — vhost: `SITE_CLIENT_IP_HEADER` безопасен
+ * лишь когда nginx сам перезаписывает этот заголовок (`set_real_ip_from` для
+ * сетей CF + `real_ip_header`), иначе клиент подставляет любой адрес и крутит
+ * ключ на каждый запрос. Проверить конфиг из кода нельзя — см. предупреждение
+ * при старте.
+ *
+ * Сводит их сюда `claimedIpKey` ниже.
+ */
+export const CLAIMED_LOOPBACK_KEY = "ip:claimed-loopback";
+
+/** Ключ для присланного клиентом адреса: «я — петля» сводится в отдельное ведро. */
+function claimedIpKey(addr: string): string {
+  const key = `ip:${addr}`;
+  return SHARED_LOCAL_KEYS.has(key) ? CLAIMED_LOOPBACK_KEY : key;
+}
+
+/**
  * Ключ ведра лимитера — адрес клиента.
  *
  * Аудит 2026-08-12: раньше peer предпочитался безусловно. Сайт стоит за nginx
@@ -315,35 +347,6 @@ const LOOPBACK_PEERS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
  * подделать снаружи нельзя). Пустое значение сохраняет прежнее поведение —
  * последний элемент X-Forwarded-For.
  */
-/**
- * Ключ ведра для адреса, ПРИСЛАННОГО клиентом (заголовок владельца или XFF).
- *
- * Аудит 2026-08-20: пул SHARED_LOCAL_KEYS сделан для случая «клиентской
- * идентичности нет вовсе» (ADNL через ton-прокси с петли), и владелец на VPS
- * поднимает ему ёмкость до 600. Но `clientIpKey` возвращал значение заголовка
- * как есть, а гейт доверия — «сокет пришёл с петли» — за nginx выполняется
- * ВСЕГДА. Значит запрос с `CF-Connecting-IP: 127.0.0.1` попадал ровно в этот
- * привилегированный пул: посторонний получал ёмкость, предназначенную
- * .ton-трафику, и заодно мог выпить её у самого ton-прокси.
- *
- * Утверждение «я — петля», пришедшее в заголовке, бессмысленно по построению:
- * через Cloudflare или внешний nginx адрес 127.0.0.1 прийти не может. Такие
- * запросы сводим в один отдельный ключ обычной ёмкости — он не пересекается ни
- * с общим локальным пулом, ни с чьим-то настоящим адресом.
- *
- * Это только вторая линия. Первая — vhost: `SITE_CLIENT_IP_HEADER` безопасен
- * лишь когда nginx сам перезаписывает этот заголовок (`set_real_ip_from` для
- * сетей CF + `real_ip_header`), иначе клиент подставляет любой адрес и крутит
- * ключ на каждый запрос. Проверить конфиг из кода нельзя — см. предупреждение
- * при старте.
- */
-export const CLAIMED_LOOPBACK_KEY = "ip:claimed-loopback";
-
-function claimedIpKey(addr: string): string {
-  const key = `ip:${addr}`;
-  return SHARED_LOCAL_KEYS.has(key) ? CLAIMED_LOOPBACK_KEY : key;
-}
-
 export function clientIpKey(
   xff: string | null | undefined,
   peer: string | null,
@@ -661,9 +664,11 @@ function metaDescription(s: string): string {
   // UTF-16 могла попасть внутрь суррогатной пары (эмодзи в сводке — не
   // экзотика), и одинокий суррогат уезжал сразу в три атрибута; в байтах
   // ответа он не кодируется, так что читатель видел U+FFFD на месте последней
-  // буквы. Третий и последний рез в файле, доведённый до общего контракта:
-  // `clipSlug` починили посимвольным Array.from, `clip` — этой же проверкой
-  // хвоста, XML-путь чистит через XML_FORBIDDEN.
+  // буквы. Третий рез в файле, доведённый до общего контракта: `clipSlug`
+  // починили посимвольным Array.from, `clip` — этой же проверкой хвоста,
+  // XML-путь чистит через XML_FORBIDDEN. Не последний: четвёртым оказался
+  // `q` в ветке `/api/digests?q=` — его этой волной пропустили ровно потому,
+  // что список тут был записан закрытым.
   return one.length > META_DESC_MAX ? `${clip(one, META_DESC_MAX - 1)}…` : one;
 }
 
@@ -851,10 +856,6 @@ function rfc822(iso: string): string {
 }
 
 /**
- * GET /rss.xml — RSS 2.0 feed of the ~20 latest digests. Returned as XML (not
- * under the HTML CSP), with nosniff. Built before the SPA static fallback.
- */
-/**
  * Кэш готовых XML-лент.
  *
  * `/rss.xml` и `/sitemap.xml` собираются из БД синхронно, а `Cache-Control`
@@ -927,6 +928,10 @@ function buildRssXml(): string {
   );
 }
 
+/**
+ * GET /rss.xml — RSS 2.0 feed of the ~20 latest digests. Returned as XML (not
+ * under the HTML CSP), with nosniff. Built before the SPA static fallback.
+ */
 function rssResponse(): Response {
   return new Response(cachedFeed("rss", buildRssXml), {
     headers: {
@@ -1015,6 +1020,13 @@ function robotsResponse(): Response {
 }
 
 /**
+ * Потолок адресов на таблицу в `sitemap.xml`. Протокол разрешает 50 000 на
+ * файл; берём с запасом вдвое, чтобы статические маршруты и обе таблицы вместе
+ * гарантированно уложились.
+ */
+export const SITEMAP_MAX_PER_TABLE = 20_000;
+
+/**
  * GET /sitemap.xml — все статьи и активности, а не двадцать последних.
  *
  * RSS (/rss.xml) — это лента: он по определению обрезан, и статья, уехавшая за
@@ -1024,13 +1036,6 @@ function robotsResponse(): Response {
  * `<loc>` — percent-encoded id внутри xmlEscape: id приходит через ингест от
  * модели, и амперсанд в нём не должен ломать документ.
  */
-/**
- * Потолок адресов на таблицу в `sitemap.xml`. Протокол разрешает 50 000 на
- * файл; берём с запасом вдвое, чтобы статические маршруты и обе таблицы вместе
- * гарантированно уложились.
- */
-export const SITEMAP_MAX_PER_TABLE = 20_000;
-
 export function buildSitemapXml(limit: number = SITEMAP_MAX_PER_TABLE): string {
   const urls: { loc: string; lastmod?: string }[] = STATIC_ROUTES.map((p) => ({
     loc: `${SITE_ORIGIN}${p}`,
@@ -1127,15 +1132,6 @@ export const MAX_INGEST_BYTES = 1024 * 1024;
 export const MAX_REQUEST_BODY_BYTES = MAX_INGEST_BYTES * 8;
 
 /**
- * Сравнение токена за постоянное время. Токен нигде не логируется.
- *
- * Сравниваем SHA-256 обеих строк, а не сами строки: хэши всегда 32 байта,
- * поэтому `timingSafeEqual` не бросает на разной длине — и, главное, из
- * времени ответа больше не вытекает длина ожидаемого токена. Прежний код
- * возвращал false сразу на `provided.length !== expected.length`, то есть
- * подбор длины стоил одного запроса на вариант (аудит 2026-08-12).
- */
-/**
  * Секрет ингеста или null, если мост выключен.
  *
  * Аудит 2026-09-11 (круг 15): значение читалось в трёх местах тремя разными
@@ -1151,6 +1147,15 @@ function ingestSecret(): string | null {
   return v && v.trim().length > 0 ? v : null;
 }
 
+/**
+ * Сравнение токена за постоянное время. Токен нигде не логируется.
+ *
+ * Сравниваем SHA-256 обеих строк, а не сами строки: хэши всегда 32 байта,
+ * поэтому `timingSafeEqual` не бросает на разной длине — и, главное, из
+ * времени ответа больше не вытекает длина ожидаемого токена. Прежний код
+ * возвращал false сразу на `provided.length !== expected.length`, то есть
+ * подбор длины стоил одного запроса на вариант (аудит 2026-08-12).
+ */
 function tokenMatches(provided: string | null): boolean {
   const expected = ingestSecret();
   // Bridge is OFF unless the env secret is configured.
@@ -1207,7 +1212,6 @@ function contentSuffix(...parts: string[]): string {
     .slice(0, 10);
 }
 
-/** Build a url-safe slug from a title (Cyrillic-friendly) + date prefix. */
 /**
  * Рез основы слага по СИМВОЛАМ, а не по единицам UTF-16.
  *
@@ -1225,6 +1229,7 @@ function clipSlug(base: string, max: number): string {
   return Array.from(base).slice(0, max).join("");
 }
 
+/** Build a url-safe slug from a title (Cyrillic-friendly) + date prefix. */
 function slugFromTitle(title: string, dateIso: string): string {
   const datePart = dateIso.slice(0, 10); // YYYY-MM-DD
   const base = clipSlug(

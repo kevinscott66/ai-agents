@@ -458,9 +458,12 @@ export function wikiRead(scope: Scope, slug: string): string | null {
  * Сколько страниц попадает в сгенерированный индекс.
  *
  * Индекс уезжает в system-промпт КАЖДОГО хода двенадцати ролей, причём два из
- * трёх читателей (`buildWikiPagesSystemText` в handoff.ts и в
- * orchestrator/message-handler.ts — координаты не пишем, они разъезжаются) не режут
- * его ничем. 120 строк по ~60 символов — около 7KB, это потолок, а не типичный
+ * трёх читателей — вызовы `buildMemorySystemText` в handoff.ts и в
+ * orchestrator/message-handler.ts (координаты не пишем, они разъезжаются) —
+ * подают в него `wikiIndex(...)` как есть и не режут ничем; режет только
+ * третий, `clipWikiIndex` в compactor.ts. Соседний `buildWikiPagesSystemText`
+ * сюда не относится вовсе: он принимает попадания ПОИСКА, а не индекс, и
+ * клипает их сам. 120 строк по ~60 символов — около 7KB, это потолок, а не типичный
  * размер: столько страниц в вики пока нет ни в одной области.
  */
 export const WIKI_INDEX_MAX_PAGES = 120;

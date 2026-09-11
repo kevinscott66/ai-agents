@@ -43,10 +43,48 @@ const COMMENT_LINE = /^\s*(\/\/|\*|\/\*)/;
 function walk(dir: string, out: string[] = []): string[] {
   for (const e of readdirSync(dir)) {
     if (e === "node_modules" || e === "dist" || e.startsWith(".")) continue;
+    // `fixtures` — данные, а не контракт: там связка лежит НАРОЧНО, как образец
+    // дефекта для проверки ниже. Ровно та же оговорка, что и про COMMENT_LINE.
+    if (e === "fixtures") continue;
     const p = join(dir, e);
     if (statSync(p).isDirectory()) walk(p, out);
     else if (p.endsWith(".ts") || p.endsWith(".tsx")) out.push(p);
   }
+  return out;
+}
+
+/**
+ * Связные куски комментария: `{ text, line }` на каждый идущий подряд блок.
+ *
+ * Круг 29: проверка шла ПОСТРОЧНО, и связка распадалась от простого переноса
+ * строки — `` `stopMac` `` в конце одной строки, `` (lib/mac-bridge.ts:373) ``
+ * в начале следующей. Таких мест нашлось двенадцать против шести пойманных,
+ * то есть построчная форма ловила меньше половины. Дефект от переноса не
+ * меняется: имя названо, номер лишний и тухнет ровно так же.
+ *
+ * Поэтому склеиваем блок в одну строку и ищем в ней. Маркер комментария и
+ * отступ снимаем, иначе `` * `` из следующей строки попадёт между именем и
+ * скобкой и снова разорвёт связку.
+ */
+function commentBlocks(file: string): { text: string; line: number }[] {
+  const out: { text: string; line: number }[] = [];
+  let buf: string[] = [];
+  let start = 0;
+  const flush = () => {
+    if (buf.length) out.push({ text: buf.join(" "), line: start });
+    buf = [];
+  };
+  readFileSync(file, "utf8")
+    .split("\n")
+    .forEach((line, i) => {
+      if (!COMMENT_LINE.test(line)) {
+        flush();
+        return;
+      }
+      if (!buf.length) start = i + 1;
+      buf.push(line.replace(/^\s*(\/\*\*?|\/\/|\*)\s?/, "").trim());
+    });
+  flush();
   return out;
 }
 
@@ -55,15 +93,19 @@ describe("имя символа и номер строки не ходят па�
     const found: string[] = [];
     for (const root of ROOTS) {
       for (const file of walk(root)) {
-        readFileSync(file, "utf8")
-          .split("\n")
-          .forEach((line, i) => {
-            if (!COMMENT_LINE.test(line)) return;
-            const m = line.match(SYMBOL_THEN_COORD);
-            if (m) found.push(`${file}:${i + 1} → ${m[0]}`);
-          });
+        for (const { text, line } of commentBlocks(file)) {
+          const m = text.match(SYMBOL_THEN_COORD);
+          if (m) found.push(`${file}:${line} → ${m[0]}`);
+        }
       }
     }
     expect(found).toEqual([]);
+  });
+
+  test("перенос строки между именем и координатой связку не разрывает", () => {
+    // Тот самый случай, который построчная проверка пропускала.
+    const block = commentBlocks("tests/fixtures/symbol-coord-wrapped.ts");
+    expect(block.length).toBeGreaterThan(0);
+    expect(block[0].text).toMatch(SYMBOL_THEN_COORD);
   });
 });

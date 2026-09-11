@@ -1,7 +1,7 @@
 /**
  * Статус задачи, которого нет в карте лейблов, доезжает до экрана латиницей.
  *
- * `label()` при промахе возвращает сам ключ (miniapp/src/lib/labels.ts:75-78) —
+ * `label()` при промахе возвращает сам ключ (miniapp/src/lib/labels.ts) —
  * молча, без предупреждения. В `TASK_STATUS_LABELS` не было `awaiting_review`,
  * хотя это полноценный статус FSM: `TASK_TRANSITIONS.running` его содержит,
  * `REQUEST_REVIEW` его выставляет (lib/dispatch/tasks.ts:175), а `Tasks.tsx:19`

@@ -3,8 +3,13 @@
  * client, waits for "run" commands, spawns the `claude` CLI with stdin =
  * prompt, streams stdout/stderr back as chunks, and sends a final "result".
  *
- * Auto-reconnect with backoff 1→2→5→10s. Soft kill (SIGINT) of active child
- * on socket close. Project allowlist enforced via MAC_PROJECT_ROOTS (CSV).
+ * Auto-reconnect with backoff 1→2→5→10s. On socket close EVERY live child is
+ * retired, not just one: `killAllChildren` walks the `activeChildren` map and
+ * each entry goes through `killChild` — SIGINT first, then SIGKILL if it has
+ * not exited within KILL_GRACE_MS. Do not read this as a soft kill: a long
+ * `claude` run can be cut mid-write when the SSH tunnel flaps, and that is
+ * deliberate (see mac-daemon/kill.ts, where SIGINT-only is recorded as the old
+ * broken behaviour). Project allowlist enforced via MAC_PROJECT_ROOTS (CSV).
  */
 import { resolve as pathResolve, dirname } from "node:path";
 import { realpathSync, existsSync, lstatSync, mkdirSync } from "node:fs";
@@ -333,9 +338,22 @@ function connect(): void {
     lastBridgeMsg = Date.now();
     const msg = parseBridgeMsg(ev.data);
     if (msg === null) return;
-    // Мост доказывает себя `auth_ok` ровно так же, как демон доказывает себя
-    // секретом. До этого исполняемые кадры не принимаются — иначе `run`
-    // приходит от того, кто просто занял адрес моста. Подробности — auth-gate.ts.
+    // До `auth_ok` исполняемые кадры не принимаются — иначе `run` приходит от
+    // того, кто просто занял адрес моста.
+    //
+    // Аудит 2026-09-11 (круг 29): здесь стояло «мост доказывает себя `auth_ok`
+    // ровно так же, как демон доказывает себя секретом». Это ровно то, чего
+    // гейт НЕ делает, и auth-gate.ts в своей же шапке говорит обратное:
+    // «аутентификация в этом протоколе односторонняя». Демон предъявляет общий
+    // секрет; мост присылает пустой кадр без секрета, и `auth_ok` лежит в
+    // PRE_AUTH_ALLOWED — занявший порт шлёт его первым и проходит.
+    //
+    // Гейт даёт ПОРЯДОК, а не доказательство: самозванец обязан заговорить на
+    // протоколе, и `run` до рукопожатия больше не исполняется. Слово «доказывает»
+    // опаснее отсутствия комментария — читатель, поверивший в симметрию, не
+    // заведёт настоящую взаимную аутентификацию, которой здесь нет. Что держит
+    // канал на самом деле — TLS либо петля (bridge-url.ts). Подробности —
+    // auth-gate.ts.
     if (!gate.accepts(msg)) {
       console.warn(`[daemon] dropping '${msg.type}' received before auth_ok`);
       return;

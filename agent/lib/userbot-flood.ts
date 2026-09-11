@@ -25,6 +25,10 @@ import { log } from "./log.ts";
 
 // ─── Backoff calculator ────────────────────────────────────────────────────
 
+/** Первая пауза; дальше удваивается до MAX_BACKOFF_MS — см. `floodBackoffMs`. */
+export const INITIAL_BACKOFF_MS = 1_000;
+export const MAX_BACKOFF_MS = 60_000;
+
 /**
  * Calculate delay in ms before the next attempt after a FLOOD_WAIT.
  *
@@ -41,9 +45,6 @@ import { log } from "./log.ts";
  * @param serverSeconds  seconds requested by Telegram (from FLOOD_WAIT_<N>), optional
  * @param _jitter   override jitter for deterministic tests (default: random 0-1000ms)
  */
-export const INITIAL_BACKOFF_MS = 1_000;
-export const MAX_BACKOFF_MS = 60_000;
-
 export function floodBackoffMs(
   attempt: number,
   serverSeconds?: number,

@@ -79,10 +79,17 @@ export const DISPATCH_ONLY_ACTIONS: Readonly<Record<string, string>> = Object.fr
 });
 
 /**
- * T-701/T-702/T-703: Actions that ALWAYS require approval — even when the calling
- * agent has `requires_approval=false` and the autonomy mode is `auto`.
+ * T-701/T-702/T-703: Actions that require approval even when the calling agent
+ * has `requires_approval=false` and the autonomy mode is `auto`.
  * Used for inter-agent mutations (perm/aieng changing other agents'
  * security state). Keeps a human-in-the-loop for every privilege change.
+ *
+ * Аудит 2026-09-11 (круг 29): было «ALWAYS require approval», и это слово
+ * неверно ровно для одного участника — `MAC_RUN_CLAUDE` выпускает owner opt-in
+ * (`MAC_AUTONOMOUS=true` плюс autonomy=auto, ветка `macAuto` в `evaluateGate`).
+ * Заглавное ALWAYS читается как инвариант и гасит вопрос «а есть ли обход?»
+ * именно там, где обход есть, — поэтому исключение названо здесь, а не только
+ * у самой ветки гейта. Для всех остальных действий набора обхода нет.
  */
 export const ALWAYS_APPROVE_ACTIONS: Set<ActionType> = new Set<ActionType>([
   "GRANT_PERMISSION",
@@ -96,10 +103,17 @@ export const ALWAYS_APPROVE_ACTIONS: Set<ActionType> = new Set<ActionType>([
   "SPAWN_ROLE",
   // SEC-audit 2026-06-10 (MED-2): MAC remote-exec is RCE on the owner's machine.
   // requires_approval in the permissions table is GRANT_PERMISSION-flippable, so
-  // under `auto` autonomy approval could be removed. Make approval MANDATORY —
-  // independent of autonomy mode and grant state.
-  // NB: MAC_STOP is deliberately NOT here — it is a safety kill-switch and must
-  // fire immediately (it stays orchestrator-only via CALLER_RESTRICTED).
+  // under `auto` autonomy approval could be removed. Approval здесь не зависит
+  // ни от autonomy, ни от строки грантов — единственный выход даёт сам владелец
+  // через MAC_AUTONOMOUS=true (см. `macAuto`), и bypass-режим не выпускает и он.
+  //
+  // NB: MAC_STOP не здесь. Аудит 2026-09-11 (круг 29): обоснованием стояло «it
+  // is a safety kill-switch and must fire immediately», а MAC_STOP лежит в
+  // SEMI_AUTO_RISKY — то есть в semi_auto, автономии ПО УМОЛЧАНИЮ, стоп-кран
+  // как раз уходит на апрув. Мгновенно он срабатывает только в `auto`. Здесь
+  // его нет по другой причине: ALWAYS_APPROVE поднимает пол во ВСЕХ режимах,
+  // включая `auto`, а для остановки чужого прогона это лишний этаж. Оркестратор
+  // остаётся единственным вызывающим через CALLER_RESTRICTED.
   "MAC_RUN_CLAUDE",
   // Аудит 2026-08-04: публикация в публичный канал шла БЕЗ человека в контуре.
   // Миграция 038 сеет PUBLISH_TO_CHANNEL как allowed=1, requires_approval=0, в
@@ -311,7 +325,18 @@ export function payloadForcesApproval(
 /**
  * Действия, которые в режиме semi_auto всегда требуют approval,
  * даже если permissions.requires_approval=false.
- * Пока — только исходящие сообщения (внешний side-effect).
+ *
+ * Аудит 2026-09-11 (круг 29): здесь стояло «Пока — только исходящие сообщения
+ * (внешний side-effect)». Набор давно шире: к сообщениям добавились
+ * `MAC_RUN_CLAUDE` и `MAC_STOP` (команды на личной машине владельца) и
+ * `CREATE_TEAM_CHANNEL` (создание канала от его имени). Врала не мелочь:
+ * semi_auto — АВТОНОМИЯ ПО УМОЛЧАНИЮ, то есть это описание набора, который в
+ * большинстве чатов и решает, спросят человека или нет. Читатель, сверившийся с
+ * ним, выводит «мак-действия сюда не относятся» — и ошибается ровно наоборот.
+ *
+ * Держать список в прозе нечем: он растёт. Поэтому здесь назван КРИТЕРИЙ —
+ * действие с внешним или необратимым эффектом, который в semi_auto не должен
+ * уходить молча, — а состав читается по коду ниже.
  */
 export const SEMI_AUTO_RISKY: Set<ActionType> = new Set<ActionType>([
   "SEND_MESSAGE",
@@ -690,9 +715,12 @@ export interface GateInput {
    */
   forceApproval?: boolean;
   /**
-   * Текст причины для карточки approval. Причин уже больше одной
-   * (owner-voice, bypass-режим MAC_RUN_CLAUDE), и подставлять единственную
-   * зашитую строку значит врать человеку о том, что он подтверждает.
+   * Текст причины для карточки approval. Причина не одна, и подставлять
+   * единственную зашитую строку значит врать человеку о том, что он
+   * подтверждает. Перечислять их здесь нечем: список растёт (круг 29 застал
+   * его на «owner-voice, bypass-режим MAC_RUN_CLAUDE» при уже трёх ветках —
+   * третьей пришла делегированная мак-команда). Состав читается в
+   * `payloadForcesApproval`, где он и заведён единой точкой.
    */
   forceApprovalReason?: string;
 }
