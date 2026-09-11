@@ -103,8 +103,8 @@ export function _envPositiveInt(
  * systemd `EnvironmentFile=` отдаёт строку `KEY=` как ПУСТУЮ СТРОКУ, а не как
  * отсутствие ключа, а `KEY= ` (случайный пробел после `=`, глазом не видный) —
  * как `" "`. Пустая строка falsy, и её тернарник переживал. Пробел truthy, и
- * `Number(" ")` — ноль. Ноль проходит и `sanitizeHourUTC` (digest.ts:285), и
- * `sanitizeMaintOpt` (db-maint.ts:979): у обоих нижняя граница 0, оба молчат.
+ * `Number(" ")` — ноль. Ноль проходит и `sanitizeHourUTC` (digest.ts), и
+ * `sanitizeMaintOpt` (db-maint.ts): у обоих нижняя граница 0, оба молчат.
  *
  * Итог: дайджест команды и суточное обслуживание БД (archive + VACUUM) молча
  * переезжают на 00:00 UTC с 06:00 и 04:00 — из-за пробела в конфиге и без

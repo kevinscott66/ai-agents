@@ -239,9 +239,19 @@ export function createTask(input: CreateTaskInput): Task {
           cancelled_ancestor: anc.id,
           reopened: reopenChain.map((t) => t.id),
         });
-      } else if (anc && isSpawnRoleTask(anc)) {
+      } else if (anc && FSM[anc.status].length === 0 && isSpawnRoleTask(anc)) {
         log.warn("[tasks] предок — завершённый прогон роли, подъём остановлен", {
           spawn_role_ancestor: anc.id,
+          reopened: reopenChain.map((t) => t.id),
+        });
+      } else if (anc && reopenChain.length > MAX_DEPTH && FSM[anc.status].length === 0) {
+        // Аудит 2026-09-11: выход по ограничителю не логировался вовсе, а это
+        // тот самый случай, ради которого ограничитель и заведён, — битая
+        // цепочка parent_id. Цепочка молча усекалась, и часть предков
+        // оставалась незакрытой без единой строки в логе.
+        log.warn("[tasks] цепочка предков длиннее предела — подъём усечён", {
+          stopped_at: anc.id,
+          limit: MAX_DEPTH,
           reopened: reopenChain.map((t) => t.id),
         });
       }
@@ -330,7 +340,7 @@ export function createTask(input: CreateTaskInput): Task {
       // возвращает `pending_approval:<id>` и строки не создаёт; аппрув приходит
       // раньше финиша двух других — `createTask` видит нетерминального
       // родителя, `reopenChain` пуст, маркер остаётся. Дальше все трое `done`,
-      // а rollupParent форсит `failed` (tasks.ts:664) и каскадит эту ложь на
+      // а `rollupParent` форсит `failed` и каскадит эту ложь на
       // всех предков. Прежний регрессионный тест
       // (task-lifecycle-audit-2026-08-13.test.ts:139) покрывал только обратный
       // порядок — аппрув после финиша, — где родитель уже терминален.
@@ -765,12 +775,38 @@ function forceTerminalStatus(
  *
  * Возвращает статус, в котором задача осталась, — вызывающему это единственный
  * способ отличить «пометили» от «уже было решено без нас».
+ *
+ * Аудит 2026-09-11: это обещание тут же и нарушалось — `return "failed"` стоял
+ * безусловно. `forceTerminalStatus` при проигранном CAS ловит `StaleTaskStatus`,
+ * пишет WARN и возвращается, НЕ записав ничего (см. её хвост), а разницы между
+ * «записали» и «под нами отменили» здесь не было. То есть единственный способ
+ * отличить одно от другого отвечал «пометили» ровно в том случае, ради которого
+ * заведён: поллер self-diag валит задачу, владелец в это же окно отменяет её из
+ * Mini App, задача остаётся `cancelled` — а вызывающий слышит «failed».
+ *
+ * Гонка запинена в tests/audit-2026-09-10-force-terminal-cas.test.ts по
+ * состоянию БД; возвращаемое значение там не проверялось, поэтому расхождение
+ * и дожило. Теперь статус перечитывается после записи.
+ *
+ * Задача-роль сюда не ходит (вызывающие — только `lib/self-diag.ts`, только по
+ * задачам с `_diag`), но соседи-писатели терминала закрыты от неё поимённо:
+ * `updateTaskStatus`, `rollupParent`, `reconcileExpectedChildren`. Четвёртой
+ * дверью останется эта, если её не закрыть здесь же. Отказ — возвратом, а не
+ * исключением: все вызывающие best-effort, а контракт функции и так возвратный.
  */
 export function failTask(id: string, error: string): TaskStatus {
   const t = getTask(id);
   if (!t) throw new Error(`task not found: ${id}`);
   if (FSM[t.status].length === 0) return t.status;
+  if (isSpawnRoleTask(t)) {
+    log.warn("[tasks] failTask по прогону роли — отказ, статусом владеет воркер", {
+      task_id: t.id,
+      status: t.status,
+    });
+    return t.status;
+  }
   forceTerminalStatus(t, "failed", error);
+  const after = getTask(id)?.status ?? t.status;
   if (t.parent_id) {
     try {
       rollupParent(t.parent_id);
@@ -778,7 +814,7 @@ export function failTask(id: string, error: string): TaskStatus {
       log.error("[tasks] rollupParent error", { error: getErrorMessage(e) });
     }
   }
-  return "failed";
+  return after;
 }
 
 /**
@@ -852,8 +888,8 @@ export function reconcileExpectedChildren(
       rollupParent(parent.parent_id);
     } catch (e) {
       // Аудит 2026-08-20: было `log.debug`, а в проде уровень — `info`
-      // (log.ts:91), то есть сбой не печатался вовсе и функция возвращала
-      // успех. Дед остаётся pending/running без единого признака, через сутки
+      // (`resolveLogLevel` в log.ts), то есть сбой не печатался вовсе и
+      // функция возвращала успех. Дед остаётся pending/running без единого признака, через сутки
       // его подбирает gcStaleTasks и переписывает в failed с `error=gc_stale`:
       // успешно завершённое дерево получает ложную причину провала. Соседний
       // catch на том же классе ошибки (updateTaskStatus) пишет error.
@@ -914,8 +950,9 @@ export function rollupParent(parentId: string): void {
   // ребёнка (3 роли, 2 провалились → «done»). Отсюда явный счётчик.
   //
   // Аудит 2026-08-10: счётчик закрывает ровно одного производителя детей из
-  // двух. Его ставит только SPLIT_TASK (action-dispatch.ts:870); CREATE_TASK
-  // принимает parentTaskId и не обещает ничего, так что при «expected === null»
+  // двух. Его ставит только SPLIT_TASK (`expectedChildren: roles.length` в
+  // action-dispatch.ts); CREATE_TASK принимает parentTaskId и не обещает
+  // ничего, так что при «expected === null»
   // первый же закрывшийся ребёнок считает набор полным. Закрывать этот путь
   // здесь нельзя — по неизвестному набору автозакрытие как раз и является
   // документированным поведением (см. c29-redistribution, tasks-rollup-cancel),
