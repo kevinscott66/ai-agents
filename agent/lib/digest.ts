@@ -13,7 +13,7 @@ import fs from "node:fs";
 import { dirname, join } from "node:path";
 import { db, DB_PATH } from "./db.ts";
 import { countPendingApprovalsInChat, oldestPendingApprovalAt } from "./approvals.ts";
-import { getBudget, todayUTC } from "./token-budget.ts";
+import { getBudget } from "./token-budget.ts";
 import { DAY_MS, MINUTE_MS } from "./time-constants.ts";
 import { TASK_STATUSES } from "./types.ts";
 import { log } from "./log.ts";
@@ -49,8 +49,14 @@ export function buildDigest(opts: BuildDigestOptions = {}): string {
   const now = opts.now ?? new Date();
   const since = opts.since ?? new Date(now.getTime() - DAY_MS);
   const sinceMs = since.getTime();
-  const todayDate = todayUTC();
-  // Use the same UTC date as `now` for header (tests pass `now` directly).
+  // Аудит 2026-09-11: дата бралась двумя разными способами. Заголовок —
+  // `ymdUTC(now)`, то есть от переданного «сейчас»; строка расхода токенов —
+  // `todayUTC()`, то есть от настенных часов, мимо `opts.now`. Совпадало это
+  // только тогда, когда `now` и есть «прямо сейчас». Дайджест, собранный за
+  // вчера (перезапуск пропущенного прогона, backfill), выдавал заголовок со
+  // вчерашней датой и расход токенов за сегодня — в одном сообщении, без
+  // единого признака, что даты разные. Берём одну дату на весь дайджест.
+  const todayDate = ymdUTC(now);
   const headerDate = ymdUTC(now);
 
   const lines: string[] = [];
@@ -99,7 +105,11 @@ export function buildDigest(opts: BuildDigestOptions = {}): string {
          FROM agent_actions
          WHERE created_at >= ?
          GROUP BY agent_key
-         ORDER BY n DESC
+         -- Второй ключ обязателен: при равном числе действий (а на тихих
+         -- сутках равенство — норма, не редкость) LIMIT 5 без него отдаёт
+         -- произвольную пятёрку из шести, и дайджест меняет состав от прогона
+         -- к прогону без изменений в данных. Аудит 2026-09-11.
+         ORDER BY n DESC, agent_key ASC
          LIMIT 5`,
       )
       .all(sinceMs) as { agent_key: string; n: number }[];
@@ -143,7 +153,9 @@ export function buildDigest(opts: BuildDigestOptions = {}): string {
         `SELECT agent_key, input_tokens AS input, output_tokens AS output
          FROM agent_token_usage
          WHERE date = ?
-         ORDER BY input_tokens DESC
+         -- Тот же случай, что и у топа агентов выше: нули на старте суток
+         -- равны между собой, и тройка была бы произвольной.
+         ORDER BY input_tokens DESC, agent_key ASC
          LIMIT 3`,
       )
       .all(todayDate) as { agent_key: string; input: number; output: number }[];

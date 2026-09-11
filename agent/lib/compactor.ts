@@ -513,6 +513,11 @@ export function trimMergedPage(page: string, limit = MAX_MERGED_PAGE): string {
   const parts = page.split(UPDATE_SEP);
   // Отметка от прошлой обрезки живёт в голове — иначе они копятся по одной за
   // каждый прогон и сами становятся тем мусором, от которого мы чистим.
+  //
+  // Самую первую сохраняем: она свидетельствует о том, что со страницы уже
+  // что-то унесли, а унесённые секции не вернуть. Копятся именно ВТОРАЯ и
+  // дальше — их и убираем.
+  const staleNote = parts[0]!.match(TRIM_NOTE_RE)?.[0] ?? "";
   const head = parts[0]!.replace(TRIM_NOTE_RE, "");
   const sections = parts.slice(1);
 
@@ -558,7 +563,21 @@ export function trimMergedPage(page: string, limit = MAX_MERGED_PAGE): string {
   if (kept.length === 0) return keepNewestOnly(head, sections, limit);
 
   const dropped = sections.length - kept.length;
-  if (dropped === 0) return page;
+  // Аудит 2026-09-11: здесь стояло `return page` — ИСХОДНАЯ строка, с
+  // отметками, тогда как весь счёт выше шёл по голове, из которой отметки
+  // вырезаны. Разница ровно в их суммарной длине, и при запасе в 120 символов
+  // (условие цикла) состояние «page.length > limit, но не выброшено ни одной
+  // секции» достижимо: функция возвращала страницу СВЕРХ лимита, mergeAndWrite
+  // писал её как есть, а на следующем слиянии всё повторялось — отметки из
+  // головы снова вырезались перед замером. Единственный ограничитель размера
+  // страницы вики при этом молчал.
+  //
+  // Возвращаем то же, что и мерили: голову без накопившихся отметок плюс все
+  // секции. Одну отметку возвращаем на место — она и есть тот факт, ради
+  // которого её писали.
+  if (dropped === 0) {
+    return head.trimEnd() + staleNote + kept.map((s) => UPDATE_SEP + s).join("");
+  }
 
   return (
     head.trimEnd() + trimNote(dropped, false) + kept.map((s) => UPDATE_SEP + s).join("")

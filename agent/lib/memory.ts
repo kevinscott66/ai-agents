@@ -150,7 +150,11 @@ const EMAIL_RE = /[\w.+-]+@[\w-]+(?:\.[\w-]+)*\.[A-Za-z]{2,}/g;
  *
  * Разница в цене как раз обратная той, что была в защите. Строку лога
  * перетирает ротация, а страницу вики не перетирает ничто: файл лежит в
- * `agent/data/wiki/**` до конца жизни проекта, попадает в бэкап, в FTS-индекс
+ * `<MEMORY_DIR>/<scope>/pages/**` (по умолчанию `memory/`, см. memory-dir.ts —
+ * каталог `agent/data/wiki/**`, который тут был назван, кодом не используется
+ * нигде, а в проде `data` и `memory` вообще разные каталоги со своими
+ * правилами в systemd и в rsync) до конца жизни проекта, попадает в бэкап,
+ * в FTS-индекс
  * и в контекст КАЖДОГО хода — `wikiSearch` подмешивает хиты в промпт, а
  * `wikiLog` читается на каждом хендоффе. Пишут туда модели: `WRITE_WIKI` — их
  * собственный аргумент, а компактор кладёт пересказ переписки, в которой
@@ -223,8 +227,29 @@ export function prepareWikiPage(
   content: string,
 ): { safeTitle: string; safeContent: string; body: string } {
   const safeTitle = sanitizeWikiTitle(title);
-  const safeContent = sanitizeWikiContent(content);
-  return { safeTitle, safeContent, body: `# ${safeTitle}\n\n${safeContent.trim()}\n` };
+  const safeContent = sanitizeWikiContent(content).trim();
+  return { safeTitle, safeContent, body: `# ${safeTitle}\n\n${safeContent}\n` };
+}
+
+/**
+ * Тело страницы для колонки `content` в FTS — то же, что положил писатель.
+ *
+ * Аудит 2026-09-11: писатель индексировал `safeContent`, то есть тело БЕЗ
+ * строки заголовка, а `walkAndIndex` при ребилде — весь файл, вместе с
+ * `# Заголовок`, который сам же `prepareWikiPage` и приклеил. Колонка `title`
+ * при этом сводилась корректно; расходилась ровно `content`.
+ *
+ * Стоило это устойчивости выдачи. `rebuildWikiIndex()` идёт первой строкой
+ * старта команды и переливает таблицу целиком, так что после рестарта слова
+ * из заголовка начинали матчиться ещё и по `content`: bm25 менял вес, порядок
+ * хитов менялся, `snippet(wiki_fts, 3, …)` начинал отдавать «# Заголовок»
+ * вместо начала тела. Потребители читают фиксированные четыре хита и уезжают
+ * в system-промпт каждого хода — то есть смена порядка вытесняла страницу из
+ * контекста. Одна и та же вика на диске давала разную память до и после
+ * рестарта.
+ */
+export function wikiFtsContent(fileText: string): string {
+  return fileText.replace(/^#[^\n]*\n?/, "").trim();
 }
 
 /* ────── короткая (диалог) ────── */
@@ -431,7 +456,8 @@ export function wikiRead(scope: Scope, slug: string): string | null {
  * Сколько страниц попадает в сгенерированный индекс.
  *
  * Индекс уезжает в system-промпт КАЖДОГО хода двенадцати ролей, причём два из
- * трёх читателей (handoff.ts:269, orchestrator/message-handler.ts:314) не режут
+ * трёх читателей (`buildWikiPagesSystemText` в handoff.ts и в
+ * orchestrator/message-handler.ts — координаты не пишем, они разъезжаются) не режут
  * его ничем. 120 строк по ~60 символов — около 7KB, это потолок, а не типичный
  * размер: столько страниц в вики пока нет ни в одной области.
  */
@@ -897,6 +923,9 @@ function walkAndIndex(scope: string, dir: string) {
         continue;
       }
       const firstLine = content.split("\n")[0]?.replace(/^#\s*/, "").trim() ?? entry.name;
+      // Ровно то, что кладёт писатель: без строки заголовка (см.
+      // wikiFtsContent). Заголовок остаётся в своей колонке.
+      const ftsBody = wikiFtsContent(content);
       // Тот же ключ, что и у wikiWrite. Заодно ушёл RegExp, собранный из
       // MEMORY_DIR: путь из окружения попадал в шаблон неэкранированным.
       const slug = slugFromPath(scope, full);
@@ -923,7 +952,7 @@ function walkAndIndex(scope: string, dir: string) {
       }
       db.prepare(
         `INSERT INTO wiki_fts(scope, slug, title, content) VALUES (?, ?, ?, ?)`
-      ).run(scope, slug, firstLine, content);
+      ).run(scope, slug, firstLine, ftsBody);
     }
   }
 }
