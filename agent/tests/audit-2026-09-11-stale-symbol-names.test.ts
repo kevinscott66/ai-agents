@@ -97,6 +97,8 @@ const EXTERNAL: Record<string, string> = {
   retryRequest: "@anthropic-ai/sdk",
   makeRequest: "@anthropic-ai/sdk",
   messageEntityPre: "telegram",
+  api_id: "telegram",
+  api_hash: "telegram",
   messageEntityCode: "telegram",
   autoSelectFamily: "@types/node",
 };
@@ -159,8 +161,45 @@ const codeIdents = new Set<string>();
 const SHELL_COMMENT = /^\s*#/;
 const UNDERSCORED = /\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b/g;
 
+/**
+ * Литеральный аргумент проверки на ОТСУТСТВИЕ в исходнике:
+ * `expect(SRC).not.toContain("deriveBannerTitle")`.
+ *
+ * Такая строка — доказательство, что символа нет, и harvest обязан её
+ * пропустить: иначе доказательство смерти имени становится ровно тем, что
+ * убеждает сторожа в его жизни. Так уцелели все найденные призраки —
+ * hardSlice, extractPortOnly, gatedAction названы в tests/ только внутри
+ * not.toContain, и сторож считал, что видит их «в коде».
+ *
+ * Вырезается ТОЛЬКО литерал и только у текстовых проверок (`toContain`,
+ * `toMatch`, toContainEqual): они говорят про текст исходника. `not.toBe`
+ * сравнивает значения, а не наличие символа, и остаётся нетронутым. Левая
+ * часть строки (`expect(SRC)`) тоже остаётся — имена оттуда настоящие.
+ * Регулярка работает по файлу целиком, а не построчно, потому что у шести
+ * проверок аргумент перенесён на следующую строку.
+ */
+export const ABSENCE_ARG =
+  /\.not\.to(?:Contain|Match|ContainEqual)\(\s*(?:"[^"]*"|'[^']*'|`[^`]*`|\/(?:[^/\\\n]|\\.)+\/[gimsuy]*)/g;
+
+/**
+ * Заголовок `test()` / `describe()` — такая же проза для человека, как
+ * комментарий, и доказательством жизни имени быть не может: «deriveBannerTitle
+ * удалён» описывает как раз мёртвое имя. Вырезается один литерал-заголовок,
+ * тело блока не трогаем.
+ */
+export const TITLE_ARG = /\b(?:test|describe|it)\(\s*(?:"[^"]*"|'[^']*'|`[^`]*`)/g;
+
+/**
+ * Чего этот сторож по-прежнему не видит: смерть доказывают и через
+ * `"checkBacklogAlerts" in alerting` со сравнением с false, и через
+ * `SRC.indexOf("hardSlice(")` с −1, и через фильтр по `line.includes(...)` с
+ * пустым результатом. Литерал там неотличим от живого имени без разбора
+ * выражения, а парсер ради этого заводить дороже пользы: такие места ловятся
+ * чтением. Правило поэтому узкое и честное, а не полное.
+ */
 function collectIdents(src: string, isComment: (line: string) => boolean) {
-  for (const line of src.split("\n")) {
+  const text = src.replace(ABSENCE_ARG, ".not.to(").replace(TITLE_ARG, "test(");
+  for (const line of text.split("\n")) {
     if (isComment(line)) continue;
     for (const m of line.matchAll(/\b[a-z][A-Za-z0-9]{3,}\b/g)) codeIdents.add(m[0]);
     for (const m of line.matchAll(UNDERSCORED)) codeIdents.add(m[0]);

@@ -107,7 +107,7 @@ describe("T-305 MED-3: mac-bridge auth-fail logging", () => {
     expect(redactSecret("ab")).toBe("<len=2>");
   });
 
-  // Было `extractPortOnly` с фикстурой `remoteAddress: "ip:port"` — формы,
+  // Было extractPortOnly с фикстурой `remoteAddress: "ip:port"` — формы,
   // которой Bun не отдаёт никогда, так что тест был зелён именно пока в логе
   // стояло пустое `from=:?`. Подробно — audit-2026-08-28-mac-bridge-peer-tag.
   test("peerTag скрывает адрес, но даёт сопоставимый тег", () => {

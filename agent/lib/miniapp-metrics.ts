@@ -177,10 +177,10 @@ export function renderMetrics(): string {
 
   // agent_actions_recent{status} GROUP BY status, last 24h
   //
-  // Аудит 2026-08-20: раньше называлось `agent_actions_total` с `# TYPE counter`.
+  // Аудит 2026-08-20: раньше называлось agent_actions_total с `# TYPE counter`.
   // Оба слова были неправдой. Запрос ограничен окном `created_at >= now - 24h`,
   // то есть значение ПАДАЕТ, как только старые действия выпадают из окна.
-  // Соседняя `messages_total` была не лучше: db-maint в 04:00 UTC переносит
+  // Соседняя messages_total была не лучше: db-maint в 04:00 UTC переносит
   // старые строки в `messages_archive` и удаляет из источника, так что счётчик
   // каждую ночь обнуляется вниз.
   //

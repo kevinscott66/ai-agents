@@ -106,7 +106,7 @@ export function verifyInitData(
  * Токен, которым проверяется подпись initData. Fallback — токен оркестратора:
  * Mini App открывается его кнопкой, значит и hash считан его токеном.
  *
- * Раньше здесь стояло `TG_TOKEN_ORCHESTRATOR` — переменная, которой в проекте
+ * Раньше здесь стояло TG_TOKEN_ORCHESTRATOR — переменная, которой в проекте
  * нет: имя токена оркестратора задаёт `envToken` в characters/index.ts, и это
  * `TELEGRAM_BOT_TOKEN`. Fallback был мёртв, а текст ошибки советовал задать
  * фантом, то есть чинить конфиг способом, который ломает auth тише: initData

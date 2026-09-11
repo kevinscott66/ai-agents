@@ -44,7 +44,7 @@ export type AuthResult =
  * ключ ко всем /api/* в query-строке, которую пишет access-лог nginx. Теперь у
  * потока свой вход: одноразовый билет на 30 секунд (lib/sse-ticket.ts),
  * который выдаёт POST /api/sse-ticket — уже по заголовку. Параметра
- * `acceptQueryParam` больше нет специально: пока он существует, его снова
+ * acceptQueryParam больше нет специально: пока он существует, его снова
  * кто-нибудь включит.
  */
 export function authOr401(

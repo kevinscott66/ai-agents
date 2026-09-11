@@ -9,10 +9,14 @@
  * валидация payload → строка approval). Именно gateOrDispatch, а не
  * dispatchAction: последняя — исполнитель, она вызывается уже ПОСЛЕ гейта и
  * прав не смотрит вовсе, так что комментарий указывал на функцию, в которой
- * описанной цепочки нет. Комментарий до 2026-08-11 отправлял
- * читателя к `gatedAction()` в tools-schema.ts: такой функции там не было
- * никогда, а одноимённая в lib/actions.ts была мёртвой и заведомо более
- * слабой копией гейта — см. tests/single-gate-invariant.test.ts.
+ * описанной цепочки нет. Комментарий до 2026-08-11 отправлял читателя в
+ * tools-schema.ts — к функции gatedAction(), которой там не было никогда, а
+ * одноимённая в lib/actions.ts была мёртвой и заведомо более слабой копией
+ * гейта — см. tests/single-gate-invariant.test.ts. Порядок слов здесь не
+ * случаен: сторож в том тесте запрещает саму связку «gatedAction() в
+ * tools-schema» как живую ссылку и цитату от ссылки не отличает — раньше их
+ * разводили обратные кавычки, но имя мёртвое, и кавычки с него сняты
+ * (audit-2026-09-11-death-proof-counted-as-life).
  */
 import type { Telegram } from "telegraf";
 import { sendWithHtml, plainTelegramLength, cutBlock } from "./telegram-format.ts";

@@ -152,7 +152,7 @@ export function shouldProcessTrigger(
 /**
  * Сколько триггеров лежит в таблице дедупа прямо сейчас.
  *
- * Аудит 2026-08-20: функция возвращала `lastHour` / `lastDay` / `total` и
+ * Аудит 2026-08-20: функция возвращала lastHour / lastDay / total и
  * считала их запросами с окнами 3600 и 86400 секунд. Ни одно из этих окон
  * не наблюдаемо: `shouldProcessTrigger` при КАЖДОМ вызове делает
  * `DELETE FROM processed_triggers WHERE processed_at < now - 60`. В живом
