@@ -270,7 +270,7 @@ const defaultPublicAddressResolver: PublicAddressResolver = async (hostname) =>
  *
  * Аудит 2026-08-28: константа существовала, но применялась только в
  * `blockedFetchReasonResolved`, у которого нет ни одного вызова в проде —
- * PreToolUse-хук там `webFetchGuardHookAsync` (`agent-sdk-runtime.ts:660`), а
+ * PreToolUse-хук там `webFetchGuardHookAsync` (`agent-sdk-runtime.ts`), а
  * фактическая загрузка — `guardedWebFetch`. Оба ходили в голый `dnsLookup`,
  * у которого таймаута нет вообще: потолок держит только системный резолвер
  * (`resolv.conf`: timeout × attempts × число nameserver-ов, это десятки

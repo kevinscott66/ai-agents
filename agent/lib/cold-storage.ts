@@ -134,7 +134,7 @@ function readColdDays(opts: ColdStorageOptions): number {
   // зачистку пяти *_archive таблиц в ближайший месячный прогон, включая
   // строки, которые archiveOldRows положил минутой раньше. `parseInt("1e3")`
   // так же молча превращал тысячу суток в одни. Разбираем как сосед
-  // `parseMessagesRetentionDays` (db-maint.ts:141) — целым числом или отказ.
+  // `parseMessagesRetentionDays` (db-maint.ts) — целым числом или отказ.
   const raw = process.env.COLD_STORAGE_DAYS?.trim() ?? "";
   const n = raw === "" ? Number.NaN : Number(raw);
   // Аудит 2026-08-13: было `n > 0`, то есть ноль отбрасывался как мусор и молча

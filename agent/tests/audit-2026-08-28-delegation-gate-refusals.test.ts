@@ -4,7 +4,7 @@
  * `DELEGATION_REFUSALS` перечислял отказы уровня самой воронки (цикл, сам
  * себе, остановленные политикой кандидаты, `delegate_skipped:`) — и ни одного
  * исхода ГЕЙТА. А фан-аут SPLIT_TASK ходит через `gateOrDispatch`, то есть
- * ровно эти исходы и получает: `gateRefusalText` (action-dispatch.ts:1390)
+ * ровно эти исходы и получает: `gateRefusalText` (action-dispatch.ts)
  * склеивает `forbidden:`, `pending_approval:` и `rate_limited:`, а вызывающий
  * кладёт их в `errors` как `<role>: <текст>` (:864).
  *

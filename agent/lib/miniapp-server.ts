@@ -452,9 +452,11 @@ export function startMiniappServer(
    * MINIAPP_ALLOWED_USER_IDS и MINIAPP_ADMIN_USER_IDS — разные списки, и код
    * это предполагает: «наблюдатель без прав» — предусмотренная роль. Правило
    * «мутирующие ручки требуют админа» верно; обратное — «читающие обходятся
-   * allowlist'ом» — нет, и никогда не было общим: админа требуют и четыре
-   * ЧИТАЮЩИЕ ручки — GET /api/budget-settings, /api/db-stats, /api/wiki/page
-   * и /api/permissions (аудит 2026-09-11). Редактирование ниже — не замена
+   * allowlist'ом» — нет, и никогда не было общим: админа требуют и пять
+   * ЧИТАЮЩИХ ручек — GET /api/budget-settings, /api/db-stats, /api/wiki/page,
+   * /api/audit-logs и /api/permissions (аудит 2026-09-11). Список закрытый и
+   * сверяется с кодом тестом audit-2026-09-11-admin-read-routes: шестая
+   * админская читалка, добавленная мимо этого абзаца, роняет гейт. Редактирование ниже — не замена
    * гейту, а то, что остаётся наблюдателю там, где роут ему всё же открыт.
    *
    * Проблема была в том, что наблюдателю доставался не метаданный, а
@@ -517,7 +519,7 @@ export function startMiniappServer(
    *
    * Аудит 2026-09-11: у `approvals.decided_by` писателя ДВА, а шаблон знал
    * одного. Mini App кладёт `miniapp:<id>` (ручка decide ниже), а `/approve` и
-   * `/reject` в Telegram — `deciderIdentity` (admin-commands.ts:172), то есть
+   * `/reject` в Telegram — `deciderIdentity` (admin-commands.ts), то есть
    * `tg:<id> (@username)`. Второй формат проходил насквозь, и утечка
    * восстанавливалась целиком: `GET /api/approvals?status=approved` админа не
    * требует (читалки живут на allowlist, см. докблок про наблюдателя ниже),
@@ -558,7 +560,7 @@ export function startMiniappServer(
    * Достижимо тем же путём, что и утечка через `decided_by`. `setPermission`
    * пишет строку аудита `logAction({ agentKey: audit.changedBy })`
    * (permissions.ts), а `changedBy` для `/grant` и `/revoke` в Telegram —
-   * это `deciderIdentity` (admin-commands.ts:172), то есть
+   * это `deciderIdentity` (admin-commands.ts), то есть
    * `tg:<id> (@username)`; для Mini App — `miniapp:<id>`. `logAction` сразу же
    * шлёт в шину `action.executed` с полем `agent: agent_key`
    * (оба конструктора `InsertedAction.event` в audit.ts). Наблюдатель, которому `GET /api/actions` отдаёт ту же
@@ -1316,7 +1318,7 @@ export function startMiniappServer(
     // `/api/permissions`, `/api/budget-settings` — операторская интроспекция
     // требует админа, наблюдателю остаются рабочие экраны. Заодно уходит
     // раскрытие размеров и числа строк по таблицам тому, кому `redactContent`
-    // (487) не отдаёт ни одного тела.
+    // не отдаёт ни одного тела.
     //
     // Mini App этим эндпоинтом не пользуется: экрана «БД» в miniapp/src/pages
     // нет вовсе, вызова `db-stats` во фронтенде нет — гейт ничего не ломает.
@@ -1348,18 +1350,18 @@ export function startMiniappServer(
         );
       }
       // Аудит 2026-09-10: тот же класс, что у `status` выше, — последний
-      // непроверенный фильтр этой ручки. `listTasksByAssignee` (tasks.ts:842)
+      // непроверенный фильтр этой ручки. `listTasksByAssignee` (tasks.ts)
       // сравнивает `assigned_to = ?` точным равенством, без LOWER и без
       // нормализации, а канонический вид ключа гарантируют ВСЕ семь писателей:
-      // dispatch/tasks.ts:132,166, action-dispatch.ts:630 (роль делегата),
-      // :1418 («aieng»), diagnostic.ts:598 (pickResponsibleRole), а в
-      // dispatch/diagnostic-action.ts:236 явный `target_agent_key` пропущен
-      // через `VALID_AGENT_KEYS`. То есть неканоническое значение в колонке
+      // обе ветки `canonicalAssignee` в dispatch/tasks.ts, `assignedTo: role`
+      // и `assignedTo: "aieng"` в action-dispatch.ts, `assignedTo: responsible`
+      // в diagnostic.ts (`pickResponsibleRole`), а в dispatch/diagnostic-action.ts
+      // явный `target_agent_key` пропущен через `VALID_AGENT_KEYS`. То есть неканоническое значение в колонке
       // взяться неоткуда — и запрос по нему не может совпасть НИКОГДА.
       //
       // Читающая ветка при этом отвечала на «Backend» и на «devops» ровно тем
       // же, чем на пустую очередь: 200 и `{"tasks": []}`. Пишущая ветка ниже
-      // (:1362) ту же опечатку отклоняет 400-м и своим докблоком объясняет
+      // (POST /api/tasks) ту же опечатку отклоняет 400-м и своим докблоком объясняет
       // почему — «`assigned_to` — адрес очереди». У чтения та же цена: по
       // ответу нельзя отличить опечатку от «дел нет».
       //
@@ -1370,7 +1372,7 @@ export function startMiniappServer(
       // устроен сосед `/api/autonomy?agent=`.
       //
       // `canonicalAssignee` не проверяет, а НОРМАЛИЗУЕТ (`trim` + `toLowerCase`
-      // по CHARACTERS), и пишущая ветка ниже (:1362) кладёт в колонку именно
+      // по CHARACTERS), и пишущая ветка ниже (POST /api/tasks) кладёт в колонку именно
       // её результат. Поэтому читающей мало пропустить значение — ей нужно
       // спрашивать тем же ключом, каким писали: иначе `?assignee=Backend`
       // проходит проверку и всё равно не совпадает ни с чем. Отказ остаётся
@@ -1757,7 +1759,7 @@ export function startMiniappServer(
       }
       if (type) {
         // `action_type` словарём НЕ проверяется, и это не недосмотр: колонка —
-        // открытый TEXT, `logToolCall` (lib/audit.ts:172) пишет туда имя любой
+        // открытый TEXT, `logToolCall` (lib/audit.ts) пишет туда имя любой
         // тулзы, а докблок там прямо объясняет, почему тулзы не заводят в
         // ACTION_TYPES. Закрытый словарь здесь отсекал бы существующие строки.
         where.push("action_type = ?");
@@ -1770,8 +1772,8 @@ export function startMiniappServer(
       if (beforeId) {
         // Аудит 2026-08-13: курсор искали ТОЛЬКО в `agent_actions`, а
         // `archiveOldRows` строки старше 30 дней оттуда переносит и удаляет
-        // (`db-maint.ts:243`). Не нашли — условие просто не добавлялось, при
-        // HTTP 200 и без единого признака в ответе. Клиент (`Logs.tsx:130`)
+        // (`db-maint.ts`). Не нашли — условие просто не добавлялось, при
+        // HTTP 200 и без единого признака в ответе. Клиент (`setItems` в `Logs.tsx`)
         // берёт курсором последний из показанных и ДОПИСЫВАЕТ ответ к списку,
         // а сервер отдавал ему самую свежую страницу заново: дубликаты и
         // кнопка «Загрузить ещё», которая не кончается никогда. Молчаливая
@@ -1984,7 +1986,7 @@ export function startMiniappServer(
       // таблице — ответ был просто 200, ячейка перекрашивалась в «авто», и
       // владелец узнавал правду только по неприходящим сообщениям.
       //
-      // В отчёт `/perms` оговорка намеренно не идёт (commands.ts:586): там
+      // В отчёт `/perms` оговорка намеренно не идёт (`cmdPerms` в commands.ts): там
       // множество большое и приписка к каждой второй строке — стена текста.
       // Здесь речь про одно конкретное действие, как в `/grant`.
       const caveat = body.allowed
@@ -2015,7 +2017,7 @@ export function startMiniappServer(
       // которого в `AutonomyMode` нет — вымышленное значение в разборе делает
       // пример непроверяемым.)
       // Пустая строка (`?agent=`) — это «без роли», ровно как её трактует сам
-      // `getAutonomy` (`if (agentKey)`, permissions.ts:585); опечаткой она быть
+      // `getAutonomy` (`if (agentKey)` в permissions.ts); опечаткой она быть
       // не может, поэтому в словарь не идёт.
       if (agentParam) {
         const bad = badAgentKey(agentParam);
@@ -2228,7 +2230,7 @@ export function startMiniappServer(
     //  • SSE. Keepalive стоит на 25 с (ниже), то есть заведомо больше десяти:
     //    соединение молчит и умирает на 10-й секунде КАЖДЫЙ раз. Клиент на
     //    onerror переподключается, а onopen сбрасывает backoff в ноль
-    //    (`miniapp/src/lib/sse.ts:118`), так что установившийся режим — новый
+    //    (`es.onopen` в `miniapp/src/lib/sse.ts`), так что установившийся режим — новый
     //    /api/sse-ticket + /api/events каждые ~11 с на каждую вкладку, вечно.
     //    Реплея нет, поэтому событие, выпавшее в дыру между обрывом и
     //    переподключением, теряется навсегда — то есть «живой прогресс», ради

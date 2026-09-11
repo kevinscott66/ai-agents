@@ -10,7 +10,7 @@
  * пути агента и не заметил вторую копию логики за очередью одобрений.
  *
  * `sendChunked` бросает `PartialSendError` ПОСЛЕ доставки частей 1..k,
- * `partialSendFailure` (`dispatch/telegram.ts:234`) честно ставит
+ * `partialSendFailure` (`dispatch/telegram.ts`) честно ставит
  * `sideEffect: true` — но здесь этот флаг никто не читал. Каждое такое
  * одобрение клало в чат k сообщений и не тратило ни одного слота.
  *

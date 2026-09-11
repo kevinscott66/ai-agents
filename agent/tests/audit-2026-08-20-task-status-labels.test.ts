@@ -84,7 +84,7 @@ describe("страница Tasks берёт подписи из карты", () 
 
   test("кнопка перехода подписана по-русски", () => {
     // Тот же дефект, что и в карте лейблов, только источник другой: кнопки
-    // строятся прямо из FSM (`NEXT_STATUS[selected.status].map`), и статус
+    // строятся прямо из FSM (`nextStatuses(selected).map`), и статус
     // печатался сырым — «→ awaiting_review». Карта тут не при чём, перевод
     // нужно звать явно.
     expect(SRC).toContain("`→ ${label(TASK_STATUS_LABELS, next)}`");

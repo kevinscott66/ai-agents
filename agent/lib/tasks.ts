@@ -14,7 +14,13 @@
  * удалена аудитом 2026-08-12 именно потому, что проверок не делала —
  * см. tests/no-dead-task-facade.test.ts.
  */
-import { TASK_TRANSITIONS, type TaskStatus } from "./task-fsm.ts";
+import {
+  TASK_TRANSITIONS,
+  isSpawnRoleTaskInput,
+  nextStatuses,
+  type TaskStatus,
+} from "./task-fsm.ts";
+export { isSpawnRoleTaskInput };
 import { getErrorMessage } from "./errors.ts";
 import { db } from "./db.ts";
 import { log } from "./log.ts";
@@ -93,25 +99,19 @@ function parseJSON(v: string | null): unknown | null {
 }
 
 /**
- * Задача-«роль» из очереди рантайма (`SPAWN_ROLE`).
+ * Аудит 2026-09-11: сам предикат переехал в lib/task-fsm.ts и реэкспортирован
+ * выше. Он нужен обеим сторонам — серверу и Mini App, — а этот модуль тянет
+ * SQLite и в браузерный бандл не поедет. Здесь остаётся только обёртка над
+ * задачей целиком.
  *
- * Аудит 2026-09-10. Такая задача — не узел плана, а вторая половина строки
- * `role_runtime_queue`: id у них общий (role-runtime.ts:230-285 вставляет обе
- * в одной транзакции), а статусом её двигает только воркер, и каждый его
- * UPDATE обусловлен `AND status='running'` / `AND state='running'`
- * (role-runtime.ts:343-395, :552, :578). Признак `_spawn_role` в `input`
- * ставит он же; по нему её нашла и миграция, заводившая очередь задним числом
- * (migrations.ts:999). Отличать её от обычной задачи нужно ровно затем, чтобы
- * логика набора детей не переписывала итог чужого прогона — см. `createTask`.
+ * Зачем отличать: такая задача — не узел плана, а вторая половина строки
+ * `role_runtime_queue`: id у них общий (`enqueueRoleTask` в role-runtime.ts
+ * вставляет обе в одной транзакции), а статусом её двигает только воркер, и
+ * каждый его UPDATE обусловлен `AND status='running'` / `AND state='running'`.
+ * По признаку `_spawn_role` её нашла и миграция, заводившая очередь задним
+ * числом (`role_runtime_queue` в migrations.ts). Логика набора детей не должна
+ * переписывать итог чужого прогона — см. `createTask`.
  */
-export function isSpawnRoleTaskInput(input: unknown): boolean {
-  return (
-    typeof input === "object" &&
-    input !== null &&
-    (input as { _spawn_role?: unknown })._spawn_role === true
-  );
-}
-
 function isSpawnRoleTask(task: Task): boolean {
   return isSpawnRoleTaskInput(task.input);
 }
@@ -210,8 +210,9 @@ export function createTask(input: CreateTaskInput): Task {
       // переоткрытия — «новый ребёнок опровергает вывод кода о полноте
       // набора»; `done`/`failed` предок и получил РОВНО таким выводом
       // (rollupParent). `cancelled` выводом не бывает: rollupParent его не
-      // ставит, в него ведут только кнопки Mini App (task-fsm.ts:41,43) —
-      // это решение человека, и появление внука его не опровергает.
+      // ставит, в него ведут только кнопки Mini App (строки `pending` и
+      // `awaiting_approval` в `TASK_TRANSITIONS`) — это решение человека, и
+      // появление внука его не опровергает.
       // Аудит 2026-08-21 закрыл ту же дыру на прямом родителе, но со стороны
       // входов модели; цепочку предков, добавленную днём раньше, это не
       // покрыло: замер показывал «дед cancelled → running (error=NULL) →
@@ -503,16 +504,23 @@ export function updateTaskStatus(
   // прогон мимо `failRoleTask`.
   //
   // Отсюда запрет в самом узком месте: воркер сюда не ходит вовсе (свои
-  // UPDATE'ы с `AND status='running'`, role-runtime.ts:356-591), значит любой
-  // приход СЮДА с задачей-ролью — это посторонний, и ему отказывают.
-  if (isSpawnRoleTask(t)) {
-    throw new Error(
-      `cannot change status of task ${id}: это прогон временной роли, его ` +
-        `статусом управляет воркер вместе со строкой очереди.`,
-    );
-  }
-  const allowed = FSM[t.status];
-  if (!allowed || !allowed.includes(status)) {
+  // UPDATE'ы с `AND status='running'`), значит любой приход СЮДА с
+  // задачей-ролью — это посторонний, и ему отказывают.
+  //
+  // Аудит 2026-09-11 (круг 24): запрет спрашивается у `nextStatuses`, а не
+  // проверяется здесь отдельной веткой. Пока он стоял тут, знал о нём только
+  // сервер, и Mini App честно рисовал прогону роли кнопки «→ done» по
+  // `TASK_TRANSITIONS` — то есть ровно то расхождение, ради устранения
+  // которого lib/task-fsm.ts и заведён. Теперь на вопрос «куда можно» обе
+  // стороны отвечают одной функцией; ветка ниже только переводит отказ в текст.
+  const allowed = nextStatuses(t);
+  if (!allowed.includes(status)) {
+    if (isSpawnRoleTask(t)) {
+      throw new Error(
+        `cannot change status of task ${id}: это прогон временной роли, его ` +
+          `статусом управляет воркер вместе со строкой очереди.`,
+      );
+    }
     throw new Error(
       `invalid status transition: ${t.status} → ${status} (task ${id})`,
     );

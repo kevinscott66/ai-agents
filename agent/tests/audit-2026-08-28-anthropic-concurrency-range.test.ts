@@ -17,8 +17,8 @@
  *     без единой строчки в лог. Значение читается один раз при импорте из
  *     systemd EnvironmentFile, где опечатку никто не увидит.
  *
- * Соседи по классу уже вычищены так же: `envInt` (alerting.ts:79),
- * `parseBudgetEnv` (token-budget.ts:274), `_envPort` (services.ts, аудит
+ * Соседи по классу уже вычищены так же: `envInt` (alerting.ts),
+ * `parseBudgetEnv` (token-budget.ts), `_envPort` (services.ts, аудит
  * 2026-08-28).
  */
 import { describe, expect, test } from "bun:test";

@@ -117,7 +117,7 @@ const BEARER = /((?:Bearer|Basic)\s+)[A-Za-z0-9._\-+/=~]+/gi;
 const TELEGRAM_TOKEN = /(?<!\d)(\d{6,12}):[A-Za-z0-9_-]{30,}/g;
 
 // Аудит 2026-08-20: скраббер не ловил ровно ту форму, ради которой его зовут
-// из mac-bridge.ts. Комментарий у `snapshotOf` (lib/mac-bridge.ts:294) называет
+// из mac-bridge.ts. Комментарий у `snapshotOf` (lib/mac-bridge.ts) называет
 // её дословно: «`git push` по HTTPS печатает в stderr URL вида
 // `https://x-access-token:ghp_…@github.com/…`». Это вывод произвольной
 // программы, запущенной на машине владельца, и он уходит двумя дорогами — в
