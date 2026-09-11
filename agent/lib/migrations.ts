@@ -371,7 +371,13 @@ export const MIGRATIONS: Migration[] = [
              ON agent_actions(status);`,
         );
       }
-      // audit_logs is not present in this codebase; skip.
+      // Аудит 2026-09-11: здесь стояло «audit_logs is not present in this
+      // codebase; skip». Таблицу создаёт миграция 019 сорока строками ниже,
+      // у неё есть писатели (emitAlert, отказы по промптам) и читатель
+      // (`/api/audit-logs`, miniapp-server.ts). Именно из-за этой фразы
+      // audit_logs осталась единственной из четырёх без индексов под
+      // страницы Mini App. Добавлять их здесь нельзя — на момент 016
+      // таблицы ещё нет; если понадобятся, это отдельная миграция после 019.
     },
   },
   {
@@ -406,10 +412,14 @@ export const MIGRATIONS: Migration[] = [
   },
   {
     // C31 DB-maint: archive tables for old agent_actions / audit_logs rows.
-    // Same schema as source + archived_at INTEGER. audit_logs itself does not
-    // exist in this codebase (agent_actions is the de-facto audit log), but
-    // we create both source + archive idempotently so the maint module has
-    // a stable target.
+    //
+    // Аудит 2026-09-11: прежний текст утверждал, что «audit_logs itself does
+    // not exist in this codebase» — в миграции, которая эту таблицу и
+    // создаёт. И второе: «same schema as source + archived_at» было неправдой
+    // для agent_actions_archive до миграции 040, дозалившей tg_message_id и
+    // request_id. Что здесь действительно происходит: и источник, и архив
+    // создаются идемпотентно, чтобы у db-maint была стабильная цель, а схемы
+    // выравниваются по мере того, как колонки появляются у источника.
     name: "019_archive_tables",
     up: (db) => {
       db.exec(`
@@ -529,7 +539,9 @@ export const MIGRATIONS: Migration[] = [
   {
     // T-520 (cherry-pick T-220): добавляем tg_message_id в agent_actions для
     // связки audit-записей с конкретными Telegram-сообщениями. chat_id уже есть
-    // (миграция 005). Плюс view audit_log_telegram для Mini App Logs page.
+    // (миграция 005). Плюс view audit_log_telegram — её читает не Mini App
+    // (аудит 2026-09-11: не читает и никогда не читала), а ручной разбор
+    // через QUERY_DB: имя стоит в его белом списке таблиц (query-db.ts).
     name: "024_add_tg_message_id",
     up: (db) => {
       addColumn(db, "agent_actions", "tg_message_id INTEGER");
@@ -575,8 +587,14 @@ export const MIGRATIONS: Migration[] = [
     name: "026_add_request_id",
     up: (db) => {
       addColumn(db, "agent_actions", "request_id TEXT");
-      // Index for "show me everything in one request" queries from the Mini
-      // App Logs page / ad-hoc journalctl-style debugging.
+      // Аудит 2026-09-11: комментарий обещал этому индексу читателя на
+      // странице Logs в Mini App — его нет и не было. `GET /api/actions`
+      // фильтрует по status / action_type / task_id и курсору, а `WHERE
+      // request_id = ?` не делает ни одна строка кода. Единственный реальный
+      // потребитель — ручной разбор одного хода через QUERY_DB («покажи всё по
+      // этому request_id»), ради которого колонка и заводилась. Индекс
+      // оставлен именно под него; писать про страницу, которая его не
+      // спрашивает, — значит обосновывать плату за вставку выдумкой.
       db.exec(
         `CREATE INDEX IF NOT EXISTS idx_agent_actions_request_id ON agent_actions(request_id);`,
       );
@@ -676,8 +694,11 @@ export const MIGRATIONS: Migration[] = [
   {
     name: "031_processed_triggers",
     up: (db) => {
-      // T-545: Add table to track processed trigger messages for anti-dup orchestrator triggers
-      // Prevents the same (chat_id, tg_message_id) trigger from being processed twice within N seconds
+      // T-545: Add table to track processed trigger messages for anti-dup orchestrator triggers.
+      // NB: ключ (chat_id, tg_message_id), описанный ниже, пережил только до
+      // миграции 053 — та пересоздаёт таблицу с ключом на три колонки,
+      // включая agent_key. Здесь оставлено как есть: миграции не переписывают,
+      // на боевой базе эта давно отмечена применённой.
       db.exec(`
         CREATE TABLE IF NOT EXISTS processed_triggers (
           id INTEGER PRIMARY KEY,
@@ -829,17 +850,17 @@ export const MIGRATIONS: Migration[] = [
       addColumn(db, "agent_actions_archive", "request_id TEXT");
       addColumn(db, "messages_archive", "tg_message_id INTEGER");
       addColumn(db, "messages_archive", "transport TEXT");
-      // NB: `messages.kind` сюда сознательно НЕ добавлен. На проде такая колонка
-      // есть (вместе с idx_messages_kind), но её не создаёт ни одна миграция и
-      // не читает ни одна строка кода — её добавили руками по месту. Свежая
-      // установка и CI живут без неё, так что перенос `kind` уронил бы
-      // архивацию везде, кроме прода. Дрейф схемы чинится отдельно и осознанно,
-      // а не попутно здесь.
+      // NB (истории ради): здесь стояло «`messages.kind` сюда сознательно НЕ
+      // добавлен» — на момент 040 колонку добавили руками только на проде, и
+      // перенос уронил бы архивацию везде, кроме него. Дрейф вылечен
+      // отдельно и осознанно, как и обещано: миграция 045 заводит kind в
+      // messages_archive, а db-maint переносит её через optionalColumns.
+      // Запрет снят — не переоткрывать вопрос по этому абзацу.
 
       // Отбор в архив идёт по одному предикату `created_at < ?` / `ts < ?`, а
-      // покрывающих индексов на него не было: idx_agent_actions_agent_created
-      // ведёт с agent_key, idx_messages_chat_ts — с chat_id, так что оба
-      // суточных прогона читали таблицу целиком.
+      // покрывающих индексов на него не было: индексы agent_actions вели с
+      // agent_key (idx_agent_actions_agent_ts), idx_messages_chat_ts — с
+      // chat_id, так что оба суточных прогона читали таблицу целиком.
       db.exec(
         `CREATE INDEX IF NOT EXISTS idx_agent_actions_created ON agent_actions(created_at);`,
       );
@@ -937,10 +958,16 @@ export const MIGRATIONS: Migration[] = [
     // idx_messages_archive_ts по `ts`, 042 — idx_approvals_archive_created по
     // `created_at`. Это время события в ИСХОДНОЙ таблице. А единственный, кто
     // читает архивы диапазоном, — холодное хранилище, и оно фильтрует
-    // исключительно по `archived_at`: `cold-storage.ts:151` (сколько выгружать),
-    // `:163` (страница) и `:290` (удаление выгруженного). Всё остальное ходит
-    // в архивы по первичному ключу (`approvals.ts:189`,
-    // `miniapp-server.ts:1242`, `db-maint.ts:719`).
+    // исключительно по `archived_at` — все три запроса живут в
+    // `exportColdStorage` (cold-storage.ts): COUNT «сколько выгружать»,
+    // страничный SELECT и DELETE выгруженного. Всё остальное ходит в архивы по
+    // первичному ключу.
+    //
+    // Аудит 2026-09-11: здесь стояли шесть точных координат вида
+    // `cold-storage.ts:151`, и к этому дню съехали все шесть. Координаты в
+    // комментарии к миграции протухают быстрее всего: миграцию не
+    // перечитывают годами, а файлы вокруг живут. Поэтому ссылки теперь по
+    // именам функций.
     //
     // Замер на копии схемы, 80k строк, совпадает 300:
     //   COUNT(*) WHERE archived_at < ?   SCAN 6.22ms  ->  COVERING INDEX 0.01ms
@@ -1155,9 +1182,9 @@ export const MIGRATIONS: Migration[] = [
     /*
      * Аудит 2026-08-29: вкладка Tasks в Mini App без фильтра по статусу
      * читает таблицу целиком. `GET /api/tasks` строит
-     * `SELECT id FROM tasks${where} ORDER BY created_at DESC LIMIT ?`
-     * (`miniapp-server.ts:1211`), и когда `statuses` не переданы, `where`
-     * пустой. Индекс idx_tasks_status_created(status, created_at DESC)
+     * `SELECT id FROM tasks${where} ORDER BY created_at DESC, rowid DESC
+     * LIMIT ?` (обработчик `GET /api/tasks` в miniapp-server.ts), и когда
+     * `statuses` не переданы, `where` пустой. Индекс idx_tasks_status_created(status, created_at DESC)
      * такой запрос не обслуживает: без равенства по первой
      * колонке вторая не даёт порядка. Замерено на реальной схеме:
      * EXPLAIN QUERY PLAN давал `SCAN tasks` + `USE TEMP B-TREE FOR ORDER BY`,
@@ -1344,6 +1371,88 @@ export const MIGRATIONS: Migration[] = [
 
         CREATE INDEX IF NOT EXISTS idx_processed_triggers_cleanup
         ON processed_triggers(processed_at);
+      `);
+    },
+  },
+  {
+    /*
+     * Аудит 2026-09-11: у content_calendar два индекса, и ни один не ведёт с
+     * chat_id — а читают таблицу только запросы, где chat_id обязателен.
+     *
+     * Читателей ровно два, оба в `tools-schema.ts`: `LIST_SCHEDULED_POSTS` и
+     * `CANCEL_SCHEDULED_POST`. Оба собирают WHERE из
+     * `status = 'scheduled' AND chat_id = ?` (tools-schema.ts:1231) и гоняют
+     * его трижды — COUNT, страница, счётчик просроченных. Индексы же были
+     * `(scheduled_at, status)` и `(channel, status)`: первый ведёт с колонки,
+     * которой в WHERE нет вовсе, второй — с необязательного фильтра. То есть
+     * каждый список расписания — полный скан.
+     *
+     * Причём `status` здесь почти не отбирает: планировщика, который переводил
+     * бы пост в 'sent', в кодовой базе нет (dispatch/misc.ts:217), архивации
+     * у таблицы тоже нет (db-maint.ts:882) — практически все строки навсегда
+     * 'scheduled'. Единственный отбирающий терм — `chat_id`, и он шёл
+     * последним.
+     *
+     * Порядок колонок: chat_id (отбирает), status (равенство, замыкает
+     * префикс), scheduled_at (даёт диапазон `scheduled_at < ?` для счётчика
+     * просроченных и делает индекс покрывающим для COUNT). Сортировку страницы
+     * он не снимает и не может: `ORDER BY (scheduled_at < ?) ASC,
+     * ABS(scheduled_at - ?) ASC` — выражения, индексом они не обслуживаются
+     * никогда. Экономим скан, не сортировку.
+     */
+    name: "054_content_calendar_chat_index",
+    up: (db) => {
+      const tableExists = (name: string): boolean =>
+        !!db
+          .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`)
+          .get(name);
+
+      if (tableExists("content_calendar")) {
+        db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_content_calendar_chat_status_at
+             ON content_calendar(chat_id, status, scheduled_at);`,
+        );
+      }
+    },
+  },
+  {
+    /*
+     * Аудит 2026-09-11: четыре индекса дублируют другие четыре.
+     *
+     * Три пары завела одна миграция — `016_miniapp_perf_indexes`: она
+     * добавляла индексы под страницы Mini App, не сверяясь с тем, что уже
+     * создано при создании таблиц.
+     *
+     *   approvals(status, chat_id)        — `idx_approvals_status_chat` (:147)
+     *     и `idx_approvals_status_chat_v2` (:356) совпадают побайтово.
+     *   tasks(assigned_to)                — `idx_tasks_assigned_to` (:350) —
+     *     строгий префикс `idx_tasks_assigned_status(assigned_to, status)`
+     *     (:91); любой запрос, который обслуживает первый, обслуживает и
+     *     второй.
+     *   agent_actions(agent_key, created_at) — `idx_agent_actions_agent_created`
+     *     (:366) отличается от `idx_agent_actions_agent_ts` (:167) только
+     *     словом DESC. SQLite читает индекс в обе стороны, так что DESC в
+     *     объявлении ничего не добавляет.
+     *
+     * Четвёртый — из другой миграции: `agent_prompts` объявлен с
+     * `UNIQUE(agent_key, version)` (:621), а UNIQUE в SQLite это уже индекс
+     * (sqlite_autoindex). Явный `idx_agent_prompts_key_version` (:623) поверх
+     * него — третья копия тех же ключей.
+     *
+     * Лишний индекс — не безобидная память: каждая вставка и каждое
+     * обновление колонки из ключа пишут ещё одно B-дерево, а планировщик
+     * выбирает из большего числа одинаковых кандидатов. Читатели не теряют
+     * ничего: у каждого удаляемого остаётся живой близнец с тем же префиксом.
+     *
+     * DROP INDEX IF EXISTS идемпотентен и на базе, где миграции 016 не было.
+     */
+    name: "055_drop_duplicate_indexes",
+    up: (db) => {
+      db.exec(`
+        DROP INDEX IF EXISTS idx_approvals_status_chat_v2;
+        DROP INDEX IF EXISTS idx_tasks_assigned_to;
+        DROP INDEX IF EXISTS idx_agent_actions_agent_created;
+        DROP INDEX IF EXISTS idx_agent_prompts_key_version;
       `);
     },
   },
