@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
-# Решение «мёрджить или нет» для auto-merge.yml — вынесено из воркфлоу, чтобы
-# его можно было прогнать тестами (agent/tests/automerge-filter.test.ts).
+# Решение «мёрджить или нет» — вынесено из воркфлоу auto-merge.yml, чтобы его
+# можно было прогнать тестами (agent/tests/automerge-filter.test.ts).
+#
+# Аудит 2026-09-11: воркфлоу удалён при публичном релизе 2026-09-01, и с тех
+# пор этот файл НИЧЕГО не решает — его не запускает ни один воркфлоу, он
+# остался записанной политикой и проверяется только тестами. Единственный
+# живой автомерж — isAutoMergeable() в agent/lib/dispatch/github.ts. Правка
+# здесь не меняет поведения репозитория; чтобы изменилось, править надо там.
 #
 # Вход: на stdin — JSON-массив от
 #   gh pr list --json number,headRefName,isDraft,mergeable,mergeStateStatus,labels,files,statusCheckRollup
@@ -55,7 +61,11 @@ if [ -z "${INPUT//[[:space:]]/}" ]; then
   exit 0
 fi
 
-# Безопасные пути. Список обязан совпадать с шапкой auto-merge.yml.
+# Безопасные пути. Список обязан совпадать с isAutoMergeable() в
+# agent/lib/dispatch/github.ts — сверку держит
+# agent/tests/pr-risky-paths-allowlist.test.ts, там же перечислены намеренные
+# расхождения. Раньше здесь стояло «совпадать с шапкой auto-merge.yml»: шапки
+# нет с 2026-09-01, и сверять список было не с чем.
 # Memory, task boards, and status files сюда НЕ входят: автономный Claude
 # читает их в будущих запусках, поэтому их правку человек смотрит глазами.
 is_safe_path() {
