@@ -529,7 +529,7 @@ export function cmdGrant(args: {
     return `Неизвестный mode: ${mode}. Допустимо: auto | approval`;
   }
   // Аудит 2026-08-27: два статических рубежа стоят ВЫШЕ таблицы permissions —
-  // `checkPermission` отвечает `deny` по ним ещё до чтения строки
+  // `evaluateGate` отвечает `deny` по ним ещё до чтения строки
   // (`CALLER_RESTRICTED` и `ROLE_EXPOSED_TOOLS` в permissions.ts). То есть
   // `/grant smm GENERATE_IMAGE auto` писал строку, рапортовал «права обновлены» и не менял НИЧЕГО: владелец
   // считал, что выдал доступ, агент продолжал получать отказ, и разбирались с

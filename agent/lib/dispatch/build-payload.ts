@@ -371,7 +371,8 @@ export function buildPayload<T extends ActionType>(
       // ровно тот класс мусора, ради которого в этом же файле чинили
       // `SCHEDULE_POST.scheduledAt` и `CREATE_TEAM_CHANNEL.roles`. Молчаливая
       // подмена на 0 уводила срочную задачу в самый низ очереди роли
-      // (сборка `ORDER BY priority DESC, created_at ASC` в `listTasks`) — при
+      // (сборка `ORDER BY priority DESC, created_at ASC` в
+      // `listTasksByAssignee`) — при
       // `ok:true` с готовым `taskId`. Верхней границы тоже не было:
       // `priority: 100000` намертво прибивал задачу к первой строке.
       if (
