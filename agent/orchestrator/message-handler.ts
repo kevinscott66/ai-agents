@@ -87,6 +87,7 @@ import { log, redactText, redactSender, redactUserId } from "../lib/log.ts";
 import { BudgetExceededError } from "../lib/token-budget.ts";
 import { getErrorMessage } from "../lib/errors.ts";
 import { isMentioned, mentionedHandles, tailLines } from "./helpers.ts";
+import { mediaNote } from "../lib/media-markers.ts";
 
 /**
  * Что сказать в чат, когда ход упал. Текст ошибки НЕ пересказываем: в нём
@@ -422,14 +423,24 @@ export function registerMessageHandler(
           : undefined;
       const hasImage = !!largestPhoto || !!doc;
       const hasTextDoc = !!textDoc;
+      // Аудит 2026-09-11: ход без подписи вообще не доходил до короткой
+      // памяти — `return` стоял до записи. Картинку и текстовый документ
+      // спасали ветки выше, а кружок, видео, стикер, гифка, аудиофайл и
+      // любой другой документ исчезали бесследно: в истории оставался
+      // разрыв, и следующий ход модели читал «человек промолчал». Теперь
+      // такой ход кладётся пометкой носителя (`lib/media-markers.ts`) и
+      // только после записи мы выходим — маршрутизация не меняется, немой
+      // стикер по-прежнему не поднимает платный ход.
+      const silentMedia =
+        rawText.trim() || hasImage || hasTextDoc ? null : mediaNote(msg);
       const text: string = rawText.trim()
         ? rawText
         : hasImage
           ? "[image]"
           : hasTextDoc
             ? `[файл: ${typeof textDoc.file_name === "string" ? textDoc.file_name : "document"}]`
-            : "";
-      if (!rawText.trim() && !hasImage && !hasTextDoc) return;
+            : (silentMedia ?? "");
+      if (!text) return;
 
       if (ctx.from?.id === running.id) return;
       const senderBot = ctx.from?.is_bot
@@ -456,6 +467,10 @@ export function registerMessageHandler(
           transport: 'bot_api', // T-543: Track transport source
         });
       }
+      // Немой носитель записан — дальше идти незачем: отвечать не на что,
+      // а `shouldReply` ниже на такой ход всё равно поднял бы платный вызов
+      // модели, если бы Дирижёр был в чате один.
+      if (silentMedia) return;
 
       // Routing:
       //   - человек упомянул нас → отвечаем;
