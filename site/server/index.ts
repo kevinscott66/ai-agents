@@ -161,10 +161,16 @@ function corsHeaders(origin: string | null): Record<string, string> {
   // которым отвечает 405 на `/api/internal/*`, и это намеренно. `Allow` (RFC
   // 9110 §15.5.6) описывает, что умеет ресурс; `Access-Control-Allow-Methods`
   // — что мы разрешаем браузеру чужой вкладки. Ингест ходит с VPS по петле
-  // curl'ом, преflight'а не делает вовсе, так что POST здесь не нужен никому,
-  // кроме атакующего: назвав его, мы бы разрешили любой странице на
-  // delabs.space слать ингест с чужого происхождения. По той же причине в
-  // Allow-Headers нет `Authorization` — заголовок нужен только POST'у.
+  // curl'ом, преflight'а не делает вовсе, так что POST здесь не нужен никому.
+  //
+  // Круг 15 правит формулировку. Прежняя говорила, что, назвав POST, мы бы
+  // «разрешили любой странице на delabs.space слать ингест с чужого
+  // происхождения», и это неверно дважды: страница на delabs.space для
+  // delabs.space — своё происхождение, CORS её не касается вовсе, а чужая
+  // страница и с разрешённым методом упрётся в Bearer-токен. Причина скромнее
+  // и от этого не слабее: называть в преflight'е то, чем никто не пользуется,
+  // — лишняя поверхность. По той же причине в Allow-Headers нет
+  // `Authorization`: заголовок нужен только POST'у.
   // HEAD не называем сознательно: CORS считает его простым методом всегда.
   const h: Record<string, string> = {
     Vary: "Origin",
@@ -388,10 +394,19 @@ function trustedProxyHops(): number {
  */
 const CLIENT_IP_HEADER = (process.env.SITE_CLIENT_IP_HEADER ?? "").trim().toLowerCase();
 
-function clientIp(req: Request, server: ServerLike): string {
+/**
+ * Аудит 2026-09-11 (круг 15): `server` здесь необязателен намеренно. Bun
+ * передаёт его вторым аргументом всегда, но `makeFetchHandler()` экспортирован
+ * и вызывается тестами напрямую, одним аргументом. Пока ведро висело на
+ * коротком списке путей, до `server.requestIP` такой вызов просто не доходил;
+ * после расширения списка (см. `rateLimitedNonApi`) дошёл — и падал
+ * `undefined is not an object`. Ронять запрос из-за неизвестного адреса
+ * нельзя: `clientIpKey` и так умеет отвечать на «адреса нет».
+ */
+function clientIp(req: Request, server?: ServerLike): string {
   return clientIpKey(
     req.headers.get("x-forwarded-for"),
-    server.requestIP?.(req)?.address ?? null,
+    server?.requestIP?.(req)?.address ?? null,
     CLIENT_IP_HEADER ? req.headers.get(CLIENT_IP_HEADER) : null,
   );
 }
@@ -451,7 +466,7 @@ const NOT_BUILT_HTML = `<!doctype html><html lang="ru"><head><meta charset="utf-
 <p>Соберите фронт: <code>cd site/web &amp;&amp; bun run build</code>.</p>
 </body></html>`;
 
-function serveStatic(pathname: string): Response | null {
+function serveStatic(pathname: string, spaFallback = true): Response | null {
   if (!existsSync(webDist())) {
     // No build present: only answer "/" with the placeholder.
     if (pathname === "/" || pathname === "/index.html") {
@@ -485,10 +500,32 @@ function serveStatic(pathname: string): Response | null {
     return null;
   }
 
-  // SPA fallback: any non-asset route -> index.html.
+  // SPA fallback: только для путей, которые роутер фронта действительно
+  // знает. Раньше сюда проваливался ЛЮБОЙ не-ассетный адрес, и `/about/x`,
+  // `/unlocks/1`, `/totally-made-up` отвечали 200 оболочкой с og-тегами
+  // главной — та же дыра, что закрывал аудит 2026-09-11 для статейного
+  // пространства, просто снаружи него. Решает вызывающий: здесь нет и не
+  // должно быть знания о таблице маршрутов.
+  if (!spaFallback) return null;
   const index = join(webDist(), "index.html");
   if (existsSync(index)) return fileResponse(index, true);
   return null;
+}
+
+/**
+ * Путь ведёт к файлу сборки, а не к оболочке.
+ *
+ * Та же мерка, что у отказа выше: каталог ассетов или известное расширение.
+ * Нужна отдельно, потому что по ней решается ещё и лимитирование: оболочка
+ * стоит чтения `index.html`, ассет отдаётся ядром.
+ */
+function looksLikeAsset(pathname: string): boolean {
+  const rel = pathname.replace(/^[/\\]+/, "");
+  return (
+    rel.startsWith(`assets${sep}`) ||
+    rel.startsWith("assets/") ||
+    MIME[extname(rel).toLowerCase()] !== undefined
+  );
 }
 
 /**
@@ -514,31 +551,6 @@ export function digestIdFromPath(pathname: string): string | null {
 /** `/activity/<id>` → id, иначе null. Та же форма, что и у дайджестов. */
 export function activityIdFromPath(pathname: string): string | null {
   return articleIdFromPath("activity", pathname);
-}
-
-/**
- * Путь лежит в статейном пространстве имён (`/digest…`, `/activity…`), но
- * формы `/<prefix>/<id>` не имеет: `/digest`, `/digest/`, `/digest/a/b`.
- *
- * Аудит 2026-09-11: без этой проверки вложенный путь проваливался мимо
- * `digestIdFromPath` (её регэксп — `[^/]+`) прямо в `serveStatic`, а тот на
- * любом не-ассетном маршруте отдаёт index.html со статусом **200**. То есть
- * `/digest/foo/bar` возвращал главную страницу: og-теги главной, никакого
- * `X-Robots-Tag: noindex` — ровно та дыра, которую закрывал аудит 2026-08-13,
- * только зашедшая с другой стороны.
- *
- * Ни одного клиентского маршрута в этом пространстве, кроме `/digest/:id` и
- * `/activity/:id`, нет (списки живут на `/digests` и `/activities`), так что
- * всё остальное внутри него — заведомо 404, а не «какой-то маршрут SPA».
- * Единственное и множественное различаем строго: `/digests` сюда не попадает.
- */
-export function isStrayArticlePath(pathname: string): boolean {
-  for (const prefix of ["digest", "activity"]) {
-    if (pathname === `/${prefix}` || pathname.startsWith(`/${prefix}/`)) {
-      return articleIdFromPath(prefix, pathname) === null;
-    }
-  }
-  return false;
 }
 
 function htmlAttrEscape(s: string): string {
@@ -663,16 +675,49 @@ export function injectActivityMeta(html: string, a: Activity): string {
  * фронт не собран или статьи нет: тогда работает обычный SPA-фолбэк (404 от
  * клиента), поведение остаётся прежним.
  */
+let shellCache: {
+  path: string;
+  mtimeMs: number;
+  size: number;
+  html: string;
+} | null = null;
+
 function shellHtml(): string | null {
   // `webDist()`, а не константа модуля: `SITE_WEB_DIST` читается на каждый
   // вызов, иначе порядок импорта решает, увидим ли мы собранный фронт.
   const index = join(webDist(), "index.html");
-  if (!existsSync(index)) return null;
+  let st;
   try {
-    return readFileSync(index, "utf8");
+    st = statSync(index);
   } catch {
     return null;
   }
+  if (!st.isFile()) return null;
+  // Аудит 2026-09-11 (круг 15): `readFileSync` всего index.html стоял на
+  // КАЖДОМ запросе оболочки — на каждой статье и на каждом 404. Это
+  // синхронное чтение в потоке обработчика, то есть самый дешёвый для
+  // сканера и самый дорогой для сервера адрес на сайте. Ключ кэша — путь,
+  // mtime и размер: редеплой меняет файл, и оболочка перечитывается сама.
+  if (
+    shellCache &&
+    shellCache.path === index &&
+    shellCache.mtimeMs === st.mtimeMs &&
+    shellCache.size === st.size
+  ) {
+    return shellCache.html;
+  }
+  try {
+    const html = readFileSync(index, "utf8");
+    shellCache = { path: index, mtimeMs: st.mtimeMs, size: st.size, html };
+    return html;
+  } catch {
+    return null;
+  }
+}
+
+/** Тестовый хук: сбросить кэш оболочки. */
+export function _resetShellCache(): void {
+  shellCache = null;
 }
 
 function articleShellResponse<T>(
@@ -699,8 +744,9 @@ function activityShellResponse(id: string): Response | null {
 }
 
 /**
- * `/digest/<чего-нет>` и `/activity/<чего-нет>` — та же оболочка, но со
- * статусом 404 и `noindex`.
+ * Любой адрес, которого нет, — та же оболочка, но со статусом 404 и
+ * `noindex`: несуществующая статья, вложенный статейный путь, выдуманный
+ * адрес вроде `/about/x`.
  *
  * Аудит 2026-08-13: раньше несуществующая статья проваливалась в SPA-фолбэк и
  * отдавала index.html со статусом **200**. Для человека разница невидима —
@@ -715,7 +761,7 @@ function activityShellResponse(id: string): Response | null {
  * Оболочку отдаём именно ту же (а не голый текст): клиентский роутер сам
  * покажет «статья не найдена», и переход по внутренней ссылке не ломается.
  */
-function articleNotFoundResponse(): Response | null {
+function notFoundShellResponse(): Response | null {
   const html = shellHtml();
   if (html === null) return null;
   return new Response(html, {
@@ -870,8 +916,12 @@ function rssResponse(): Response {
 // ---- robots.txt + sitemap.xml -------------------------------------------
 
 /**
- * Разделы сайта из таблицы роутера фронта (web/src/App.tsx). `/digest/:id` и
- * `/activity/:id` идут отдельно — они собираются из БД.
+ * Разделы сайта, которые мы ПУБЛИКУЕМ: отсюда строится sitemap.xml.
+ * `/digest/:id` и `/activity/:id` идут отдельно — они собираются из БД.
+ *
+ * Это не вся таблица роутера фронта, и раньше докстрока утверждала обратное,
+ * тихо теряя `/status` (web/src/App.tsx). Две сущности разведены: индексируем
+ * одно, отвечаем 200 на другое.
  */
 const STATIC_ROUTES = [
   "/",
@@ -881,6 +931,37 @@ const STATIC_ROUTES = [
   "/activities",
   "/about",
 ] as const;
+
+/**
+ * Маршруты фронта, которые существуют, но в карту сайта не идут: служебные
+ * страницы индексировать незачем.
+ */
+const UNLISTED_ROUTES = ["/status"] as const;
+
+/** Полная таблица маршрутов SPA. Всё, чего в ней нет, — 404. */
+const SPA_ROUTES: ReadonlySet<string> = new Set<string>([
+  ...STATIC_ROUTES,
+  ...UNLISTED_ROUTES,
+]);
+
+/**
+ * Знает ли роутер фронта этот путь.
+ *
+ * Аудит 2026-09-11 (круг 15): правка, закрывшая `/digest/foo/bar`, опиралась
+ * на верное наблюдение — таблица маршрутов фронта закрыта, значит неизвестный
+ * путь это 404, а не «какой-то маршрут SPA», — но воспользовалась им только
+ * для двух префиксов, только в точной форме и только в точном регистре. Мимо
+ * проходили `/about/x`, `/unlocks/1`, `/totally-made-up` (200 с og-тегами
+ * главной) и `/Digest/x` (то же самое, при том что `/digest/x` рядом честно
+ * отвечал 404). Сверка со всей таблицей закрывает все три случая разом.
+ *
+ * Регистр снимаем: путь в URL его сохраняет, а маршруты у нас строчные.
+ * Хвостовой слэш тоже: `/digests/` и `/digests` — один маршрут.
+ */
+export function isKnownSpaRoute(pathname: string): boolean {
+  const p = pathname.toLowerCase().replace(/\/+$/, "");
+  return SPA_ROUTES.has(p === "" ? "/" : p);
+}
 
 /**
  * GET /robots.txt — до статического фолбэка, иначе SPA отдаёт на этот адрес
@@ -1030,10 +1111,26 @@ export const MAX_REQUEST_BODY_BYTES = MAX_INGEST_BYTES * 8;
  * возвращал false сразу на `provided.length !== expected.length`, то есть
  * подбор длины стоил одного запроса на вариант (аудит 2026-08-12).
  */
+/**
+ * Секрет ингеста или null, если мост выключен.
+ *
+ * Аудит 2026-09-11 (круг 15): значение читалось в трёх местах тремя разными
+ * мерками (`!expected || expected.length === 0` здесь, `!process.env....`
+ * в `authedJsonBody` и в 404-гейте `routeApi`), и все три считали заданным
+ * значение из одних пробелов. `SITE_INGEST_TOKEN=" "` — не секрет, а описка
+ * в env-файле, но мост от неё включался, и ключом к нему становился пробел.
+ * Мерка теперь одна и здесь. Сам токен НЕ подрезаем: подрезать значит менять
+ * то, с чем сверяется запрос, — здесь решается только «задан или нет».
+ */
+function ingestSecret(): string | null {
+  const v = process.env.SITE_INGEST_TOKEN;
+  return v && v.trim().length > 0 ? v : null;
+}
+
 function tokenMatches(provided: string | null): boolean {
-  const expected = process.env.SITE_INGEST_TOKEN;
+  const expected = ingestSecret();
   // Bridge is OFF unless the env secret is configured.
-  if (!expected || expected.length === 0) return false;
+  if (expected === null) return false;
   if (!provided) return false;
   const a = createHash("sha256").update(provided, "utf8").digest();
   const b = createHash("sha256").update(expected, "utf8").digest();
@@ -1240,7 +1337,7 @@ async function authedJsonBody(
   origin: string | null,
 ): Promise<{ body: Record<string, unknown> } | { error: Response }> {
   // If the secret is unset the endpoint does not exist at all.
-  if (!process.env.SITE_INGEST_TOKEN) {
+  if (ingestSecret() === null) {
     return { error: json({ error: "not_found" }, { status: 404 }, origin) };
   }
   if (!tokenMatches(bearerToken(req))) {
@@ -1799,7 +1896,7 @@ async function routeApi(
   req: Request,
   url: URL,
   origin: string | null,
-  server: ServerLike,
+  server?: ServerLike,
 ): Promise<Response> {
   // Preflight намеренно идёт мимо лимитера, и это решение, а не недосмотр.
   // Аудит 2026-08-29: OPTIONS — не самостоятельный запрос, а обязательная
@@ -1828,7 +1925,12 @@ async function routeApi(
     // путь отвечает 404. Разница и есть перечисление: заголовок прямо называл
     // метод ресурса, которого, по замыслу, не существует. Пока токен не задан,
     // отвечаем 404 на любой метод — тем же телом и без Allow.
-    const configured = !!process.env.SITE_INGEST_TOKEN;
+    //
+    // Круг 15: «на любой метод» — с одной оговоркой, которую прежний текст
+    // умалчивал. OPTIONS сюда не доходит: преflight отвечает 204 выше и
+    // одинаково на любой путь, существующий или нет. Перечисления в этом
+    // нет ровно потому, что ответ одинаков; но написано было шире, чем есть.
+    const configured = ingestSecret() !== null;
     if (!configured || req.method !== "POST") {
       // Аудит 2026-08-29: ветка стояла ДО всякого лимита — ровно та же дыра,
       // что закрыли ниже для 401, только без токена и потому дешевле для
@@ -2132,7 +2234,7 @@ function withSecurityHeaders(res: Response): Response {
 export function makeFetchHandler() {
   const handle = async (
     req: Request,
-    server: ServerLike,
+    server?: ServerLike,
   ): Promise<Response> => {
     const url = new URL(req.url);
     const origin = req.headers.get("origin");
@@ -2171,11 +2273,17 @@ export function makeFetchHandler() {
       url.pathname === "/rss.xml" ||
       url.pathname === "/sitemap.xml" ||
       url.pathname === "/robots.txt" ||
-      url.pathname.startsWith("/digest/") ||
       // Аудит 2026-08-20: `/activity/` в списке не было вовсе, хотя это такая
       // же чтение-из-БД оболочка, как `/digest/`, и она тоже опубликована в
       // /sitemap.xml. Маршрут был единственным контентным адресом мимо ведра.
-      url.pathname.startsWith("/activity/");
+      //
+      // Аудит 2026-09-11 (круг 15): перечисление префиксов расходилось с
+      // диспетчером уже третий раз — голые `/digest` и `/activity` (без
+      // слэша) ходили мимо ведра, а после правки статейного 404 стали ещё и
+      // читать index.html на каждый запрос. Перечислять больше нечего:
+      // лимитируем всё, что стоит оболочки, то есть всё, кроме файлов
+      // сборки. Ассеты по-прежнему мимо ведра — страница тянет их пачкой.
+      !looksLikeAsset(url.pathname);
     if (rateLimitedNonApi && !rateLimitOk(clientIp(req, server))) {
       return withSecurityHeaders(
         new Response("Too Many Requests", {
@@ -2250,18 +2358,19 @@ export function makeFetchHandler() {
       // Статьи нет — но путь заведомо статейный, значит это 404, а не
       // «какой-то маршрут SPA». Фронт не собран → null, и дальше всё как
       // раньше: пусть отвечает заглушка «не собрано», а не выдуманный 404.
-      const missing = articleNotFoundResponse();
-      if (missing) return withSecurityHeaders(missing);
-    } else if (isStrayArticlePath(url.pathname)) {
-      // Форму `/<prefix>/<id>` путь не держит, но пространство имён статейное
-      // — значит это 404, а не маршрут SPA. Иначе `serveStatic` отдал бы
-      // index.html с og-тегами главной и статусом 200 (аудит 2026-09-11).
-      const missing = articleNotFoundResponse();
+      const missing = notFoundShellResponse();
       if (missing) return withSecurityHeaders(missing);
     }
 
-    const res = serveStatic(url.pathname);
-    return withSecurityHeaders(res ?? new Response("Not Found", { status: 404 }));
+    // Реальный файл сборки отдаём всегда; оболочку — только на маршруте,
+    // который роутер фронта знает. Всё прочее (вложенный статейный путь,
+    // `/about/x`, `/Digest/x`, выдуманный адрес) — 404 с noindex, а не
+    // главная страница со статусом 200.
+    const known = isKnownSpaRoute(url.pathname);
+    const res = serveStatic(url.pathname, known);
+    if (res) return withSecurityHeaders(res);
+    const missing = known ? null : notFoundShellResponse();
+    return withSecurityHeaders(missing ?? new Response("Not Found", { status: 404 }));
   };
 
   /**
@@ -2275,7 +2384,7 @@ export function makeFetchHandler() {
    * отсутствие утечки держалось на переменной окружения, которую этот репозиторий
    * не задаёт: юнита `web3-puls` в `deploy/systemd/` нет вообще.
    */
-  return async (req: Request, server: ServerLike): Promise<Response> => {
+  return async (req: Request, server?: ServerLike): Promise<Response> => {
     try {
       return await handle(req, server);
     } catch (e) {

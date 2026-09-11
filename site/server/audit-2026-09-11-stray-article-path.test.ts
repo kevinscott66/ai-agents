@@ -1,11 +1,12 @@
 /**
- * Аудит 2026-09-11: вложенный путь в статейном пространстве отдавал главную.
+ * Аудит 2026-09-11: путь, которого нет в роутере фронта, отдавал главную.
  *
- * `articleIdFromPath` разбирает ровно `/<prefix>/<id>` — сегмент в её регэкспе
- * записан как `[^/]+`, вложенность отсекается намеренно. Но отсечённый путь
- * ничем не подхватывался: `digestIdFromPath` возвращала null, ветка статьи не
- * срабатывала, и `/digest/foo/bar` проваливался прямо в `serveStatic`. Тот на
- * любом не-ассетном маршруте отдаёт `index.html` — со статусом **200**.
+ * Круг 14 нашёл частный случай. `articleIdFromPath` разбирает ровно
+ * `/<prefix>/<id>` — сегмент в её регэкспе записан как `[^/]+`, вложенность
+ * отсекается намеренно. Но отсечённый путь ничем не подхватывался:
+ * `digestIdFromPath` возвращала null, ветка статьи не срабатывала, и
+ * `/digest/foo/bar` проваливался прямо в `serveStatic`. Тот на любом
+ * не-ассетном маршруте отдаёт `index.html` — со статусом **200**.
  *
  * То есть снаружи существовала бесконечная россыпь адресов, каждый из которых
  * отвечал 200 и отдавал og-теги главной страницы без `X-Robots-Tag: noindex`.
@@ -13,10 +14,19 @@
  * обязано выражаться в статусе», T-743) и повторил 2026-08-20 для гайдов, —
  * просто зашедший с третьей стороны: не «статьи нет», а «формы пути нет».
  *
- * Клиентских маршрутов в этом пространстве, кроме `/digest/:id` и
- * `/activity/:id`, нет вовсе (списки живут на `/digests` и `/activities`), так
- * что всё остальное внутри него — заведомо 404. Множественное число при этом
- * обязано остаться нетронутым: `/digests` — настоящая страница SPA.
+ * Круг 15 (этот файл в нынешнем виде): наблюдение было верным, а починка —
+ * узкой. `isStrayArticlePath` сверялась с двумя префиксами, в точной форме и
+ * в точном регистре, поэтому мимо неё проходили:
+ *
+ *   • `/about/x`, `/unlocks/1`, `/totally-made-up` — 200 и og-теги главной;
+ *   • `/Digest/x` — то же самое, при том что `/digest/x` рядом честно
+ *     отвечал 404 (URL регистр пути сохраняет, а сравнение было точным).
+ *
+ * Перечислять «что не маршрут» бессмысленно: список бесконечен. Таблица
+ * маршрутов фронта, наоборот, конечна и лежит в `site/web/src/App.tsx`, так
+ * что вопрос перевёрнут — `isKnownSpaRoute` отвечает 200 только на известное,
+ * всё остальное 404. Множественное число при этом обязано остаться живым:
+ * `/digests` — настоящая страница SPA.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
@@ -42,7 +52,7 @@ process.env.SITE_DB_PATH = join(TMP, "audit.db");
 process.env.SITE_WEB_DIST = DIST;
 
 const { seedIfEmpty } = await import("./seed.ts");
-const { makeFetchHandler, _resetRateLimiter, isStrayArticlePath } =
+const { makeFetchHandler, _resetRateLimiter, isKnownSpaRoute } =
   await import("./index.ts");
 
 let server: ReturnType<typeof Bun.serve>;
@@ -65,44 +75,48 @@ afterAll(() => {
 
 beforeEach(() => _resetRateLimiter());
 
-describe("isStrayArticlePath", () => {
-  test("вложенность и голый префикс — статейный 404", () => {
-    for (const p of [
-      "/digest",
-      "/digest/",
-      "/digest/foo/bar",
-      "/digest/foo/bar/baz",
-      "/activity",
-      "/activity/",
-      "/activity/foo/bar",
-    ]) {
-      expect(isStrayArticlePath(p)).toBe(true);
-    }
-  });
-
-  test("правильная форма пути сюда не попадает: её разбирает статья", () => {
-    for (const p of ["/digest/abc-123", "/digest/abc-123/", "/activity/x"]) {
-      expect(isStrayArticlePath(p)).toBe(false);
-    }
-  });
-
-  test("множественное число — настоящие страницы SPA, не трогаем", () => {
+describe("isKnownSpaRoute: отвечаем 200 только на известное", () => {
+  test("вся таблица роутера фронта — известные маршруты", () => {
     for (const p of [
       "/",
       "/digests",
-      "/digests/",
-      "/activities",
       "/unlocks",
+      "/drops",
+      "/activities",
       "/about",
-      "/digestibles",
-      "/api/health",
+      // Служебная страница: она есть в App.tsx, но не в карте сайта.
+      "/status",
     ]) {
-      expect(isStrayArticlePath(p)).toBe(false);
+      expect(isKnownSpaRoute(p)).toBe(true);
+    }
+  });
+
+  test("хвостовой слэш и регистр — тот же маршрут", () => {
+    for (const p of ["/digests/", "/DIGESTS", "/About/", "/"]) {
+      expect(isKnownSpaRoute(p)).toBe(true);
+    }
+  });
+
+  test("статейное пространство, вложенность и выдумка — не маршруты", () => {
+    for (const p of [
+      "/digest",
+      "/digest/",
+      "/digest/abc-123",
+      "/Digest/abc-123",
+      "/digest/foo/bar",
+      "/activity",
+      "/activity/foo/bar",
+      "/about/x",
+      "/unlocks/1",
+      "/digestibles",
+      "/totally-made-up",
+    ]) {
+      expect(isKnownSpaRoute(p)).toBe(false);
     }
   });
 });
 
-describe("вложенный статейный путь отвечает 404 и noindex", () => {
+describe("адрес вне таблицы маршрутов отвечает 404 и noindex", () => {
   test("/digest/foo/bar больше не отдаёт главную со статусом 200", async () => {
     const res = await fetch(`${base}/digest/foo/bar`);
     expect(res.status).toBe(404);
@@ -126,5 +140,38 @@ describe("вложенный статейный путь отвечает 404 и
       expect(res.status).toBe(200);
       expect(res.headers.get("X-Robots-Tag")).toBeNull();
     }
+  });
+
+  test("адреса вне статейного пространства — так же 404", async () => {
+    // Круг 14 их не закрывал: они не начинались с `/digest` или `/activity`.
+    for (const p of ["/about/x", "/unlocks/1", "/totally-made-up", "/drops/2/3"]) {
+      const res = await fetch(`${base}${p}`);
+      expect(res.status).toBe(404);
+      expect(res.headers.get("X-Robots-Tag")).toBe("noindex");
+    }
+  });
+
+  test("регистр не открывает обход: /Digest/x тоже 404", async () => {
+    const lower = await fetch(`${base}/digest/несуществующая`);
+    const upper = await fetch(`${base}/Digest/несуществующая`);
+    expect(lower.status).toBe(404);
+    expect(upper.status).toBe(404);
+    expect(upper.headers.get("X-Robots-Tag")).toBe("noindex");
+  });
+
+  test("известные маршруты живы в любом регистре и с хвостовым слэшем", async () => {
+    for (const p of ["/", "/digests/", "/About", "/status"]) {
+      const res = await fetch(`${base}${p}`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("X-Robots-Tag")).toBeNull();
+    }
+  });
+
+  test("/status отвечает 200, но в карту сайта не попадает", async () => {
+    const res = await fetch(`${base}/status`);
+    expect(res.status).toBe(200);
+    const map = await (await fetch(`${base}/sitemap.xml`)).text();
+    expect(map).toContain("/digests");
+    expect(map).not.toContain("/status");
   });
 });
