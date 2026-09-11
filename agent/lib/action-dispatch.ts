@@ -12,6 +12,11 @@
  * (чтобы аудит писался ровно один раз — здесь).
  */
 import { getErrorMessage } from "./errors.ts";
+import {
+  foldFanoutOutcomes,
+  delegationShortfallText,
+  type FanoutOutcome,
+} from "./dispatch/split-fanout.ts";
 import type { Telegram } from "telegraf";
 import {
   handleGenerateImage,
@@ -849,8 +854,7 @@ export async function dispatchAction<T extends ActionType>(
             expectedChildren: roles.length,
           },
         });
-        const childIds: string[] = [];
-        const errors: string[] = [];
+        const outcomes: FanoutOutcome[] = [];
         for (const role of roles) {
           // Аудит 2026-08-12: здесь стоял dispatchAction — сырой исполнитель.
           // Всё, что делает делегирование легальным, живёт слоем выше, в
@@ -879,19 +883,24 @@ export async function dispatchAction<T extends ActionType>(
             } as PayloadFor<"DELEGATE_TO_ROLE">,
             ctx,
           );
-          if (r.kind === "ok") {
-            if (r.taskId) childIds.push(r.taskId);
-          } else {
-            errors.push(`${role}: ${gateRefusalText(r)}`);
-          }
+          outcomes.push(
+            r.kind === "ok"
+              ? { role, taskId: r.taskId }
+              : { role, refusal: gateRefusalText(r) },
+          );
         }
         // Часть ролей могла не создать строку (отказ по циклу делегирования,
         // упавший createTask). Сводим обещание к факту и пересчитываем
         // родителя — иначе счётчик не сойдётся и он провисит до gc_stale.
+        // Разбор исходов — в lib/dispatch/split-fanout.ts: там же объяснено,
+        // почему «ok без taskId» обязан попасть в errors, а не потеряться.
+        const { childIds, errors } = foldFanoutOutcomes(outcomes);
         if (childIds.length !== roles.length) {
           try {
             reconcileExpectedChildren(parent.id, childIds.length, {
-              error: joinDelegationErrors(errors) || "all delegations failed",
+              error:
+                joinDelegationErrors(errors) ||
+                delegationShortfallText(childIds.length, roles.length),
             });
           } catch (e) {
             log.warn("[split] reconcile failed", {
@@ -1443,24 +1452,42 @@ export async function dispatchAndAudit<T extends ActionType>(
     const diagFlag = p?._diag === true;
     const retryCount =
       typeof p?._retry_count === "number" ? p._retry_count : 0;
-    if (!shouldSkipSelfDiag(actionType, res.error) && !diagFlag && retryCount < 1) {
-      // T-705b: circuit breaker on the diagnostic-fix chain.
-      const parentChain = getFixChain(p);
-      const maxDepth = getFixChainMaxDepth();
-      if (parentChain.length >= maxDepth) {
-        const finalChain = appendFixChain(
-          parentChain,
-          `diag:${actionType}:circuit_breaker`,
-        );
-        log.error("inter_agent_fix.circuit_breaker", {
-          actionType,
-          chain: finalChain,
-          max_depth: maxDepth,
-          error: res.error,
-        });
-        // Do NOT spawn another diag task. Mark this as a terminal failure.
-        c15Error = `circuit breaker tripped (fix_chain depth ${parentChain.length} >= ${maxDepth}): ${res.error}`;
-      } else if (isDiagTaskThrottled(`Tool error: ${actionType}`)) {
+    // T-705b: circuit breaker on the diagnostic-fix chain.
+    //
+    // Аудит 2026-09-11: до этого дня оба предохранителя стояли под ОДНИМ
+    // условием, включавшим `retryCount < 1`, — и этим более грубый насмерть
+    // закрывал более тонкий. Единственный, кто пишет `_fix_chain` в payload
+    // ДЕЙСТВИЯ (`processDiagTask` в lib/self-diag.ts), кладёт на тот же объект
+    // `_retry_count: 1`; значит у любого payload'а с непустой цепочкой внешнее
+    // условие ложно, а у всех, кто до сравнения доходил, цепочка ПУСТА. При
+    // `maxDepth >= 1` (ниже единицы `positiveEnvInt` не пускает) сравнение
+    // `0 >= maxDepth` ложно всегда: ветка была недостижима, `inter_agent_fix.
+    // circuit_breaker` не мог напечататься ни при какой конфигурации, а ручка
+    // INTER_AGENT_FIX_CHAIN_MAX_DEPTH не управляла ничем. Тесты этого не
+    // ловили, потому что кормили диспетчер payload'ами с `_fix_chain` и без
+    // `_retry_count` — формой, которой конвейер не производит.
+    //
+    // Разделено: цепочку меряем независимо от счётчика ретраев, а `retryCount`
+    // по-прежнему ограничивает только ЗАВЕДЕНИЕ новой диаг-задачи. Это два
+    // разных вопроса: «глубоко ли зашла починка» и «не вторая ли это попытка».
+    const diagEligible = !shouldSkipSelfDiag(actionType, res.error) && !diagFlag;
+    const parentChain = getFixChain(p);
+    const maxDepth = getFixChainMaxDepth();
+    if (diagEligible && parentChain.length >= maxDepth) {
+      const finalChain = appendFixChain(
+        parentChain,
+        `diag:${actionType}:circuit_breaker`,
+      );
+      log.error("inter_agent_fix.circuit_breaker", {
+        actionType,
+        chain: finalChain,
+        max_depth: maxDepth,
+        error: res.error,
+      });
+      // Do NOT spawn another diag task. Mark this as a terminal failure.
+      c15Error = `circuit breaker tripped (fix_chain depth ${parentChain.length} >= ${maxDepth}): ${res.error}`;
+    } else if (diagEligible && retryCount < 1) {
+      if (isDiagTaskThrottled(`Tool error: ${actionType}`)) {
         // T-705 throttle: не плодить >5 diag-задач одного типа в час
         // (анти-шторм). Текст ошибки не подменяем — причина та же.
         log.warn("[self-diag] throttled — too many diag tasks for actionType", {
