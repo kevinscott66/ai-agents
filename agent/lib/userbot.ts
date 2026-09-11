@@ -384,8 +384,9 @@ export function extractMessageId(res: unknown): number {
  * неудаче возвращает `false` (`TelegramClient.js:1088-1093`). Дальше всё шло
  * по счастливому пути: `registerSelfAccount` штатно глотает свой `getMe`,
  * обработчик вешался на мёртвого клиента, `buildHandle` отдавал хендл с
- * `isNoop: false`, а `orchestrator/services.ts:347` печатал «[userbot]
- * connected, listening». Команда получала живой на вид юзербот, ломающийся на
+ * `isNoop: false`, а `startBackgroundServices` (orchestrator/services.ts)
+ * печатал «[userbot] connected, listening». Команда получала живой на вид
+ * юзербот, ломающийся на
  * первом же вызове, вместо честного no-op, у которого методы говорят «userbot
  * not available».
  *

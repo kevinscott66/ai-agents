@@ -101,9 +101,10 @@ export const DELEGATION_REFUSALS: readonly string[] = [
   //
   // Дороже всех обходился `pending_approval:`: при autonomy=manual его
   // возвращает КАЖДОЕ делегирование (DELEGATE_TO_ROLE не в
-  // LOW_FRICTION_ACTIONS, ветка manual отвечает approval безусловно —
-  // permissions.ts:929). Детей ноль, сплит отвечает `split failed: no roles
-  // accepted the task (…)`, и на каждый сплит на доску падали две задачи с
+  // LOW_FRICTION_ACTIONS, ветка `mode === "manual"` в `evaluateGate`
+  // (permissions.ts) отвечает approval безусловно). Детей ноль, сплит отвечает
+  // `split failed: no roles accepted the task (…)`, и на каждый сплит на доску
+  // падали две задачи с
   // просьбой починить сработавший гейт. Под semi_auto то же с `forbidden:`,
   // причём `categorizeError` раскладывал его в permission_denied и уводил на
   // perm.

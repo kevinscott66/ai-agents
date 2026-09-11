@@ -113,8 +113,9 @@ export async function fetchJson<T = unknown>(
     );
     // Аудит 2026-08-27: три остальные ветки ошибок здесь чистятся скраббером
     // (через `getErrorMessage` → `scrubSecretString`), а эта — нет. Разница
-    // не теоретическая: tgstat.ts:74 кладёт токен прямо в query-строку, и
-    // шлюз, повторяющий запрошенный URI в теле 4xx/5xx («The requested URL
+    // не теоретическая: `fetchChannelStats` в tgstat.ts кладёт токен прямо в
+    // query-строку, и шлюз, повторяющий запрошенный URI в теле 4xx/5xx («The
+    // requested URL
     // /channels/stat?token=… was not found» — типовой ответ Apache и WAF),
     // отдал бы его первыми же 160 символами. Строка отсюда уезжает в
     // `agent_actions.error` (в SQLite на диск, без обрезки при вставке),

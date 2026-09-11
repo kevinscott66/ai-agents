@@ -431,7 +431,8 @@ export function buildIllustratedBannerSvg(opts: IllustratedBannerOpts): string |
   // 46931a2 переименовал wrap → wrapByWidth и ввёл авто-фит, но этот вызов
   // остался на старом имени: ReferenceError на любой генерации иллюстрированного
   // баннера. Переводим на fitTitle — ту же подгонку кегля, что и в основном
-  // баннере (строка 158), вместо жёсткой пары 96/116 без защиты от обрезки.
+  // баннере (`buildBannerSvg`), вместо жёсткой пары 96/116 без защиты от
+  // обрезки.
   const { lines: titleLines, size: titleSize } = fitTitle(title, ILL_TITLE_AVAIL_W);
 
   // Аудит 2026-08-20: подзаголовок здесь не рисовался ВООБЩЕ. Тип его

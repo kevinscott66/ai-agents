@@ -327,7 +327,8 @@ export function finalizeActionRow(
  * `finalizeActionRow` выше и `expireStaleAttempts` в db-maint.ts — оба сужены
  * до `attempted`. Отказ и протухание меняли только таблицу `approvals`. То
  * есть после «Reject» строка ДЕЙСТВИЯ навсегда оставалась «ждёт аппрув»: и в
- * `/audit`, и в ленте Mini App (`labels.ts:50`), и в GET_LOGS, который читает
+ * `/audit`, и в ленте Mini App (`ACTION_STATUS_LABELS` в
+ * miniapp/src/lib/labels.ts), и в GET_LOGS, который читает
  * сама модель. Роль, переспросившая журнал «одобрили мою публикацию?», видела
  * ожидание вместо состоявшегося отказа, а человек — очередь, которой в
  * `/approvals` уже нет. Комментарий в той ветке описывал только вариант с

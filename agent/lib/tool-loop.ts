@@ -210,10 +210,11 @@ export async function runWithTools(opts: RunWithToolsOpts): Promise<string> {
   //
   // Аудит 2026-08-13: дефолт стоял НИЖЕ, за ранним возвратом ветки SDK, то
   // есть на боевом пути (USE_AGENT_SDK=true) не выполнялся вовсе. undefined
-  // уезжал через tools-schema → action-dispatch в handoff.ts:248, а там такой
-  // же `?? {n:0,max:...}` — и КАЖДЫЙ DELEGATE_TO_ROLE заводил собственный
-  // счётчик с полным запасом. Общий потолок на ход исчезал: до восьми
-  // независимых поддеревьев по HANDOFF_MAX_INVOCATIONS вызовов вместо одного.
+  // уезжал через tools-schema → action-dispatch в `respondAs` (handoff.ts), а
+  // там такой же `?? {n:0,max:...}` — и КАЖДЫЙ DELEGATE_TO_ROLE заводил
+  // собственный счётчик с полным запасом. Общий потолок на ход исчезал: до
+  // восьми независимых поддеревьев по HANDOFF_MAX_INVOCATIONS вызовов вместо
+  // одного.
   const handoffBudget = opts.handoffBudget ?? {
     n: 0,
     max: HANDOFF_MAX_INVOCATIONS,

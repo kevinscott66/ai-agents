@@ -580,11 +580,14 @@ export function setPermission(
  * 2026-08-20 — до правки стоп-кран владельца молча не срабатывал:
  *
  *   1. владелец ставит `smm` режим `auto` — через Mini App
- *      (`miniapp-server.ts:1433`) или одобренный CHANGE_AGENT_STATUS
- *      (`dispatch/agent-status.ts:176`); оба пути боевые;
+ *      (`POST /api/autonomy` в miniapp-server.ts) или одобренный
+ *      CHANGE_AGENT_STATUS (`handleChangeAgentStatus` в
+ *      dispatch/agent-status.ts); оба пути боевые;
  *   2. позже в чате что-то идёт не так, владелец шлёт `/autonomy locked`;
- *   3. `cmdAutonomy` умеет писать ТОЛЬКО chat-scope (`commands.ts:348`) —
- *      писать или чистить agent-строку из чата нечем;
+ *   3. `cmdAutonomy` (commands.ts) умеет писать ТОЛЬКО chat-scope — писать или
+ *      чистить agent-строку ИЗ ЧАТА нечем. Снять её можно, но только с другого
+ *      входа: `POST /api/autonomy` с `inherit` зовёт `clearAutonomy("agent", …)`
+ *      (с 2026-08-21). Из Telegram такого пути по-прежнему нет;
  *   4. для `smm` первой находилась agent-строка, и всё с
  *      `requires_approval = 0` продолжало исполняться в «заблокированном»
  *      чате без человека.
@@ -949,9 +952,10 @@ export function evaluateGate(input: GateInput): GateDecision {
   // агент продолжал писать. Тогда починили COMMENT_TASK, а GRANT_PERMISSION и
   // MAC_RUN_CLAUDE остались выше.
   //
-  // Второй половиной дефект доезжал до исполнения: commands.ts:183 при нажатии
-  // «Approve» перепроверяет гейт и берёт ТОЛЬКО deny-слои. Карточка, одобренная
-  // до блокировки, у обычного действия упиралась в `blocked at execution`, а у
+  // Второй половиной дефект доезжал до исполнения: `executeApproved`
+  // (commands.ts) при нажатии «Approve» перепроверяет гейт и берёт ТОЛЬКО
+  // deny-слои. Карточка, одобренная до блокировки, у обычного действия
+  // упиралась в `blocked at execution`, а у
   // ALWAYS_APPROVE — нет, потому что до `locked` не доходила.
   if (mode === "locked") {
     return { decision: "deny", reason: "autonomy locked" };

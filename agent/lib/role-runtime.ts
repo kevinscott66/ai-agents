@@ -251,7 +251,7 @@ export function enqueueRoleTask(
   //
   // Терять нечего: единственным читателем этой копии была миграция 044,
   // разово перенёсшая легаси-строки в очередь; живой код берёт промпт из
-  // `role_runtime_queue.system_prompt` (:173). `queue_version: 2` — метка
+  // `role_runtime_queue.system_prompt` (`rowToItem`). `queue_version: 2` — метка
   // формата без промпта, чтобы старую строку было видно по данным, а не по
   // догадке. Старые строки чистит миграция 052.
   const queueInput = JSON.stringify({

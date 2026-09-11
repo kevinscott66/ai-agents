@@ -297,7 +297,7 @@ export function plainInline(s: string): string {
     .replace(/~{2,}/g, "~")
     .replace(/\|{2,}/g, "|");
   // Маркеры, которые Telegram читает ПОСТРОЧНО. `field()` даёт значение,
-  // которое `pushItem` ставит своей строкой (delabs-post-templates.ts:80-84),
+  // которое `pushItem` ставит своей строкой (delabs-post-templates.ts),
   // поэтому ведущий `>` уносил весь пункт в <blockquote>, а `>!` — в
   // раскрывающуюся цитату «под тап». Ровно эту угрозу называет докблок
   // `itemEmoji` выше, но охраняет там только поле emoji, хотя текст пункта

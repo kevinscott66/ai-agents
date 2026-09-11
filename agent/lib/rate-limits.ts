@@ -776,8 +776,8 @@ function retryInMsForSlots(
  *
  * Что ходы бывают одновременными — не гипотеза: telegraf обрабатывает пачку
  * из getUpdates через `Promise.all`, а веер по ролям в message-handler идёт
- * без `await` (то же обоснование, что у `agent-sdk-runtime.ts:99` и ниже в
- * этом файле). Ключ ведра — `userbot:<account>:chat:<chatId>`, и при одной
+ * без `await` (то же обоснование, что у `usageWriter` в agent-sdk-runtime.ts
+ * и ниже в этом файле). Ключ ведра — `userbot:<account>:chat:<chatId>`, и при одной
  * общей сессии он совпадает у конкурирующих ходов любых ролей. Плюс
  * SET_REACTION/DELETE_MESSAGE ходят в то же ведро через `guardedUserbotCall`
  * и ёмкость не считают вовсе.

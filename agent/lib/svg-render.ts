@@ -150,11 +150,13 @@ export function hasEntityDecl(svg: string): boolean {
  *
  *   12KB -> 398мс | 25KB -> 1765мс | 50KB -> 7111мс | 100KB -> 27986мс
  *
- * На потолке в 200KB (`renderSvgToPng`, :428) это ~112 секунд синхронного
+ * На потолке в 200KB (`renderSvgToPng`) это ~112 секунд синхронного
  * регекспа в РОДИТЕЛЬСКОМ процессе — до `Bun.spawn` воркера. То есть все 12
  * ботов, HTTP-сервер Mini App и планировщики стоят две минуты, а
- * `GENERATE_SVG_IMAGE` не за approval-гейтом и даёт 20 вызовов в минуту
- * (`permissions.ts:174`, `rate-limits.ts:41`).
+ * `GENERATE_SVG_IMAGE` не за approval-гейтом — его нет ни в
+ * `ALWAYS_APPROVE_ACTIONS`, ни в `SEMI_AUTO_RISKY` (обе в permissions.ts), а
+ * миграция сеет его с `requires_approval=0` — и даёт 20 вызовов в минуту
+ * (`RULES` в rate-limits.ts).
  *
  * Потолок на длину префикса чинил бы замер, но открывал обход: префикс длиннее
  * потолка перестал бы разбираться, а `href` за ним — находиться. Поэтому
@@ -280,12 +282,13 @@ export function findExternalHref(svg: string): string | null {
 // даёт ту же картину, поэтому «добавить проверку на наличие `>`» мало.
 //
 // Поэтому тег ищется линейным проходом с учётом кавычек — ровно тем, что уже
-// написан в `svg-fallback.ts:88`. Отличие от старого регекспа одно: если у
+// написан в `tagEnd` (svg-fallback.ts). Отличие от старого регекспа одно: если у
 // ПЕРВОГО `<svg` нет закрывающего `>`, следующие кандидаты не перебираются и
 // мерка возвращает null. Это безопасная сторона по докблоку выше («ложный
 // отказ дороже пропуска»): такой документ не переживёт разбор XML, а
 // авторитетная проверка размера всё равно повторяется в воркере уже по
-// разобранному документу (`svg-render-worker.ts:76-82`), в отдельном
+// разобранному документу (сверка `rasterSizeAfterFit` с `input.maxSide` в
+// svg-render-worker.ts), в отдельном
 // убиваемом процессе.
 const SVG_OPEN = /<svg\b/i;
 
@@ -403,7 +406,8 @@ export function svgHasText(svg: string): boolean {
  * Дальше эта строка идёт в двух направлениях, и оба платят. Первое — обратно
  * модели в tool_result: 150 КБ мусора в контекст следующего хода, за деньги и
  * с вытеснением полезного. Второе — в `agent_actions.error`: handleGenerateSvgImage
- * ошибку не ловит, диспетчер пишет `input.error` в БД без обрезки (audit.ts:195),
+ * ошибку не ловит, диспетчер пишет `input.error` в БД без обрезки
+ * (`finalizeActionRow`/`insertActionRow` в audit.ts),
  * а `GENERATE_SVG_IMAGE` дешёвое и без апрува — то есть повторяемое.
  *
  * Смысл сообщения от обрезки не страдает: автору нужно понять, ЧТО отвергли, а
@@ -420,7 +424,7 @@ export function clipForError(s: string): string {
   // текст как UTF-8: одиночный суррогат при записи склеивается со следующим
   // байтом, и в БД оказывается ДРУГОЙ символ, а один пропадает — проверено на
   // `"abc\uD83Ddef"`, читается как `"abc👤ef"`. Тот же дефект уже чинили
-  // разбиением по code point'ам в cover-banner.ts:196-211.
+  // разбиением по code point'ам в `fitTitle` (cover-banner.ts).
   const chars = Array.from(s);
   if (chars.length <= ERROR_QUOTE_MAX) return s;
   const head = chars.slice(0, ERROR_QUOTE_MAX).join("");
@@ -449,8 +453,8 @@ export const MAX_PNG_BYTES = 20 * 1024 * 1024;
  * решёткой или кириллицей давала `Bun.spawn` несуществующий файл, и падал не
  * один документ, а вся фича: каждый GENERATE_SVG_IMAGE и каждый SVG-фолбэк
  * квоты отвечали невнятным «svg: рендер не удался (код …)». Ровно этот дефект
- * уже находили и чинили рядом — см. cover-banner.ts:52-58, где так же молча
- * исчезали шрифты. `fileURLToPath` декодирует и заодно правильно ведёт себя
+ * уже находили и чинили рядом — см. `fontFiles` (cover-banner.ts), где так же
+ * молча исчезали шрифты. `fileURLToPath` декодирует и заодно правильно ведёт себя
  * на Windows-путях.
  */
 const WORKER_PATH = fileURLToPath(new URL("./svg-render-worker.ts", import.meta.url));

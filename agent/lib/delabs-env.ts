@@ -17,8 +17,10 @@
  * публикация уходит в чат 0. При этом `.env.example` обещал обратное — «Пусто
  * = -1004471352065».
  *
- * Правильный оператор — `||` (прецедент lib/admin-commands.ts:34 и соседний
- * `siteIngestChannelId` в lib/site-ingest.ts). Собрано в одном месте, потому
+ * Правильное поведение — фолбэк по ПУСТОЙ строке, а не по `undefined`
+ * (прецеденты: `parseAdminUserIds` в lib/admin-commands.ts — там тернарник
+ * `tg ? tg : …`, и соседний `siteIngestChannelId` в lib/site-ingest.ts — там
+ * `||`). Собрано в одном месте, потому
  * что читателей три и расходиться им незачем.
  */
 import { log } from "./log.ts";
