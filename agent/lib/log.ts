@@ -390,6 +390,17 @@ export const log = new Logger();
  */
 const REDACT_DISABLED = process.env.LOG_REDACT === "0";
 
+/** Сколько символов отпечатка показывает `redactText` с каждого конца. */
+const REDACT_PREFIX = 4;
+const REDACT_SUFFIX = 4;
+
+/**
+ * Сколько символов обязаны остаться СКРЫТЫМИ, чтобы отпечаток вообще
+ * показывался. Не ноль: при нуле отпечаток совпадает со всей строкой —
+ * см. докстроку `redactText`.
+ */
+const REDACT_MIN_HIDDEN = 4;
+
 /**
  * Redact a Telegram user identifier (numeric id or username).
  * Returns a stable short form `uid:<last4>` so logs remain correlatable
@@ -427,17 +438,35 @@ export function redactSender(
 }
 
 /**
- * Redact arbitrary user-authored text. Returns either:
- *   - `<len=N>` for short strings (≤7 chars), or
- *   - `<len=N first4=XXXX last4=YYYY>` for longer strings.
- * Never reveals middle content, regardless of length.
+ * Резать произвольный текст человека. Отдаёт либо `<len=N>`, либо
+ * `<len=N first4=XXXX last4=YYYY>` — отпечаток для корреляции одного
+ * и того же текста между строками лога.
+ *
+ * Аудит 2026-09-11: порогом было 7, а подпись обещала «never reveals
+ * middle content, regardless of length». При длине 8 середины не
+ * существует вовсе: `first4 + last4` — это ВСЯ строка, и обещание
+ * выполнялось впустую. Замер: `"12345678"` → `<len=8 first4=1234
+ * last4=5678>`, `"7 Baker St"` → `<len=10 first4=7 Ba last4=r St>`. В полосе
+ * 8–11 символов лежит ровно то, ради чего резали: одноразовый код,
+ * короткий пароль, адрес. Сторожа этого не ловили: они берут строки
+ * в 20, 39 и 58 символов и `"да"` — полосу 8–11 не проверял ни один.
+ *
+ * Поэтому порог не число, а свойство: отпечаток показывается, только
+ * если после него СКРЫТЫ хотя бы `REDACT_MIN_HIDDEN` символов. Записанное
+ * через длины кусков, это свойство не разъедется с ними: поменяется
+ * `first4`/`last4` — порог пересчитается сам.
+ *
+ * Цена — в полосе 8–11 коррелировать строки по логу больше нельзя. Это
+ * ровно та полоса, где корреляция и есть разглашение, так что терять тут
+ * нечего.
  */
 export function redactText(value: string | null | undefined): string {
   if (value === null || value === undefined) return "<len=0>";
   const s = String(value);
   if (REDACT_DISABLED) return s;
-  if (s.length <= 7) return `<len=${s.length}>`;
-  return `<len=${s.length} first4=${s.slice(0, 4)} last4=${s.slice(-4)}>`;
+  const shown = REDACT_PREFIX + REDACT_SUFFIX;
+  if (s.length < shown + REDACT_MIN_HIDDEN) return `<len=${s.length}>`;
+  return `<len=${s.length} first${REDACT_PREFIX}=${s.slice(0, REDACT_PREFIX)} last${REDACT_SUFFIX}=${s.slice(-REDACT_SUFFIX)}>`;
 }
 
 // Legacy compatibility - can be used to gradually migrate console.log calls

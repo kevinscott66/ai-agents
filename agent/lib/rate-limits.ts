@@ -663,8 +663,15 @@ function userbotBucketKey(
 }
 
 /**
- * T-402: Check per-(characterId, chatId) userbot flood limit.
- * Returns ok:true if characterId or chatId is missing (no context → pass).
+ * T-402: ведро анти-флуда userbot'а на пару (АККАУНТ, chatId).
+ *
+ * Аудит 2026-09-11: подпись говорила «per-(characterId, chatId)», а ключ
+ * собирает `userbotBucketKey` — через `userbotAccountKey`, то есть роли без
+ * объявленной сессии делят одно ведро. Ровно эта копия правила и разошлась с
+ * оригиналом: докблок `SHARED_USERBOT_ACCOUNT_KEY` объясняет, почему ключ
+ * следует за аккаунтом, а подпись этажом ниже обещала ролевую гранулярность.
+ *
+ * `ok: true` без characterId или chatId: нет контекста — нечего ограничивать.
  */
 export function checkUserbotFloodLimit(
   characterId: string | number | undefined,
@@ -683,7 +690,7 @@ export function checkUserbotFloodLimit(
   if (!r.ok) {
     return {
       ok: false,
-      reason: `userbot flood limit: per character/chat (${rule.max}/${Math.round(rule.windowMs / 1000)}s)`,
+      reason: `userbot flood limit: per account/chat (${rule.max}/${Math.round(rule.windowMs / 1000)}s)`,
       retryInMs: r.retryInMs,
     };
   }

@@ -21,12 +21,24 @@
  * Инвариант: `evaluateGate` зовут только те места, где это осознанное решение.
  * Тест структурный намеренно — он ловит не поведение (у мёртвого кода его нет),
  * а появление ЕЩЁ ОДНОЙ двери к тому же решению.
+ *
+ * Аудит 2026-09-11: инвариант формулировался про «места» вообще, а обход шёл
+ * по одному `lib/`. Вызовов вне него сегодня нет ни одного, так что дыра была
+ * не в коде, а в стороже: вторая дверь, открытая из `tools/` или
+ * `orchestrator/`, прошла бы мимо теста, который обещает её ловить. Сторож,
+ * отвечающий про часть дерева и молчащий об этом, хуже отсутствующего —
+ * поэтому деревья перечислены явно, а ключи `ALLOWED` стали путями от корня
+ * `agent/`, чтобы `lib/commands.ts` и гипотетический `tools/commands.ts` не
+ * схлопывались в одну запись.
  */
 import { describe, test, expect } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-const LIB = new URL("../lib/", import.meta.url).pathname;
+const AGENT = new URL("../", import.meta.url).pathname;
+
+/** Боевые деревья целиком: дверь к гейту из любого из них — вторая дверь. */
+const SOURCE_ROOTS = ["lib", "miniapp/src", "tools", "orchestrator", "mac-daemon"];
 
 /**
  * Кто имеет право звать evaluateGate напрямую, и почему именно он.
@@ -34,27 +46,34 @@ const LIB = new URL("../lib/", import.meta.url).pathname;
  */
 const ALLOWED = new Map<string, string>([
   [
-    "action-dispatch.ts",
+    "lib/action-dispatch.ts",
     "единственный живой путь: rate-limit → payloadForcesApproval → gate → " +
       "валидация payload → строка approval",
   ],
   [
-    "commands.ts",
+    "lib/commands.ts",
     "команды владельца в чате (/approve и соседи) — решение принимает человек",
   ],
   [
-    "self-diag.ts",
+    "lib/self-diag.ts",
     "нужен ОТВЕТ гейта без побочных эффектов: gateOrDispatch на 'approval' " +
       "завёл бы строку в очереди (объяснено в шапке self-diag.ts)",
   ],
-  ["permissions.ts", "здесь она и определена"],
+  ["lib/permissions.ts", "здесь она и определена"],
 ]);
 
 function walk(dir: string, out: string[] = []): string[] {
-  for (const name of readdirSync(dir)) {
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return out;
+  }
+  for (const name of names) {
+    if (name === "node_modules" || name === "dist" || name.startsWith(".")) continue;
     const full = join(dir, name);
     if (statSync(full).isDirectory()) walk(full, out);
-    else if (name.endsWith(".ts")) out.push(full);
+    else if (name.endsWith(".ts") || name.endsWith(".tsx")) out.push(full);
   }
   return out;
 }
@@ -82,10 +101,12 @@ function callsEvaluateGate(src: string): boolean {
  * Читаем на уровне модуля, а не в `beforeAll`: тест здесь структурный, он
  * смотрит на исходники, а те за время прогона не меняются.
  */
-const SOURCES: Array<{ rel: string; src: string }> = walk(LIB).map((f) => ({
-  rel: f.slice(LIB.length),
-  src: readFileSync(f, "utf8"),
-}));
+const SOURCES: Array<{ rel: string; src: string }> = SOURCE_ROOTS.flatMap((r) =>
+  walk(join(AGENT, r)).map((f) => ({
+    rel: f.slice(AGENT.length),
+    src: readFileSync(f, "utf8"),
+  })),
+);
 
 /** Файлы, которые действительно ЗОВУТ evaluateGate. */
 const CALLERS = SOURCES.filter((f) => callsEvaluateGate(f.src)).map(
@@ -93,6 +114,15 @@ const CALLERS = SOURCES.filter((f) => callsEvaluateGate(f.src)).map(
 );
 
 describe("гейт разрешений — один", () => {
+  test("обход видит все боевые деревья, а не одно", () => {
+    // Пустой или усечённый обход сделал бы проверки ниже зелёными вхолостую —
+    // ровно тот отказ, которым сторож жил до аудита 2026-09-11.
+    expect(SOURCES.length).toBeGreaterThan(150);
+    for (const root of SOURCE_ROOTS) {
+      expect(SOURCES.some((f) => f.rel.startsWith(root + "/"))).toBe(true);
+    }
+  });
+
   test("evaluateGate зовут только объяснённые места", () => {
     const offenders = CALLERS.filter((rel) => !ALLOWED.has(rel));
 
@@ -114,7 +144,7 @@ describe("гейт разрешений — один", () => {
 
 describe("подпись к гейту не врёт", () => {
   test("telegram-actions.ts отправляет читателя к живому пути", () => {
-    const src = readFileSync(join(LIB, "telegram-actions.ts"), "utf8");
+    const src = readFileSync(join(AGENT, "lib/telegram-actions.ts"), "utf8");
     // Аудит 2026-08-12: тут проверялось «dispatchAction()», но описанной рядом
     // цепочки (rate-limit → payloadForcesApproval → evaluateGate → валидация →
     // approval) в ней нет ни строчки: dispatchAction — исполнитель, switch по
@@ -125,7 +155,7 @@ describe("подпись к гейту не врёт", () => {
     // функции с таким именем в том файле не было никогда.
     expect(src).not.toMatch(/gatedAction\(\) в tools-schema/);
     // И имя должно существовать среди экспортов диспетчера, а не быть выдумкой.
-    const disp = readFileSync(join(LIB, "action-dispatch.ts"), "utf8");
+    const disp = readFileSync(join(AGENT, "lib/action-dispatch.ts"), "utf8");
     expect(disp).toMatch(/export async function gateOrDispatch\b/);
   });
 });

@@ -13,9 +13,20 @@ export interface SendMessagePayload {
   text: string;
   replyToMessageId?: number;
   /**
-   * T-410: route through the MTProto userbot so the message appears as the
-   * owner's real account (@owner_darkside). Orchestrator-only; requires
-   * approval in semi_auto mode. Other callers receive a forbidden error.
+   * T-410: отправить через MTProto-userbot, чтобы сообщение выглядело как от
+   * личного аккаунта владельца. Только оркестратор — остальным `forbidden`
+   * (`dispatch/telegram.ts`). Подтверждение человека обязательно В ЛЮБОМ
+   * режиме, включая `auto`: `payloadForcesApproval` взводит `forceApproval`,
+   * а `evaluateGate` проверяет его ДО ветвлений по режиму.
+   *
+   * Аудит 2026-09-11: здесь стояло «`requires approval in semi_auto mode`» —
+   * правило было записано слабее, чем оно есть, и ровно в том поле, ради
+   * которого его дважды чинили (SEC-4, T-602). Читатель планировал бы
+   * отправку от лица владельца без человека в `auto`.
+   *
+   * То же правило действует для `SET_REACTION` и `DELETE_MESSAGE` — набор
+   * лежит в `USERBOT_FORCE_APPROVAL` (permissions.ts), и он здесь источник
+   * правды, а не эти три подписи.
    */
   via_userbot?: boolean;
 }
@@ -24,9 +35,13 @@ export interface SetReactionPayload {
   messageId: number;
   emoji: string;
   /**
-   * C30: force routing through the MTProto userbot (any emoji incl. Premium,
-   * bypasses Bot API whitelist). When false/undefined, dispatcher uses Bot API
-   * and falls back to userbot only on "can't react" errors if userbot is up.
+   * C30: принудительно через MTProto-userbot (любой эмодзи, включая Premium,
+   * в обход белого списка Bot API). При false/undefined диспатчер идёт по Bot
+   * API и откатывается на userbot только по ошибке «can't react».
+   *
+   * Голос владельца: только оркестратор, подтверждение человека в любом
+   * режиме — см. `USERBOT_FORCE_APPROVAL` (permissions.ts) и разбор у
+   * `SendMessagePayload.via_userbot` выше по файлу.
    */
   via_userbot?: boolean;
 }
@@ -44,10 +59,13 @@ export interface DeleteMessagePayload {
   chatId?: number;
   messageId: number;
   /**
-   * C30: force routing through the MTProto userbot. Allows deleting service
-   * messages (joins/leaves/pins/photo) that the Bot API cannot touch. When
-   * false/undefined, dispatcher uses Bot API and falls back to userbot only
-   * on errors if userbot is up.
+   * C30: принудительно через MTProto-userbot. Позволяет удалять служебные
+   * сообщения (вход/выход/пин/фото), недоступные Bot API. При false/undefined
+   * диспатчер идёт по Bot API и откатывается на userbot только по ошибке.
+   *
+   * Голос владельца: только оркестратор, подтверждение человека в любом
+   * режиме — см. `USERBOT_FORCE_APPROVAL` (permissions.ts) и разбор у
+   * `SendMessagePayload.via_userbot` выше по файлу.
    */
   via_userbot?: boolean;
 }

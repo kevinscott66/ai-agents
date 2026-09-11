@@ -1,10 +1,18 @@
 /**
  * C31 DB-maint: gigiena БД.
  *
- * - archiveOldRows: переносит старые строки `agent_actions` / `audit_logs`
- *   в `*_archive` таблицы (та же схема + archived_at), в одной транзакции
- *   на каждую таблицу: INSERT ... SELECT ... → DELETE (см. moveToArchive —
- *   удаляется только то, что доказуемо оказалось в архиве).
+ * - archiveOldRows: переносит старые строки `agent_actions`, `audit_logs`,
+ *   `approvals` и `role_runtime_queue` в `*_archive` таблицы (та же схема +
+ *   archived_at), в одной транзакции на каждую таблицу: INSERT ... SELECT ...
+ *   → DELETE (см. moveToArchive — удаляется только то, что доказуемо
+ *   оказалось в архиве). Список имён держать полным обязательно: по нему
+ *   планируют ретенцию, а «невидимые» здесь две таблицы хранят самое
+ *   чувствительное — `approvals.payload` (тело поста, ушедшего на
+ *   согласование) и `role_runtime_queue.system_prompt` (системный промпт
+ *   временной роли целиком). Источник правды — поля `ArchiveResult` и вызовы
+ *   `moved(...)` в самой функции; расхождение прозы с ними и чинил аудит
+ *   2026-09-11 (внутри функции тот же разъезд закрыли раньше, а копию этажом
+ *   выше не тронули).
  * - gcStaleTasks: pending/running без обновлений > 24h → failed, error=gc_stale.
  *   Каскадно дёргает rollupParent у parent.
  * - compactDb: VACUUM + ANALYZE (логирует start/end).

@@ -514,10 +514,19 @@ export async function respondAs(
       fromName: target.username,
       text: reply,
       ts: (sent?.date ?? Math.floor(Date.now() / 1000)) * 1000,
-      // P2 dup-fix (2026-06-09): pass the sent message_id so the userbot's later
-      // observation of THIS same message dedups via OR IGNORE on
-      // (chat_id, tg_message_id). Without it, delegated-agent replies were
-      // recorded twice ([pm]/[backend] + userbot copy).
+      // P2 dup-fix (2026-06-09): отдаём message_id отправленного сообщения,
+      // чтобы позднее наблюдение ЭТОГО же сообщения userbot'ом схлопнулось по
+      // (chat_id, tg_message_id). Без него ответы делегированных ролей
+      // записывались дважды ([pm]/[backend] + копия от userbot'а).
+      //
+      // Аудит 2026-09-11: здесь было сказано «dedups via `OR IGNORE`», а
+      // `INSERT OR IGNORE` в `recordMessage` (memory.ts) сняли ещё аудитом
+      // 2026-08-12 — оно съедало расшифровки голосовых. Сейчас там
+      // `ON CONFLICT ... DO UPDATE`, и это не «ignore»: сохранённый ПУСТОЙ
+      // текст поздняя запись перезаписывает. На поведение `respondAs` это не
+      // влияет (он пишет непустой `reply`), но читатель, правящий путь
+      // голосовых, уходил отсюда с уверенностью, что вторая запись заведомо
+      // без эффекта.
       tgMessageId: sent?.message_id,
       transport: "bot_api",
     });
