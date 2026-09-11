@@ -1,8 +1,15 @@
 /**
  * C5/R-A: Anthropic tool_use схема + диспатчер.
  *
- * Все 12 инструментов идут через единый `gateOrDispatch` из
- * `lib/action-dispatch.ts`. Эта функция отвечает только за:
+ * Аудит 2026-09-11: здесь было написано «все 12 инструментов идут через единый
+ * `gateOrDispatch`». Неверно дважды. Инструментов в `TOOL_NAMES` двадцать три;
+ * двенадцать — это `INLINE_TOOL_NAMES` из `constants.ts`, то есть ровно тот
+ * набор, который через `gateOrDispatch` как раз НЕ идёт (см. разбор у
+ * `executeInlineTool` ниже: ни CALLER_RESTRICTED, ни строка permissions к ним
+ * не применяются, и минутный бакет «все инструменты агента» их тоже не видит).
+ *
+ * Через `gateOrDispatch` из `lib/action-dispatch.ts` идут остальные. Эта
+ * функция отвечает только за:
  *   1. валидацию/нормализацию сырого LLM-инпута в строгий PayloadFor<T>,
  *   2. сериализацию структурированного результата в короткий JSON-текст
  *      для tool_result.
@@ -23,6 +30,7 @@ import {
   formatGateResult,
 } from "./action-dispatch.ts";
 import { ALLOWED_REACTIONS } from "./telegram-actions.ts";
+import { checkAndConsumeRateLimit } from "./rate-limits.ts";
 import {
   wikiSearch,
   wikiRead,
@@ -826,9 +834,32 @@ export async function executeTool(
     if (!LOCKED_EXEMPT_INLINE_TOOLS.has(name) && getAutonomy(ctx.chatId, ctx.agentKey) === "locked") {
       return fmt({ ok: false, error: "autonomy locked" });
     }
+
+    // Аудит 2026-09-11: третий слой того же класса. Лимитер зовётся только
+    // внутри гейта (`checkRateLimit` в action-dispatch.ts), а бакет «все
+    // инструменты агента» (ALL_AGENT_TOOLS_RULE, 60/мин) задуман общим для
+    // всего, что агент делает. Инлайновая ветка до него не доходила, поэтому
+    // минутное окно обходилось простым выбором инструмента из этого списка:
+    // внутри одного прогона потолок оставался (MAX_CALLS_PER_TOOL_PER_RUN=8 в
+    // tool-loop.ts), а межпрогонного не было вовсе — цикл ходов, ретраи и
+    // несколько чатов параллельно упирались только в него.
+    //
+    // Дороже всего это стоило у QUERY_DB (произвольный SELECT по операционной
+    // БД, без chat-скоупа) и у CANCEL_SCHEDULED_POST — единственной мутации в
+    // списке. Считаем и коммитим одним синхронным вызовом: `checkRateLimit`
+    // оставляет окно гонки между проверкой и коммитом, а здесь его закрыть
+    // нечем — своей резервации у инлайнового пути нет.
+    const rl = checkAndConsumeRateLimit(ctx.agentKey, name);
+    if (!rl.ok) {
+      return fmt({
+        ok: false,
+        error: `rate_limited: ${rl.reason ?? "лимит инструментов исчерпан"}`,
+      });
+    }
   }
 
-  // C11: read-only wiki tools — pure reads, no gate, no audit-log, no rate-limit.
+  // C11: read-only wiki tools — pure reads, no gate, no audit-log. Общий
+  // минутный бакет агента с 2026-09-11 их всё-таки считает (см. выше).
   if (name === "SEARCH_WIKI") {
     const query = String(i.query ?? "").trim();
     if (!query) return fmt({ ok: false, error: "query is required" });
