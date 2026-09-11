@@ -31,6 +31,21 @@
  *    tests/delegate-disabled-agent-availability.test.ts;
  *  • символ чужой → внести в EXTERNAL вместе с пакетом. Пакет проверяется
  *    ниже, поэтому выдумать его, чтобы замолчать тест, не выйдет.
+ *
+ * Круг 30: проверялся только camelCase, а половина имён в этом репозитории
+ * пишется через подчёркивание — статусы задач, типы апдейтов Telegram,
+ * переменные окружения, константы модулей. Гниют они так же. Замер по дереву:
+ * 1009 упоминаний, двенадцать не нашлись, и ни одно не оказалось шумом —
+ * MAC_ROOTS вместо `MAC_PROJECT_ROOTS`, SVG_TAG вместо `SVG_OPEN`,
+ * MAX_BUCKETS при живых `EVICT_AT_BUCKETS`/`HARD_MAX_BUCKETS`, четыре
+ * надгробия в кавычках и три чужих имени из telegraf. Поэтому правило
+ * расширено здесь, а не заведено вторым тестом: копия правила — это правило,
+ * действующее на N−1 из N мест.
+ *
+ * Расширение потребовало и второго корня для ПОИСКА: `SERVER_EXCLUDES`,
+ * `UNTRACKED_COUNT` и прочая деплойная лексика живёт в `deploy/*.sh`, и без
+ * него тест нашёл бы их «мёртвыми». Это тот самый риск, из-за которого
+ * сторож опаснее своего отсутствия: он отвечал бы уверенно и неверно.
  */
 import { test, expect, describe } from "bun:test";
 import { readdirSync, readFileSync, statSync, existsSync } from "node:fs";
@@ -58,11 +73,24 @@ const SCAN_ROOTS = [
 const IDENT_ROOTS = [...SCAN_ROOTS, "../site/server"];
 
 /**
+ * Где ещё ищем имена через подчёркивание, но НЕ ищем комментарии.
+ *
+ * Про деплой и воркфлоу здесь пишут по именам их переменных (`SERVER_EXCLUDES`,
+ * `UNTRACKED_COUNT`), а сами они — shell и YAML. Комментарии этих файлов в
+ * поиск не идут: `#`-строка, называющая мёртвую переменную, — такая же ложь, и
+ * засчитывать её за доказательство жизни нельзя.
+ */
+const SHELLY_ROOTS = ["../deploy", "../.github"];
+
+/**
  * Символы, которых в этом репозитории нет и не будет, — внутренности
  * зависимостей. Значение — пакет, в котором символ обязан находиться.
  */
 const EXTERNAL: Record<string, string> = {
   attachFormMedia: "telegraf",
+  FORM_DATA_JSON_FIELDS: "telegraf",
+  callback_query: "telegraf",
+  my_chat_member: "telegraf",
   addPart: "telegraf",
   deleteWebhook: "telegraf",
   handleError: "telegraf",
@@ -77,6 +105,11 @@ const COMMENT_LINE = /^\s*(\/\/|\*|\/\*)/;
 /** Идентификатор с горбом: одного слова со строчной буквы мало. */
 const CAMEL = /^[a-z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*$/;
 /**
+ * Имя через подчёркивание: `semi_auto`, `HARD_MAX_BUCKETS`. Регистр не мешаем —
+ * смешанное `Some_Thing` в прозе встречается как разрезанная фраза, а не как имя.
+ */
+const SNAKE = /^([a-z][a-z0-9]*(?:_[a-z0-9]+)+|[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)$/;
+/**
  * Короткие имена не проверяем: `isOk`, `toB` и им подобные слишком часто
  * встречаются в прозе как куски чужих выражений, а пользы от них ноль.
  */
@@ -88,6 +121,17 @@ function walk(dir: string, out: string[] = []): string[] {
     const p = join(dir, e);
     if (statSync(p).isDirectory()) walk(p, out);
     else if (/\.(ts|tsx)$/.test(p)) out.push(p);
+  }
+  return out;
+}
+
+/** Тот же обход, но для деплойных файлов: shell, YAML, SQL. */
+function walkAny(dir: string, out: string[] = []): string[] {
+  for (const e of readdirSync(dir)) {
+    if (e === "node_modules" || e === "dist") continue;
+    const p = join(dir, e);
+    if (statSync(p).isDirectory()) walkAny(p, out);
+    else if (/\.(sh|ya?ml|sql|ts|tsx)$/.test(p)) out.push(p);
   }
   return out;
 }
@@ -111,10 +155,24 @@ const sources = read(SCAN_ROOTS);
  * а первого хватило, чтобы найти все четырнадцать.
  */
 const codeIdents = new Set<string>();
-for (const src of read(IDENT_ROOTS).values()) {
+/** `#` — комментарий shell и YAML; в поиск имён такие строки не идут. */
+const SHELL_COMMENT = /^\s*#/;
+const UNDERSCORED = /\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b/g;
+
+function collectIdents(src: string, isComment: (line: string) => boolean) {
   for (const line of src.split("\n")) {
-    if (COMMENT_LINE.test(line)) continue;
+    if (isComment(line)) continue;
     for (const m of line.matchAll(/\b[a-z][A-Za-z0-9]{3,}\b/g)) codeIdents.add(m[0]);
+    for (const m of line.matchAll(UNDERSCORED)) codeIdents.add(m[0]);
+  }
+}
+for (const src of read(IDENT_ROOTS).values()) {
+  collectIdents(src, (l) => COMMENT_LINE.test(l));
+}
+for (const root of SHELLY_ROOTS) {
+  if (!existsSync(root)) continue;
+  for (const f of walkAny(root)) {
+    collectIdents(readFileSync(f, "utf8"), (l) => SHELL_COMMENT.test(l));
   }
 }
 
@@ -126,7 +184,8 @@ describe("имена символов в комментариях не прот�
         if (!COMMENT_LINE.test(line)) return;
         for (const m of line.matchAll(/`([^`]+)`/g)) {
           const name = m[1].replace(/\(\)$/, "");
-          if (name.length < MIN_LEN || !CAMEL.test(name)) continue;
+          if (name.length < MIN_LEN) continue;
+          if (!CAMEL.test(name) && !SNAKE.test(name)) continue;
           if (codeIdents.has(name) || name in EXTERNAL) continue;
           rotted.push(`${file}:${i + 1} \`${name}\``);
         }

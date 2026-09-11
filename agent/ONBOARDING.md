@@ -185,7 +185,7 @@ cd miniapp && bun run build
 rsync -avz --delete dist/ root@203.0.113.11:/opt/agent-team/miniapp/dist/
 ```
 
-Перед Bun-сервером стоит **nginx** (SNI :14443 → bun:8787), сертификаты Let's Encrypt через certbot. **Mac bridge** слушает на `:8787`. Бэкапы SQLite — в `/opt/agent-team/data/backups/`, ротация настроена `lib/backup.ts`. **DB maintenance**: ежедневный архив в 04:00 UTC (`agent_actions_archive`, `audit_logs_archive`).
+Перед Bun-сервером стоит **nginx** (SNI :14443 → bun:8787), сертификаты Let's Encrypt через certbot. **Mac bridge** слушает на `:8788` (`DEFAULT_MAC_BRIDGE_PORT`); `:8787` — это HTTP-порт Mini App (`DEFAULT_MINIAPP_PORT`), порты разные и путать их нельзя. Бэкапы SQLite — в `/opt/agent-team/data/backups/`, ротация настроена `lib/backup.ts`. **DB maintenance**: ежедневный архив в 04:00 UTC (`agent_actions_archive`, `audit_logs_archive`).
 
 ## 6. 12 ролей + userbot
 
@@ -313,12 +313,12 @@ ssh root@203.0.113.11 'cp /opt/agent-team/data/memory.db /opt/agent-team/data/ba
 
 **Нужно для запуска:**
 - Запустить `agent/mac-daemon/daemon.ts` на Mac через launchd (Mac daemon не запущен — нужен launchd + TLS)
-- Настроить TLS перед `:8787` (ssh tunnel или nginx upstream)
+- Настроить TLS перед `:8788` (ssh tunnel или nginx upstream)
 - Проверить: `curl -s https://<host>/api/health | jq .mac_online` → `true`
 
 **Архитектура:**
 ```
-Claude Agent → MAC_RUN_CLAUDE action → WebSocket :8787 → Mac daemon → osascript/Automator
+Claude Agent → MAC_RUN_CLAUDE action → WebSocket :8788 → Mac daemon → Bun.spawn("claude")
 ```
 
 Stage B (5 режимов) готово, Stage C (Mini App UI вкладка для Mac-сессий) в разработке.

@@ -2,8 +2,11 @@
  * Аудит 2026-08-21: блокирующие метки сравнивались точным именем, а метка,
  * которой автономный цикл помечает КАЖДЫЙ свой PR, называется длиннее.
  *
- * `deploy/agents-loop.sh:76` открывает PR с `--label needs-human-review`
- * (`deploy/vps-autonomous/autonomous-cycle.sh:6` — то же самое). Гейт же держал
+ * Автономный цикл (`deploy/vps-autonomous/autonomous-cycle.sh`, шаг
+ * `gh pr edit --add-label`) вешает на каждый свой PR `needs-human-review`;
+ * заводит саму метку `gh label create` там же. Прежде эту роль играл
+ * deploy/agents-loop.sh — имя без кавычек, потому что скрипта как рабочего
+ * пути больше нет: сегодня это десятистрочное надгробие с `exit 1`. Гейт же держал
  * `new Set(["hold","risky","needs-human","do-not-merge"])` и спрашивал `.has()`:
  * `has("needs-human-review")` — false. Замер до правки, docs-only PR в белом
  * списке путей:
@@ -16,7 +19,7 @@
  * без человека. Из main идёт прод-деплой.
  *
  * Ровно эту ошибку уже находили и чинили на ВТОРОМ автомерже 2026-08-12:
- * `.github/scripts/automerge-filter.sh:75-79` сравнивает через
+ * `.github/scripts/automerge-filter.sh` сравнивает через
  * `startswith("needs-human")`, и в его шапке записан замер — «24 PR прошли бы
  * фильтр, и все 24 помечены needs-human-review». В TypeScript-копию правку не
  * перенесли, а комментарий над набором продолжал обещать, что «у двух

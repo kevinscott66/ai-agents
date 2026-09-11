@@ -603,7 +603,7 @@ export async function processDiagTask(
   // строка в permissions, а часто её нет вовсе. (2) Источник истины:
   // ALWAYS_APPROVE_ACTIONS живёт в КОДЕ гейта, а не в таблице, и миграция 038
   // сеет PUBLISH_TO_CHANNEL как requires_approval=0 — то есть проверка
-  // пропускала публикацию в канал, для которой апрув обязателен. (2) Слои:
+  // пропускала публикацию в канал, для которой апрув обязателен. (3) Слои:
   // disabled-агент, CALLER_RESTRICTED, allowed=false и autonomy=locked не
   // проверялись вообще, потому что dispatchAndAudit гейт не зовёт.
   //
@@ -981,8 +981,12 @@ export function startSelfDiagPoller(
   }
 
   const handle = setInterval(() => {
-    // Не `void tick()`: у tick есть finally, но нет catch, а первый же вызов в
-    // нём — синхронное обращение к БД (listPendingDiagTasks). Заблокированная
+    // Не `void tick()`: у tick есть finally, но нет catch, а к БД он
+    // обращается синхронно и без своей защиты — выборка `listPendingDiagTasks`
+    // идёт голой. Позицию этого вызова в теле здесь НЕ называем: подбор
+    // осиротевших вставили выше него позже, и прежняя формулировка «первый же
+    // вызов» с тех пор описывала несуществующий порядок. У подбора свой catch,
+    // до внешнего `.catch` его ошибка не доходит вовсе. Заблокированная
     // или сломанная БД превращала тик в НЕОБРАБОТАННЫЙ reject, и он уходил в
     // глобальный process.on("unhandledRejection") из telegraf-patch — то есть
     // в лог падала строка `[unhandledRejection]` без модуля и без стека, по

@@ -1,6 +1,7 @@
 /**
  * Compactor — post-response LLM, который решает, что записать в долгую память.
- * Запускается асинхронно после каждого ответа агента (fire-and-forget).
+ * Запускается асинхронно после ответа агента длиннее 30 символов
+ * (fire-and-forget): на более коротких `runCompactor` выходит сразу.
  * Использует дешёвую модель (Haiku) с малым max_tokens.
  *
  * Входы:
@@ -358,10 +359,21 @@ function extractJSON(s: string): string | null {
 }
 
 /**
- * Привести операцию к нашей схеме, терпя дрейф модели: ключ операции может
- * прийти как "op" или "type"; текст лога — как "line"/"content"/"text"; для
- * страниц допускаем "page"/"body" как алиасы. Возвращает null, если op не
- * распознан (тогда пропускаем, а не молча роняем весь батч).
+ * Привести операцию к нашей схеме, терпя дрейф модели. Перечень алиасов ниже
+ * закрытый, и он же полный — раньше в нём молча недоставало двух:
+ *   - ключ операции — "op" либо "type";
+ *   - слаг страницы — "slug" либо "page";
+ *   - заголовок страницы — "title" либо "name", иначе слаг;
+ *   - текст лога — "line", "content" либо "text";
+ *   - тело страницы — "content", "body" либо "line".
+ *
+ * Последние две строки читаются крест-накрест НАРОЧНО: модель, вернувшая
+ * страницу с телом в "line" или лог с текстом в "content", получает то, что
+ * очевидно имела в виду. Поведение неочевидное, поэтому названо здесь и
+ * закрыто фикстурами в tests/wiki-index-and-page-title.test.ts.
+ *
+ * Возвращает null, если op не распознан (тогда пропускаем, а не молча роняем
+ * весь батч).
  */
 function normalizeOp(raw: any): Op | null {
   if (!raw || typeof raw !== "object") return null;
@@ -399,7 +411,7 @@ function normalizeOp(raw: any): Op | null {
         ? {
             op: "upsert_team_page",
             slug: String(slug),
-            title: clip(title ?? slug, MAX_TITLE),
+            title: clip(title, MAX_TITLE),
             content: clip(content, MAX_PAGE_CONTENT),
           }
         : null;
@@ -408,7 +420,7 @@ function normalizeOp(raw: any): Op | null {
         ? {
             op: "upsert_private_page",
             slug: String(slug),
-            title: clip(title ?? slug, MAX_TITLE),
+            title: clip(title, MAX_TITLE),
             content: clip(content, MAX_PAGE_CONTENT),
           }
         : null;

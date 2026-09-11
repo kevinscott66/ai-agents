@@ -1381,7 +1381,8 @@ export const MIGRATIONS: Migration[] = [
      *
      * Читателей ровно два, оба в `tools-schema.ts`: `LIST_SCHEDULED_POSTS` и
      * `CANCEL_SCHEDULED_POST`. Оба собирают WHERE из
-     * `status = 'scheduled' AND chat_id = ?` (tools-schema.ts:1231) и гоняют
+     * `status = 'scheduled' AND chat_id = ?` (tools-schema.ts, ветка
+     * LIST_SCHEDULED_POSTS) и гоняют
      * его трижды — COUNT, страница, счётчик просроченных. Индексы же были
      * `(scheduled_at, status)` и `(channel, status)`: первый ведёт с колонки,
      * которой в WHERE нет вовсе, второй — с необязательного фильтра. То есть

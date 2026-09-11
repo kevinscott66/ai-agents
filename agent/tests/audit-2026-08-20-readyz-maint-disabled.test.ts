@@ -1,10 +1,11 @@
 /**
  * Аудит 2026-08-20 — `DB_MAINT_ENABLED=false` уводил /readyz в бессрочный 503.
  *
- * `_schedulerLastRun` ставится ровно в одном месте — внутри
- * `startMaintScheduler` (db-maint.ts). Запускается он только под условием
+ * `_schedulerLastRun` пишется только изнутри `startMaintScheduler`
+ * (db-maint.ts) — на старте и в конце каждого gc-тика. Запускается он только под условием
  * `process.env.DB_MAINT_ENABLED !== "false"` (services.ts). То есть оператор,
- * поставивший документированный в `.env.example:141` флаг «ВЫКЛЮЧАЕТ ночное
+ * поставивший документированный в `.env.example` флаг `DB_MAINT_ENABLED`
+ * «ВЫКЛЮЧАЕТ ночное
  * обслуживание» и перезапустивший `agent-team`, получал `getSchedulerLastRun()
  * === null` навсегда, а /readyz читал это как `checks.scheduler = "never"` и
  * отвечал 503 на КАЖДЫЙ запрос. Процесс при этом полностью здоров: 12 ботов

@@ -76,8 +76,9 @@ export function isDiagTaskThrottled(
 
 /**
  * Аудит 2026-08-20: здесь стояло `n < 0`, то есть НОЛЬ проходил как валидный
- * потолок. А проверка на месте вызова — `parentChain.length >= maxDepth`
- * (action-dispatch.ts:1377), и при maxDepth=0 она истинна всегда, ещё до
+ * потолок. А проверка на месте вызова — `parentChain.length >= maxDepth` в
+ * action-dispatch.ts (искать по `circuit_breaker`), и при maxDepth=0 она
+ * истинна всегда, ещё до
  * первого звена цепочки. Последствия у одной опечатки в .env две, и обе тихие:
  *
  *  1. self-diag выключается целиком — ни одной diag-задачи ни по одному

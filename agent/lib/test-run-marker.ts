@@ -9,9 +9,9 @@
  *   bun test                        → NODE_ENV === "test"        (гейт держит)
  *   NODE_ENV=production bun test    → NODE_ENV === "production"  (гейт СНЯТ)
  *
- * Путь к этому в репозитории прямой: `.env.example:83` предписывает владельцу
+ * Путь к этому в репозитории прямой: `.env.example` предписывает владельцу
  * ставить `NODE_ENV=production` на сервере, оба unit-файла
- * (`deploy/agent-team-blue.service:10`, `-green.service:10`) держат
+ * (`deploy/agent-team-blue.service`, `-green.service`) держат
  * `Environment=NODE_ENV=production`. Обычный ops-приём «взять боевое окружение
  * для ручного прогона» — `set -a; . /opt/agent-team/.env; set +a` — экспортирует
  * заодно и `NODE_ENV=production`, и `SITE_INGEST_URL`/`SITE_INGEST_TOKEN`. Это

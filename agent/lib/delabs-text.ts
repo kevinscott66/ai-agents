@@ -24,7 +24,7 @@ const DEFAULT_TZ = "Europe/Moscow";
  * августа» здесь. Считаем по Москве всегда.
  *
  * Аудит 2026-08-28: читалось через `??`, то есть пустую строку значение
- * проходило насквозь. А `.env.example:150` документирует ровно `DELABS_TZ=`
+ * проходило насквозь. А `.env.example` документирует ровно `DELABS_TZ=`
  * с подписью «Пусто = Europe/Moscow», и `EnvironmentFile=` (три юнита:
  * daily-draft, weekly-draft, approve-poll) на пустом ключе даёт пустую
  * строку, а не undefined — этот же класс уже ловили в `admin-commands.ts`.

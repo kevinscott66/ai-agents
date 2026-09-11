@@ -681,8 +681,9 @@ const SETTING_SOURCES: never[] = [];
  * ровно один — явно переданный пустой `allowedTools`.
  *
  * Аудит 2026-08-21: тот же набор игнорировал `WEB_SEARCH_ENABLED`. Raw-путь
- * спрашивает разрешения (`tool-loop.ts:294` → `webSearchTool()`, null пока
- * переменная не "true"), а дефолт — выключено (`.env.example:123` пуст).
+ * спрашивает разрешения (в `tool-loop.ts` — вызов `webSearchTool()`, null
+ * пока переменная не "true"), а дефолт — выключено (строка
+ * `WEB_SEARCH_ENABLED=` в `.env.example` пуста).
  * Замер при незаданной переменной: raw даёт web_search — false, SDK-путь
  * даёт WebSearch,WebFetch. На проде работает именно SDK-путь, то есть
  * выключатель оператора не выключал ничего, а `WEB_SEARCH_ALLOWED_DOMAINS`

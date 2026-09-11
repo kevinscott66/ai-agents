@@ -411,7 +411,7 @@ async function runBackupUnlocked(
   // 1) DB snapshot via VACUUM INTO.
   try {
     // Аудит 2026-08-27: было `process.env.MEMORY_DB_PATH ?? join(...)`. `??`
-    // ловит только ОТСУТСТВУЮЩУЮ переменную, а `.env.example:55` ставит её
+    // ловит только ОТСУТСТВУЮЩУЮ переменную, а `.env.example` ставит её
     // пустой. Пустой путь давал `fs.existsSync("") === false` — и ночной
     // снапшот БД молча пропускался КАЖДУЮ ночь, оставляя одну строку
     // `db source not found: ` в логах. Разбор — общий с `lib/db.ts`.
@@ -490,8 +490,8 @@ async function runBackupUnlocked(
   // старте, незачем.
   try {
     // Аудит 2026-08-28: переменная читалась через `??` — та же ошибка, что
-    // строкой 365 разобрана для MEMORY_DB_PATH, и в том же файле.
-    // `.env.example:56` ставит переменную пустой, `existsSync("")` ложно, и
+    // разобрана выше для `MEMORY_DB_PATH`, в шаге снапшота БД этого же файла.
+    // `.env.example` ставит переменную пустой, `existsSync("")` ложно, и
     // архив вики пропускался КАЖДУЮ ночь. Разбор — общий с `lib/memory.ts`,
     // иначе бэкап и писатель разъедутся в другую сторону.
     const wikiDir = resolveMemoryDir(process.env.MEMORY_DIR);

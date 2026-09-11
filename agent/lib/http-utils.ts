@@ -480,8 +480,8 @@ const LOOPBACK_PEERS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 /**
  * Ключ анонимного ведра — адрес клиента.
  *
- * За nginx (`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for`,
- * agent/docs/DEPLOY.md:42) сокет всегда 127.0.0.1, поэтому по peer-адресу
+ * За nginx (`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for` —
+ * блок про nginx в agent/docs/DEPLOY.md) сокет всегда 127.0.0.1, поэтому по peer-адресу
  * лимитировать бессмысленно: всё сольётся в одно ведро. Но и первому элементу
  * XFF верить нельзя — `$proxy_add_x_forwarded_for` ДОПИСЫВАЕТ remote_addr к
  * тому, что прислал клиент, то есть начало списка полностью подконтрольно

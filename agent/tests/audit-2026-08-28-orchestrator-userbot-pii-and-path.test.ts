@@ -9,8 +9,10 @@
  *     где их видит любой, у кого есть доступ к логам VPS. Боевой путь ровно
  *     это уже не делает — `orchestrator/message-handler.ts:486,805` пишет
  *     `redactText(text)`; здесь остался последний экземпляр.
- *     `.claude/memory/notes/pii-data-flow-2026-05-28.md:36` утверждает, что
- *     файл уже переведён на redactText — заметка устарела, перевода не было.
+ *     Заметка `.claude/memory/notes/pii-data-flow-2026-05-28.md` (строка
+ *     таблицы «Where it's redacted at egress / log» про orchestrator-userbot.ts)
+ *     утверждает, что файл уже переведён на redactText, — заметка устарела,
+ *     перевода не было.
  *
  *  2. `const SESSION_PATH = "/Users/dobropalm/programs/ai_agents/agent/.session"`.
  *     Абсолютный путь машины разработчика в файле, который лежит в репозитории

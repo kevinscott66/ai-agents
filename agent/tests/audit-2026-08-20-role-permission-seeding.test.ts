@@ -19,7 +19,7 @@
  *    по построению — ровно в том случае, который на проде сломан.
  *
  * Существующий сторож эту дыру не видит: `unseededActionTypes()`
- * (`permissions.ts:365-371`) делает `SELECT DISTINCT action_type` и считает
+ * (`permissions.ts`) делает `SELECT DISTINCT action_type` и считает
  * покрытие по типам действий, а не по парам `(agent_key, action_type)`. Пока
  * хоть одна роль имеет SEND_MESSAGE, тип считается засеянным.
  *

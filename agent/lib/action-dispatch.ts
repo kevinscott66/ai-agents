@@ -47,6 +47,7 @@ import {
   updateTaskStatus,
   getTask,
   reconcileExpectedChildren,
+  DIAG_ASSIGNEE,
 } from "./tasks.ts";
 import {
   handleCreateTask,
@@ -1474,7 +1475,7 @@ export async function dispatchAndAudit<T extends ActionType>(
         const task = createTask({
           chatId,
           createdBy: ctx.agentKey,
-          assignedTo: "aieng",
+          assignedTo: DIAG_ASSIGNEE,
           title: `Tool error: ${actionType}`,
           description: res.error,
           inputPayload: {

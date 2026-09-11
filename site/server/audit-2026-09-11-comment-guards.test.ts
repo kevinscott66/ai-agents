@@ -12,7 +12,7 @@
  * Цена измерена, а не предположена. Первый же прогон этого файла нашёл восемь
  * дефектов, накопленных с 2026-08-20: пять протухших координат `index.ts:NNN`
  * в докстроках тестов (`SHARED_LOCAL_KEYS` звали по номеру 141 при настоящем
- * 246, `toStringArray` — по 1285 при 1651) и три чужих докблока — разбор
+ * 246, `toStringArray` — по 1285 при 1651) и три чужих докблока: разбор
  * `tokenMatches` над `ingestSecret`, разбор `lastUnlocksRefreshIso` над
  * `const MAX_DATE_MS`, разбор `digestSearchText` над `digestItemText`.
  *
@@ -61,8 +61,31 @@ function fileLines(p: string): string[] | null {
 const COORD = /([A-Za-z0-9_./-]+\.tsx?):(\d+)(?:-(\d+))?/g;
 const EMPTY_TARGET = new Set(["", "}", "};", "});", "),", ")", ");", "],", "]", "*/", "{", "//"]);
 
+/** Корень репозитория относительно этого пакета: site/server → сюда два шага. */
+const REPO_ROOT = "../..";
+
+/**
+ * Круг 30: ссылки вида `agent/lib/…` не разрешались ВООБЩЕ.
+ *
+ * Комментарии сайта регулярно ссылаются в дерево агента — там живут вторые
+ * половины общих контрактов (`clientIpKey`, `ingestArticle`). Такие ссылки
+ * начинаются с `agent/`, то есть отсчитываются от корня репозитория, а не от
+ * этого пакета; ни один из трёх прежних кандидатов до них не доставал, и
+ * `resolveTarget` молча возвращал null — ровно то же, что «цель не из этого
+ * дерева». Сторож их пропускал, и они гнили дольше всех остальных.
+ *
+ * Замер: три такие ссылки в дереве, две указывали на голую `}`.
+ *
+ * Кандидат добавлен последним: сначала пакет, потом корень. Если однажды в
+ * site/server появится свой каталог `agent`, выиграет местный — читатель
+ * ссылки из site/server имеет в виду прежде всего своё дерево.
+ */
 function resolveTarget(from: string, ref: string): string | null {
-  for (const c of [normalize(join(dirname(from), ref)), normalize(ref)]) {
+  for (const c of [
+    normalize(join(dirname(from), ref)),
+    normalize(ref),
+    normalize(join(REPO_ROOT, ref)),
+  ]) {
     if (fileLines(c)) return c;
   }
   const c = join(ROOT, basename(ref));

@@ -11,8 +11,9 @@
  * `buildHandle().sendMessage`.
  *
  * Это не косметика: ровно на такой протухшей ссылке уже спотыкались —
- * `.claude/memory/notes/pii-data-flow-2026-05-28.md:36` уверял, что
- * orchestrator-userbot.ts переведён на redactText, и перевод пришлось делать
+ * `.claude/memory/notes/pii-data-flow-2026-05-28.md` (таблица «Where it's
+ * redacted at egress / log») уверял, что orchestrator-userbot.ts переведён на
+ * redactText, и перевод пришлось делать
  * заново два аудита спустя (PR #822). Имя символа не двигается вместе с
  * файлом, номер строки двигается всегда.
  *

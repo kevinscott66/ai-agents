@@ -31,7 +31,7 @@
  * Круг 28: пустая строка между двумя докблоками ничего не меняет — tsserver
  * так же отдаёт последний, — а первая версия проверки смотрела только на
  * соседние строки и такую пару пропускала. Нашлось трое: докблок удалённой
- * `WEB_TOOLS` в lib/agent-sdk-runtime.ts, объяснение `resolveUserbotHandle` в
+ * WEB_TOOLS в lib/agent-sdk-runtime.ts (имя без кавычек — символа нет), объяснение `resolveUserbotHandle` в
  * lib/action-dispatch.ts (символ уехал за `DELEGATE_REPLY_MAX`) и заметка про
  * копию резолвинга путей в lib/memory-async.ts.
  *

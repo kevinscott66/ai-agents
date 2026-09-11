@@ -37,7 +37,7 @@ const REQUEST_TIMEOUT_MS = 5000;
  * NODE_ENV. Настоящая экспортированная переменная бьёт дефолт bun'а —
  * `NODE_ENV=production bun test` давал NODE_ENV === "production", и гейт
  * снимался целиком. А ставить NODE_ENV=production на сервере предписывает
- * `.env.example:83`, и держат оба unit-файла; `set -a; . /opt/agent-team/.env`
+ * строка `NODE_ENV=` в `.env.example`, и держат оба unit-файла; `set -a; . /opt/agent-team/.env`
  * экспортирует его вместе с боевыми SITE_INGEST_URL/TOKEN. Это ровно условия
  * T-743, восстановленные одной переменной. Признак теперь ставит preload
  * тест-раннера — см. test-run-marker.ts.

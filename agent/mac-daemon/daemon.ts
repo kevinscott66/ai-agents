@@ -14,7 +14,8 @@
 import { resolve as pathResolve, dirname } from "node:path";
 import { realpathSync, existsSync, lstatSync, mkdirSync } from "node:fs";
 import { bridgeSecretTransportError } from "./bridge-url.ts";
-import { cancelRun, killAll, type KillableChild } from "./kill.ts";
+import { cancelRun, killAll, killChild, registerChild, type KillableChild } from "./kill.ts";
+import { feedPrompt } from "./run-io.ts";
 import { parseBridgeMsg, toPermissionMode, type RunMsg } from "./protocol.ts";
 import { sanitizeChildEnv, resolveClaudeBin } from "./child-env.ts";
 import { createAuthGate } from "./auth-gate.ts";
@@ -187,7 +188,8 @@ async function handleRun(ws: WebSocket, msg: RunMsg): Promise<void> {
       // SEC-audit: the spawned `claude` must not inherit daemon credentials.
       // Authentication belongs to the local Claude installation/keychain; only
       // the explicit non-secret runtime environment crosses this boundary.
-      env: sanitizeChildEnv(process.env),
+      // `PWD` выводится из cwd, а не наследуется: см. разбор в child-env.ts.
+      env: sanitizeChildEnv(process.env, allowedProject),
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
@@ -202,20 +204,23 @@ async function handleRun(ws: WebSocket, msg: RunMsg): Promise<void> {
     );
     return;
   }
-  activeChildren.set(id, child);
-  // Feed prompt on stdin and close.
-  try {
-    const w = child.stdin as unknown as WritableStreamDefaultWriter<Uint8Array>;
-    const enc = new TextEncoder();
-    if (typeof (child.stdin as any).write === "function") {
-      (child.stdin as any).write(enc.encode(prompt));
-      (child.stdin as any).end();
-    } else {
-      await w.write(enc.encode(prompt));
-      await w.close();
-    }
-  } catch (e) {
-    console.error("[daemon] stdin write failed:", e);
+  // Занять id ДО подачи промпта: карта — единственная дорога к процессу, и
+  // прогон, которого в ней нет, не достанет ни `cancel`, ни `stop`.
+  if (!registerChild(activeChildren as Map<string, KillableChild>, id, child as KillableChild)) {
+    // id уже занят живым прогоном. Убираем свежий процесс — он никому не
+    // виден — и отвечаем мосту отказом вместо молчаливой потери первого.
+    void killChild(child as KillableChild);
+    sendResult(ws, id, false, undefined, "duplicate_run_id");
+    return;
+  }
+  // Промпт на stdin. Отказ здесь — отказ прогона: без промпта `claude --print`
+  // не выходит сам, и молчаливое продолжение доводило дело до `mac_timeout`.
+  const fed = await feedPrompt(child as { stdin: unknown }, prompt);
+  if (!fed.ok) {
+    activeChildren.delete(id);
+    void killChild(child as KillableChild);
+    sendResult(ws, id, false, undefined, fed.error);
+    return;
   }
 
   let stderrTail = "";

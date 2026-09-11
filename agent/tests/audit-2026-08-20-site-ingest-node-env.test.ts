@@ -10,9 +10,9 @@
  *   NODE_ENV=production bun test  → NODE_ENV === "production"  (гейт СНЯТ)
  *
  * Bun'овская загрузка `.env` фикс не ломала — ломала настоящая переменная. Путь
- * к ней прямой: `.env.example:83` предписывает владельцу ставить
- * `NODE_ENV=production` на сервере, `deploy/agent-team-blue.service:10` и
- * `-green.service:10` держат `Environment=NODE_ENV=production`. Обычный
+ * к ней прямой: `.env.example` предписывает владельцу ставить
+ * `NODE_ENV=production` на сервере, `deploy/agent-team-blue.service` и
+ * `-green.service` держат строку `Environment=NODE_ENV=production`. Обычный
  * ops-приём «взять боевое окружение для ручного прогона» —
  * `set -a; . /opt/agent-team/.env; set +a` — экспортирует разом и
  * `NODE_ENV=production`, и `SITE_INGEST_URL`/`SITE_INGEST_TOKEN`. Это ровно
