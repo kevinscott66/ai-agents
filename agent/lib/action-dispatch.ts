@@ -1012,6 +1012,10 @@ export async function dispatchAction<T extends ActionType>(
         // T-701. Мёртвая ветка: тула у действия нет, а движок self-healing
         // зовёт createDiagnosticTask() напрямую (ниже, T-704). Подробнее — в
         // заголовке dispatch/diagnostic-action.ts.
+        //
+        // Аудит 2026-09-11: мёртвой она стала не сама собой. Оживлял её
+        // self-diag-ретрай, чей разбор принимал любое имя из ACTION_TYPES;
+        // теперь он отвергает ключи DISPATCH_ONLY_ACTIONS.
         const p = payload as PayloadByType["CREATE_DIAGNOSTIC_TASK"];
         const res = handleCreateDiagnosticTask(p, {
           agentKey: ctx.agentKey,

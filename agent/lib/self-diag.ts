@@ -38,6 +38,7 @@ import {
   payloadForcesApproval,
   type ActionType,
   ACTION_TYPES,
+  DISPATCH_ONLY_ACTIONS,
 } from "./permissions.ts";
 import { callAnthropic } from "./anthropic-client.ts";
 import type { DispatchCtx } from "./action-dispatch.ts";
@@ -215,6 +216,11 @@ export function parseAiengResponse(text: string): AiengFixResponse | null {
     const r = obj as AiengFixResponse;
     if (r.giveup === true) return { giveup: true, reason: r.reason };
     if (!r.action || !ACTION_TYPE_SET.has(String(r.action))) return null;
+    // Аудит 2026-09-11: ретрай вправе называть только то, что модель могла
+    // позвать тулой сама. Иначе отчёт о починке — обход отсутствия тулы:
+    // dispatch-only действие уезжало в динамический dispatchAndAudit ниже.
+    // Подробности и проверки — tests/audit-2026-09-11-selfdiag-dispatch-only.test.ts.
+    if (DISPATCH_ONLY_ACTIONS[String(r.action)] !== undefined) return null;
     if (!r.payload || typeof r.payload !== "object") return null;
     return { action: r.action, payload: r.payload, reason: r.reason };
   } catch {
