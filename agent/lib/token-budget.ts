@@ -159,11 +159,22 @@ export function getDailyUsage(
 
 /**
  * Resolve the daily input-token budget for `agentKey`.
+ *
+ * Ключ сперва приводится к владельцу (`budgetOwner`), и цепочка идёт по нему, а
+ * не по переданному: производный `design:svg-fallback` тратит потолок роли
+ * `design`, а не заводит себе второй.
+ *
  * Priority:
  *  1. budget_settings DB row (T-527, Mini App override)
- *  2. TOKEN_BUDGET_<UPPER(agentKey)> env
+ *  2. `TOKEN_BUDGET_<OWNER>` env, где OWNER — владелец в верхнем регистре и с
+ *     любым не-`[A-Z0-9]` заменённым на `_`
  *  3. TOKEN_BUDGET_DEFAULT env
- *  4. Infinity (no limit)
+ *  4. MALFORMED_ENV_BUDGET, если валидного значения нет НИ ОДНОГО, но хотя бы
+ *     одно из двух env задано мусором: оператор явно хотел лимит
+ *  5. Infinity (no limit)
+ *
+ * Мусор на шаге 2 не обрывает цепочку и не отменяет шаг 3 — иначе опечатка в
+ * ключе роли поднимала бы ей лимит выше заданного дефолта.
  */
 export function getBudget(agentKey: string): number {
   // Аудит 2026-08-12: производный ключ (`design:svg-fallback`) не совпадал ни
@@ -220,6 +231,31 @@ export function getBudget(agentKey: string): number {
 }
 
 /**
+ * Консервативный потолок на случай испорченного значения в env: не Infinity и
+ * не ноль. Обоснование — над `parseBudgetEnv` ниже, там же он и выставляется.
+ */
+const MALFORMED_ENV_BUDGET = 100_000;
+const warnedBudgetKeys = new Set<string>();
+
+interface BudgetEnvValue {
+  /** Значение, которое стоит применить, если дальше по цепочке ничего нет. */
+  value: number;
+  /** true — значение задано, но не парсится. Не «найдено», а «испорчено». */
+  malformed: boolean;
+  /** Сырое значение — для сообщения в лог. */
+  raw: string;
+}
+
+function warnBudgetEnv(envKey: string, raw: string, action: string): void {
+  if (warnedBudgetKeys.has(envKey)) return;
+  warnedBudgetKeys.add(envKey);
+  log.warn(
+    `[budget] ${envKey}=${JSON.stringify(raw)} — не число; ${action}. ` +
+      `Исправьте значение.`,
+  );
+}
+
+/**
  * Аудит 2026-08-09: испорченное значение читалось как «лимита нет».
  *
  * Было `const n = Number(raw); if (!Number.isFinite(n) || n <= 0) return
@@ -250,27 +286,6 @@ export function getBudget(agentKey: string): number {
  *          malformed («задано, но не число — применяй только если больше
  *          ничего нет»)
  */
-const MALFORMED_ENV_BUDGET = 100_000;
-const warnedBudgetKeys = new Set<string>();
-
-interface BudgetEnvValue {
-  /** Значение, которое стоит применить, если дальше по цепочке ничего нет. */
-  value: number;
-  /** true — значение задано, но не парсится. Не «найдено», а «испорчено». */
-  malformed: boolean;
-  /** Сырое значение — для сообщения в лог. */
-  raw: string;
-}
-
-function warnBudgetEnv(envKey: string, raw: string, action: string): void {
-  if (warnedBudgetKeys.has(envKey)) return;
-  warnedBudgetKeys.add(envKey);
-  log.warn(
-    `[budget] ${envKey}=${JSON.stringify(raw)} — не число; ${action}. ` +
-      `Исправьте значение.`,
-  );
-}
-
 function parseBudgetEnv(envKey: string): BudgetEnvValue | null {
   const raw = process.env[envKey];
   if (raw === undefined || raw.trim() === "") return null;

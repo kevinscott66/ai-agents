@@ -137,6 +137,23 @@ describe("отказ исполнения ДО диспатча закрывае
     expect(errorOf(actionId)).toContain("blocked at execution");
   });
 
+  test("тип действия, которого в коде больше нет", async () => {
+    // Четвёртый отказ до диспатча, и он старше трёх остальных: `isActionType`
+    // стоит самой первой строкой `executeApproved`. Заявка, пережившая
+    // удаление или переименование типа (а типы тут и удаляли, и
+    // переименовывали), доходит до «Approve» и падает здесь.
+    const { actionId, approvalId } = gated({
+      requestedBy: "smm",
+      actionType: "SEND_SMOKE_SIGNAL",
+    });
+    const approved = decideApproval(approvalId, "approved", "admin");
+
+    await expect(executeApproved(approved)).rejects.toThrow(/unknown action_type/i);
+
+    expect(statusOf(actionId)).toBe("forbidden");
+    expect(errorOf(actionId)).toContain("unknown action_type");
+  });
+
   test("закрытую строку повторный отказ не переписывает", async () => {
     const { actionId, approvalId } = gated({
       requestedBy: "smm",

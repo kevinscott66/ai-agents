@@ -1514,8 +1514,9 @@ export function runMigrations(db: Database): void {
   ensureMigrationsTable(db);
   const has = db.prepare(`SELECT 1 FROM schema_migrations WHERE name = ?`);
   for (const m of MIGRATIONS) {
-    // Быстрый путь: не брать write-лок на четыре десятка уже применённых
-    // миграций при каждом старте. Авторитетная проверка — внутри applyMigration.
+    // Быстрый путь: не брать write-лок на каждую уже применённую миграцию при
+    // каждом старте — а их к этому моменту почти весь список.
+    // Авторитетная проверка — внутри applyMigration.
     if (has.get(m.name)) continue;
     applyMigration(db, m);
   }

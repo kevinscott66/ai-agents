@@ -25,6 +25,11 @@ export const db = new Database(DB_PATH, { create: true });
 // while remaining crash-safe, large negative cache_size = KiB, mmap for fast
 // page access, MEMORY temp store and a busy_timeout so writers don't bail
 // immediately under contention.
+//
+// Последний в списке — не про скорость: `foreign_keys` в SQLite по умолчанию
+// ВЫКЛЮЧЕН и включается на каждом соединении отдельно. Схема объявляет
+// REFERENCES (`role_runtime_queue.task_id` → `tasks.id` и другие), и без этой
+// строки они были бы документацией, а не ограничением.
 db.exec("PRAGMA journal_mode = WAL;");
 db.exec("PRAGMA synchronous = NORMAL;");
 db.exec("PRAGMA cache_size = -64000;");

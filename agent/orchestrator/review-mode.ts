@@ -71,7 +71,13 @@ export interface ReviewModeResult {
    * строят результат вручную и про обрезку ничего не знают.
    */
   truncated?: boolean;
-  /** PR numbers reviewed, in list order. */
+  /**
+   * Номера PR, которые прогон ВЗЯЛ в работу, в порядке выдачи `gh pr list`, —
+   * то есть поимённая версия `scanned`, а не «разобранные». Сколько из них
+   * дошло до комментария, знают только `results` и {@link countReviewOutcomes};
+   * путать эти два списка — ровно та ошибка, из-за которой заведено поле
+   * `scanned` (абзац выше).
+   */
   pr_numbers: number[];
   /**
    * Исход разбора каждого PR.
@@ -89,8 +95,14 @@ export interface ReviewModeResult {
    */
   results: ReviewedPr[];
   /**
-   * Сколько PR разбор уронил (`outcome.ok === false`). Необязательное — как и
-   * `truncated`, старые вызовы `formatReviewSummary` строят результат вручную.
+   * Сколько PR прогон считает проваленными. Не то же, что `outcome.ok === false`:
+   * {@link countReviewOutcomes} добавляет сюда и потерянный комментарий
+   * (`COMMENT_LOST` — `comment_failed`, `validation_failed`), потому что разбор
+   * без внешнего следа неотличим от несделанного. Обоснование — у самого
+   * `COMMENT_LOST` ниже.
+   *
+   * Необязательное — как и `truncated`, старые вызовы `formatReviewSummary`
+   * строят результат вручную.
    */
   failed?: number;
 }

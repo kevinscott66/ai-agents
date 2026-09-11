@@ -233,10 +233,7 @@ export function replyForTurnError(err: unknown): string {
   return "Не смог обработать сообщение: внутренняя ошибка, она записана в лог. Повтори запрос или позови человека.";
 }
 
-/**
- * READ_FILE (P1): распознать текстовый документ-вложение по mime ИЛИ расширению
- * имени файла (Telegram часто шлёт application/octet-stream для .md/.csv/.log).
- */
+/** Расширения, по которым документ считается текстовым, — см. `isTextDocument`. */
 const TEXT_DOC_EXT =
   /\.(md|markdown|txt|text|json|jsonl|csv|tsv|log|ya?ml|xml|ts|tsx|js|jsx|py|sh|sql|html?|css|ini|toml|env|conf|cfg)$/i;
 const TEXT_DOC_MIME = new Set<string>([
@@ -295,6 +292,10 @@ export function isImageDocument(d: unknown): boolean {
   return normalizeMime((d as { mime_type?: unknown }).mime_type).startsWith("image/");
 }
 
+/**
+ * READ_FILE (P1): распознать текстовый документ-вложение по mime ИЛИ расширению
+ * имени файла (Telegram часто шлёт application/octet-stream для .md/.csv/.log).
+ */
 export function isTextDocument(d: unknown): boolean {
   if (!d || typeof d !== "object") return false;
   const doc = d as { mime_type?: unknown; file_name?: unknown };
@@ -536,7 +537,12 @@ export function registerMessageHandler(
       //   - человек упомянул нас → отвечаем;
       //   - Lead упомянул нас (handoff) → отвечаем, если мы не Lead;
       //   - другой наш бот упомянул нас → игнор (loops prevention);
-      //   - никого не упомянули и мы Lead → отвечаем.
+      //   - никого из наших не упомянули, мы Lead И пишет НЕ наш бот →
+      //     отвечаем. Последнее условие — не деталь: без него Дирижёр
+      //     отзывался бы на любую безадресную реплику своих же одиннадцати,
+      //     а его собственный ответ так же безадресен. Это замкнутая петля
+      //     платных ходов, и защита от неё живёт только здесь: `mentioned`
+      //     её не ловит (упоминания нет вовсе).
       let shouldReply = false;
       if (mentioned) {
         if (!fromOurBot) shouldReply = true;

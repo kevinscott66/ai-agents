@@ -9,6 +9,7 @@
  *
  * evaluateGate() сводит оба в одно из трёх решений: allow | deny | approval.
  */
+import type { Database } from "bun:sqlite";
 import { db } from "./db.ts";
 import { log } from "./log.ts";
 import { logAction } from "./audit.ts";
@@ -717,9 +718,9 @@ interface AgentStateRow {
  * цепочки. Глотаем ровно «нет таблицы»; всё остальное считаем «выключен»:
  * недоступность реестра статусов — не повод действовать.
  */
-export function isAgentDisabled(agentKey: string): boolean {
+export function isAgentDisabled(agentKey: string, database: Database = db): boolean {
   try {
-    const row = db
+    const row = database
       .prepare(`SELECT status FROM agent_states WHERE agent_key = ?`)
       .get(agentKey) as AgentStateRow | undefined;
     return row?.status === "disabled";
@@ -744,18 +745,36 @@ export function isAgentDisabled(agentKey: string): boolean {
  * `disabled`, но обратимая из Mini App одним кликом (`/resume`), и она не
  * трогает `status`, которым управляет только perm через CHANGE_AGENT_STATUS.
  *
- * Ошибку чтения глотаем в «не на паузе»: сюда попадаем только после успешного
- * чтения той же строки в isAgentDisabled, так что реальный сбой БД уже привёл
- * бы к deny выше — молча глушить все 12 ролей на второй попытке незачем.
+ * Аудит 2026-09-11: ошибка чтения глоталась в «не на паузе» целиком, и
+ * оправдывал это порядок вызовов — «сюда попадаем только после успешного чтения
+ * той же строки в isAgentDisabled, так что реальный сбой БД уже привёл бы к deny
+ * выше». Оба сегодняшних вызывающих (`agentStopReason`, `evaluateGate`) и правда
+ * спрашивают disabled первым, так что дыра ненаблюдаема. Но это копия правила:
+ * безопасность ЭТОЙ функции вынесена в порядок вызова у ДРУГОЙ, а порядок не
+ * стережёт ни компилятор, ни тест. Третий вызывающий, которому нужна только
+ * пауза, получил бы fail-open — и поставленная владельцем пауза исчезала бы
+ * ровно в ту минуту, когда база недоступна.
+ *
+ * Разбираем ошибку так же, как сосед, и зависимость от порядка пропадает.
+ * «Нет таблицы» и «нет колонки» — не сбой, а схема старше фичи: паузы в ней не
+ * существует, честный ответ «не на паузе». Всё прочее (SQLITE_BUSY, залоченный
+ * файл, битая страница) — «на паузе»: недоступность реестра состояний не повод
+ * действовать. Двенадцать ролей при этом молчат не тихо — рядом ERROR в лог.
  */
-export function isAgentPaused(agentKey: string): boolean {
+export function isAgentPaused(agentKey: string, database: Database = db): boolean {
   try {
-    const row = db
+    const row = database
       .prepare(`SELECT paused FROM agent_states WHERE agent_key = ?`)
       .get(agentKey) as { paused: number | null } | undefined;
     return row?.paused === 1;
-  } catch {
-    return false;
+  } catch (e) {
+    const msg = String((e as Error)?.message ?? e);
+    if (/no such (table|column)/i.test(msg)) return false;
+    log.error("[permissions] agent_states недоступна — считаем агента на паузе", {
+      agentKey,
+      error: msg,
+    });
+    return true;
   }
 }
 
