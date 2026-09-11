@@ -51,7 +51,7 @@ const base = {
 };
 
 /** Что назвал каждый запрос: сколько поисков ему разрешили. */
-type Seen = { maxUses: number | null; isFinal: boolean };
+type Seen = { maxUses: number | null; isFinal: boolean; choice: string | null };
 
 /**
  * Модель, которая на каждой итерации тратит `spend` поисков и просит
@@ -66,7 +66,11 @@ function searcher(spend: number, seen: Seen[], stop: "tool_use" | "pause_turn") 
           (t: any) => t.type === "web_search_20250305",
         );
         const isFinal = req.tool_choice?.type === "none" || !req.tools;
-        seen.push({ maxUses: ws ? ws.max_uses : null, isFinal });
+        seen.push({
+          maxUses: ws ? ws.max_uses : null,
+          isFinal,
+          choice: req.tool_choice?.type ?? null,
+        });
         const usage = {
           input_tokens: 0,
           output_tokens: 0,
@@ -113,9 +117,18 @@ describe("бюджет веб-поиска считается на прогон,
   test("сумма разрешённого за прогон не превышает лимит", async () => {
     const seen: Seen[] = [];
     await runWithTools({ ...base, anthropic: searcher(1, seen, "tool_use") } as never);
-    // До правки это была сумма 3 × (число запросов) — не меньше 42.
-    const granted = seen.reduce((n, s) => n + (s.maxUses ?? 0), 0);
+    // Считаем по запросам, в которых вызов вообще возможен. До правки это была
+    // сумма 3 × (число запросов) — не меньше 42.
+    const granted = seen
+      .filter((s) => !s.isFinal)
+      .reduce((n, s) => n + (s.maxUses ?? 0), 0);
     expect(granted).toBeLessThanOrEqual(3 + 2 + 1);
+    // Финализирующий запрос в эту сумму не входит по праву, а не по недосмотру:
+    // определение инструмента там нужно, чтобы API принял server_tool_use-блоки
+    // из истории, а звать его заново запрещает `tool_choice:"none"`.
+    const final = seen.filter((s) => s.isFinal);
+    expect(final.length).toBe(1);
+    expect(final[0]!.choice).toBe("none");
   });
 
   test("паузы серверного поиска бюджет не обнуляют", async () => {
@@ -129,11 +142,59 @@ describe("бюджет веб-поиска считается на прогон,
     for (const s of inLoop.slice(1)) expect(s.maxUses).toBeNull();
   });
 
-  test("финализирующий вызов идёт с тем же остатком, а не со свежим", async () => {
+  test("финализирующий вызов идёт с остатком, а не со свежим бюджетом", async () => {
     const seen: Seen[] = [];
     await runWithTools({ ...base, anthropic: searcher(3, seen, "tool_use") } as never);
     const final = seen.filter((s) => s.isFinal);
-    for (const s of final) expect(s.maxUses).toBeNull();
+    expect(final.length).toBe(1);
+    // Свежих трёх финализатору не выдают: бюджет прогона уже израсходован.
+    expect(final[0]!.maxUses).toBe(1);
+  });
+});
+
+/**
+ * Вторая половина той же правки, найденная перечитыванием: нулевой остаток
+ * значит ДВЕ разные вещи, а код обрабатывал их одинаково.
+ *
+ * `webSearchTool(0)` возвращает null — и это верно в цикле, где ноль значит
+ * «больше нельзя». Но финализирующий запрос шлёт ту же историю сообщений, в
+ * которой лежат server_tool_use-блоки отработавшего поиска, а запрос с такими
+ * блоками и без определения инструмента API отбивает 400 — тем же способом,
+ * каким отбивал запрос вовсе без `tools` (см. комментарий у finalReq). То есть
+ * прогон, потративший весь бюджет, гарантированно терял финализацию и
+ * заканчивался заглушкой «(достигнут предел шагов…)» — ровно тем, ради
+ * устранения чего финализация и существует. Новых поисков определение при
+ * этом не разрешает: `tool_choice:"none"`.
+ */
+describe("нулевой остаток: «не было бюджета» и «бюджет потрачен» — разное", () => {
+  test("поиск не запускался ни разу — определения в финале нет", async () => {
+    process.env[MAX] = "0";
+    const seen: Seen[] = [];
+    await runWithTools({ ...base, anthropic: searcher(0, seen, "tool_use") } as never);
+    // Бюджета не было с самого начала: ни в цикле, ни в финале приклеивать
+    // нечего, и server_tool_use-блоков в истории тоже неоткуда взяться.
+    for (const s of seen) expect(s.maxUses).toBeNull();
+  });
+
+  test("бюджет цел, поисков не было — финал получает остаток как есть", async () => {
+    const seen: Seen[] = [];
+    await runWithTools({ ...base, anthropic: searcher(0, seen, "tool_use") } as never);
+    const final = seen.filter((s) => s.isFinal);
+    expect(final.length).toBe(1);
+    expect(final[0]!.maxUses).toBe(3);
+  });
+
+  test("бюджет израсходован — определение всё равно уезжает", async () => {
+    const seen: Seen[] = [];
+    // Первый же запрос выбирает весь бюджет; дальше цикл идёт без поиска.
+    await runWithTools({ ...base, anthropic: searcher(3, seen, "pause_turn") } as never);
+    const inLoop = seen.filter((s) => !s.isFinal);
+    for (const s of inLoop.slice(1)) expect(s.maxUses).toBeNull();
+    const final = seen.filter((s) => s.isFinal);
+    expect(final.length).toBe(1);
+    // Не null: в истории лежат server_tool_use-блоки, без определения запрос
+    // не пройдёт. Минимальная единица — потому что тратить всё равно нечего.
+    expect(final[0]!.maxUses).toBe(1);
   });
 });
 

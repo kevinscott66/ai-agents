@@ -663,14 +663,21 @@ export async function runWithTools(opts: RunWithToolsOpts): Promise<string> {
     };
     if (toolsForCall && toolsForCall.length > 0) {
       // web_search тоже возвращаем: если он отработал в цикле, в messages лежат
-      // server_tool_use-блоки, и его определение в запросе так же обязательно.
-      // Остаток тот же, что и в цикле: финализирующий вызов идёт с
-      // `tool_choice:"none"`, но определение инструмента в запросе обязано
-      // быть — иначе API не примет server_tool_use-блоки из истории. Нулевой
-      // остаток даёт null, и тогда определения нет вовсе; это верно, потому
-      // что при нуле поиск в этом прогоне ни разу и не приклеивался.
+      // server_tool_use-блоки, и его определение в запросе так же обязательно —
+      // иначе API не примет историю. Новых поисков это не разрешает:
+      // финализирующий вызов идёт с `tool_choice:"none"`.
+      //
+      // Отсюда поправка к остатку. Нулевой остаток значит ДВЕ разные вещи, и
+      // прежний комментарий здесь признавал только одну. «Бюджета не было
+      // вовсе» — поиск ни разу не приклеивался, server_tool_use-блоков в
+      // истории нет, определение не нужно. «Бюджет израсходован в цикле» —
+      // блоки в истории ЕСТЬ, и запрос без определения отбивается 400, то есть
+      // финализация снова падала бы ВСЕГДА, ради устранения чего её и
+      // добавляли. Различает эти случаи `webSearchUsed`: раз хоть один поиск
+      // состоялся, определение обязано уехать, и остаток поднимаем до единицы.
+      const wsRemaining = webSearchBudget - webSearchUsed;
       const finalWs = webCapabilityAllowed("WebSearch", opts.capabilityAllowlist)
-        ? webSearchTool(webSearchBudget - webSearchUsed)
+        ? webSearchTool(webSearchUsed > 0 ? Math.max(1, wsRemaining) : wsRemaining)
         : null;
       finalReq.tools = finalWs ? [...toolsForCall, finalWs] : toolsForCall;
       finalReq.tool_choice = { type: "none" };
