@@ -154,7 +154,7 @@ export interface RespondAsOpts {
    * разделяемый ВСЕМИ ветками рекурсии (одна ссылка). `visited` ограничивает
    * только линейный путь; budget режет суммарный fan-out при ветвлении.
    */
-  budget?: { n: number; max: number };
+  budget?: HandoffBudget;
   /**
    * Вложения хода пользователя (картинки, текстовые документы). Делегат должен
    * видеть их так же, как видел агент, которого позвали первым: в истории от
@@ -276,6 +276,22 @@ export function normalizeHandoffOutcome(
   return { status: "failed", reason: "delegate returned no result" };
 }
 
+/**
+ * Общий на весь ход пользователя объект вызовов ролей.
+ *
+ * `n`/`max` — потолок суммарного fan-out (S1). `invoked` — КАКИЕ роли уже
+ * отработали в этом ходе; без него каскад по @-упоминаниям в итоговом тексте
+ * агента запускал роль, которую тот же ход уже позвал через DELEGATE_TO_ROLE:
+ * второй платный прогон и второе сообщение в чате на одно сообщение
+ * пользователя. Число повторы не ловит — нужен именно список.
+ * См. tests/audit-2026-09-11-cascade-repeats-delegate.test.ts.
+ */
+export interface HandoffBudget {
+  n: number;
+  max: number;
+  invoked?: Set<string>;
+}
+
 export async function respondAs(
   opts: RespondAsOpts,
   deps: HandoffDeps,
@@ -328,6 +344,10 @@ export async function respondAs(
     };
   }
   budget.n += 1;
+  // Список ролей хода ведётся ровно там же, где счётчик: одно событие — одна
+  // запись, разойтись им негде. Пишется ДО хода делегата, как и счётчик:
+  // намерение позвать роль уже состоялось.
+  (budget.invoked ??= new Set<string>()).add(target.def.key);
   // Build chain extension for the target's own runWithTools call. If no chain
   // was given (legacy callers / direct @-mention path), derive one from visited
   // by inserting triggerAgentKey first, then target.

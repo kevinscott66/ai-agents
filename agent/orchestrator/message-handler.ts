@@ -54,6 +54,7 @@ import {
   MAX_HANDOFF_DEPTH,
   HANDOFF_MAX_INVOCATIONS,
   type HandoffDeps,
+  type HandoffBudget,
 } from "../lib/handoff.ts";
 import { getDiscussionMode } from "../lib/chat-settings.ts";
 import {
@@ -751,7 +752,7 @@ export function registerMessageHandler(
       // ДО runWithTools: делегирования оркестратора — такие же LLM-вызовы, как
       // и каскад по @-упоминаниям ниже, и раньше в потолок не попадали вовсе
       // (счётчик рождался строкой после, уже когда оркестратор отработал).
-      const handoffBudget = { n: 0, max: HANDOFF_MAX_INVOCATIONS };
+      const handoffBudget: HandoffBudget = { n: 0, max: HANDOFF_MAX_INVOCATIONS };
       const reply = await runWithTools({
         anthropic,
         model,
@@ -894,7 +895,16 @@ export function registerMessageHandler(
         // Счётчик тот же, что ушёл в runWithTools выше: делегирования оркестратора
         // уже израсходовали часть запаса, и каскад по упоминаниям продолжает с
         // того же места, а не с нуля.
-        const targets = findHandoffTargets(reply, def.key, bots);
+        // Аудит 2026-09-11: и того же счётчика мало. Роль, которую этот ход уже
+        // позвал через DELEGATE_TO_ROLE, каскад звал ВТОРОЙ раз — итоговый текст
+        // оркестратора её упоминает («передал @delabs_backend_bot»), а `visited`
+        // здесь собирался заново из двух ключей. Выходил второй платный прогон
+        // и второе сообщение в чате на одно сообщение пользователя. Упоминание
+        // в итоге — ссылка на сделанное, а не новое поручение, поэтому отсекаем
+        // по списку уже отработавших ролей (handoff.ts, там же где счётчик).
+        const targets = findHandoffTargets(reply, def.key, bots).filter(
+          (t) => !handoffBudget.invoked?.has(t.def.key),
+        );
         for (const t of targets) {
           void (deps.respondAsImpl ?? respondAs)(
             {

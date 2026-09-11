@@ -170,7 +170,7 @@ export interface RunWithToolsOpts {
    * ExecCtx, чтобы DELEGATE_TO_ROLE отдал его в respondAs, а не заводил свой.
    * См. handoff.ts:HANDOFF_MAX_INVOCATIONS.
    */
-  handoffBudget?: { n: number; max: number };
+  handoffBudget?: import("./handoff.ts").HandoffBudget;
   /** Stage A: triggering Telegram user_id (for MAC_RUN_CLAUDE whitelist). */
   triggerUserId?: string;
   /** T-410: request-id propagated from ingress through every tool call. */

@@ -130,6 +130,7 @@ import {
   type HandoffDeps,
   type HandoffOutcome,
   type RespondAsOpts,
+  type HandoffBudget,
 } from "./handoff.ts";
 import { CHARACTERS } from "../characters/index.ts";
 import type { RunningBot, InputImage, InputDocument } from "./types.ts";
@@ -219,7 +220,7 @@ export interface DispatchCtx {
    * создаёт новое `{n:0,max:16}`. Потолок «16 LLM-вызовов на ход» превращался в
    * 16 на каждую ветку. Теперь ссылка одна на весь ход и её видят оба входа.
    */
-  handoffBudget?: { n: number; max: number };
+  handoffBudget?: HandoffBudget;
   /**
    * Вложения ЭТОГО хода пользователя.
    *
