@@ -18,8 +18,20 @@
  * `cancelOnMac` was added to close. Both are parsed in mac-daemon/protocol.ts.
  *
  * Only one active Mac client is held; a new authenticated connection replaces
- * the previous one. sendToMac() returns a promise that resolves with the
- * accumulated streams + final result, with a 5-minute timeout.
+ * the previous one, and every run still pending on the replaced socket is
+ * rejected with `mac_replaced` — nobody is left waiting on a closed client.
+ *
+ * sendToMac() resolves on the daemon's final `result`. Два уточнения, которых
+ * тут когда-то не было и которые меняют контракт вызывающего:
+ *
+ *  - потоки НЕ накапливаются целиком. В памяти живёт хвост в
+ *    MAC_STREAM_TAIL_BYTES, полные длины считаются отдельно (аудит 2026-08-08,
+ *    см. докстроку константы ниже). Если читателю нужен весь вывод, брать его
+ *    из моста нельзя — его тут больше нет;
+ *  - до таймаута прогон может вообще не начаться: при `pending.size >= max`
+ *    (_readMaxConcurrentRuns) вызывающий получает `mac_busy` сразу. А сам
+ *    таймаут — не константные пять минут, а _readRunTimeoutMs():
+ *    MAC_RUN_TIMEOUT_MS с пятью минутами по умолчанию.
  */
 
 /**

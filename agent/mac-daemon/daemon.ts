@@ -3,8 +3,11 @@
  * client, waits for "run" commands, spawns the `claude` CLI with stdin =
  * prompt, streams stdout/stderr back as chunks, and sends a final "result".
  *
- * Auto-reconnect with backoff 1→2→5→10s. On socket close EVERY live child is
- * retired, not just one: `killAllChildren` walks the `activeChildren` map and
+ * Auto-reconnect with backoff 1→2→5→10s, сбрасываемым на `auth_ok`. Поводом
+ * служит не только событие `close`: молча умерший туннель его не даёт, поэтому
+ * решение «соединение потеряно» вынесено в mac-daemon/reconnect.ts, где у
+ * принудительного закрытия есть запасной срок. Как бы повод ни возник, EVERY
+ * live child is retired, не один: `killAllChildren` walks the `activeChildren` map and
  * each entry goes through `killChild` — SIGINT first, then SIGKILL if it has
  * not exited within KILL_GRACE_MS. Do not read this as a soft kill: a long
  * `claude` run can be cut mid-write when the SSH tunnel flaps, and that is
@@ -19,6 +22,7 @@ import { feedPrompt } from "./run-io.ts";
 import { parseBridgeMsg, toPermissionMode, type RunMsg } from "./protocol.ts";
 import { sanitizeChildEnv, resolveClaudeBin } from "./child-env.ts";
 import { createAuthGate } from "./auth-gate.ts";
+import { createSocketLifecycle } from "./reconnect.ts";
 // Порт в подсказке при старте: раньше литерал 8787 — это HTTP-порт Mini App,
 // а не мост. Оператор по такой подсказке открывал WS к серверу панели, где
 // апгрейда нет, и получал бесконечный реконнект без единого слова про порт.
@@ -295,7 +299,14 @@ const STALE_MS = 2.5 * BRIDGE_PING_MS;
 /** Тикаем вдвое чаще пинга: задержка обнаружения ≤ полпинга. */
 const WATCHDOG_TICK_MS = BRIDGE_PING_MS / 2;
 
-function startWatchdog(ws: WebSocket): void {
+/**
+ * Сколько ждать события `close` после принудительного закрытия, прежде чем
+ * реконнектиться без него. На живом сокете рукопожатие укладывается в
+ * миллисекунды; пять секунд — запас, за которым уже точно никто не ответит.
+ */
+const CLOSE_GRACE_MS = 5_000;
+
+function startWatchdog(forceClose: () => void): void {
   stopWatchdog();
   watchdog = setInterval(() => {
     if (Date.now() - lastBridgeMsg > STALE_MS) {
@@ -303,9 +314,10 @@ function startWatchdog(ws: WebSocket): void {
         `[daemon] no bridge traffic for >${STALE_MS}ms — stale connection, forcing reconnect`,
       );
       stopWatchdog();
-      try {
-        ws.close();
-      } catch {}
+      // Не `ws.close()` напрямую: закрывающее рукопожатие уходит в тот же
+      // мёртвый туннель, и события `close` можно не дождаться вовсе. Запасной
+      // срок взводит reconnect.ts.
+      forceClose();
     }
   }, WATCHDOG_TICK_MS);
 }
@@ -324,20 +336,39 @@ function connect(): void {
   const gate = createAuthGate();
   console.log(`[daemon] connecting → ${url}`);
   let ws: WebSocket;
+  // Один реконнект на одно соединение, кто бы его ни объявил: обработчик
+  // `close`, запасной срок watchdog'а или упавший конструктор.
+  const life = createSocketLifecycle({
+    close: () => ws.close(),
+    setTimer: (fn, ms) => setTimeout(fn, ms),
+    clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
+    graceMs: CLOSE_GRACE_MS,
+    onGiveUp: (reason) => {
+      console.log(`[daemon] connection lost (${reason})`);
+      stopWatchdog();
+      killAllChildren();
+      scheduleReconnect();
+    },
+  });
   try {
     ws = new WebSocket(url);
   } catch (e) {
     console.error("[daemon] WebSocket ctor failed:", e);
-    scheduleReconnect();
+    life.connectFailed();
     return;
   }
   ws.addEventListener("open", () => {
     console.log("[daemon] socket open, sending auth");
     lastBridgeMsg = Date.now();
-    startWatchdog(ws);
+    startWatchdog(life.forceClose);
     ws.send(JSON.stringify({ type: "auth", secret: SECRET }));
   });
   ws.addEventListener("message", (ev) => {
+    // Соединение уже объявлено потерянным, реконнект идёт. Запоздавший кадр
+    // отсюда исполнять нельзя: `run` запустил бы процесс, чей `result` уходит
+    // в сокет, которого никто не слушает, а `lastBridgeMsg` от зомби продлевал
+    // бы жизнь уже мёртвому соединению.
+    if (life.abandoned()) return;
     // Любое сообщение от моста = признак живого соединения (для watchdog).
     // Считаем ДО разбора: кривой кадр — тоже признак живого моста.
     lastBridgeMsg = Date.now();
@@ -421,9 +452,7 @@ function connect(): void {
   });
   ws.addEventListener("close", () => {
     console.log("[daemon] socket closed");
-    stopWatchdog();
-    killAllChildren();
-    scheduleReconnect();
+    life.noticedClose();
   });
   ws.addEventListener("error", (ev) => {
     console.error("[daemon] socket error:", (ev as any).message ?? ev);
