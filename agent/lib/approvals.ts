@@ -11,6 +11,7 @@ import type { Database } from "bun:sqlite";
 import { closeAgentPromptProposals } from "./dispatch/agent-prompt.ts";
 import { crossChatRequested } from "./dispatch/helpers.ts";
 import { closeGatedActionRow } from "./audit.ts";
+import { ruDateTime } from "./delabs-text.ts";
 
 /**
  * `failed` — человек одобрил, но исполнение упало (см. markApprovalFailed).
@@ -342,6 +343,24 @@ function str(p: Record<string, unknown>, key: string): string {
   return typeof v === "string" ? v.trim() : "";
 }
 
+/**
+ * Момент времени из payload'а — «когда: 11.09.2026 10:00 (Europe/Moscow)».
+ *
+ * Значение приходит от модели, поэтому проверяется как чужое: не число, не
+ * конечное, вне разумного диапазона — печатаем «когда: не указано», и это тоже
+ * содержательно. Верхняя граница отсекает секунды, принятые за миллисекунды,
+ * и мусор вроде 1e30: `new Date` на таком отдаёт Invalid Date, а Intl на нём
+ * бросает RangeError — падение рендера карточки схлопнуло бы весь список
+ * заявок, а не одну строку.
+ */
+function whenLabel(p: Record<string, unknown>, key: string): string {
+  const v = p[key];
+  if (typeof v !== "number" || !Number.isFinite(v) || v < 1e11 || v > 1e14) {
+    return "когда: не указано";
+  }
+  return `когда: ${ruDateTime(new Date(v))}`;
+}
+
 /** Числовое поле payload'а, либо "?" — payload приходит от LLM. */
 function num(p: Record<string, unknown>, key: string): string {
   const v = p[key];
@@ -481,8 +500,21 @@ const PREVIEW_BY_ACTION: Record<
       `новая роль «${str(p, "name") || "?"}»`,
       str(p, "system_prompt"),
     ]),
+  /*
+   * Аудит 2026-09-11: карточка отложенного поста не показывала, КОГДА он
+   * выйдет. Печатались канал и текст, а `scheduledAt` — число, и общий путь
+   * ниже (PREVIEW_FIELDS, затем «первое непустое строковое поле») числа
+   * выбрасывает. Владельцу предлагали одобрить публикацию, не назвав срока:
+   * «завтра в 10» и «через три недели» выглядели в очереди одинаково, а
+   * ошибка модели в единицах времени была ненаблюдаема до самой публикации.
+   * Тот же дефект, что у DELETE/PIN/FORWARD чуть ниже, и лечится так же.
+   *
+   * Срок идёт ПЕРВЫМ: выжимка режется по общему потолку длины с конца, и
+   * длинный текст поста вытеснял бы именно его.
+   */
   SCHEDULE_POST: (p) =>
     join([
+      whenLabel(p, "scheduledAt"),
       str(p, "channel"),
       str(p, "content") || str(p, "text"),
     ]),

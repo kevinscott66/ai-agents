@@ -784,6 +784,18 @@ export function buildPayload<T extends ActionType>(
 
       if (!channel) return { ok: false, error: "channel is required" };
       if (!content) return { ok: false, error: "content is required" };
+      // Аудит 2026-09-11: у отложенного поста границы длины не было вовсе,
+      // хотя публикуется он тем же PUBLISH_TO_CHANNEL и упрётся в тот же
+      // предел — только через неделю и уже после одобрения владельцем.
+      // Отказ здесь стоит одной строки в чате, отказ там — сорванной
+      // публикации, о которой никто не узнает. Предел тот же и по той же
+      // причине, см. PUBLISH_TEXT_MAX_RAW.
+      if (content.length > PUBLISH_TEXT_MAX_RAW) {
+        return {
+          ok: false,
+          error: `content: ${content.length} символов при пределе ${PUBLISH_TEXT_MAX_RAW} — в сообщение Telegram влезет ~4096 после разметки, сократите пост`,
+        };
+      }
       if (!scheduledAt || scheduledAt <= Date.now()) {
         return { ok: false, error: "scheduledAt must be a future timestamp" };
       }

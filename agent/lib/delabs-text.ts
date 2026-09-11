@@ -77,6 +77,29 @@ export function ruDate(d = new Date()): string {
 }
 
 /**
+ * Дата и время в часовом поясе канала: «11.09.2026 10:00 (Europe/Moscow)».
+ *
+ * Пояс печатается в скобках намеренно. Момент времени показывают там, где
+ * человек принимает по нему решение (карточка аппрува на отложенный пост), а
+ * сервер живёт в UTC: «10:00» без пояса читается как местное время читателя и
+ * ровно этим обманывает. Формат числовой, а не «11 сентября»: строка идёт в
+ * однострочную выжимку с жёстким потолком длины.
+ */
+export function ruDateTime(d: Date): string {
+  const parts = new Intl.DateTimeFormat("ru-RU", {
+    timeZone: DELABS_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return `${get("day")}.${get("month")}.${get("year")} ${get("hour")}:${get("minute")} (${DELABS_TZ})`;
+}
+
+/**
  * Диапазон дат для недельного поста: «6 — 12 августа 2026».
  *
  * Месяц и год печатаются у левой границы только когда они отличаются от правой,
