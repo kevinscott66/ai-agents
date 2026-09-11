@@ -157,6 +157,15 @@ function corsHeaders(origin: string | null): Record<string, string> {
       /* malformed Origin — no CORS */
     }
   }
+  // Аудит 2026-09-11: список методов НЕ совпадает с `Allow: POST, OPTIONS`,
+  // которым отвечает 405 на `/api/internal/*`, и это намеренно. `Allow` (RFC
+  // 9110 §15.5.6) описывает, что умеет ресурс; `Access-Control-Allow-Methods`
+  // — что мы разрешаем браузеру чужой вкладки. Ингест ходит с VPS по петле
+  // curl'ом, преflight'а не делает вовсе, так что POST здесь не нужен никому,
+  // кроме атакующего: назвав его, мы бы разрешили любой странице на
+  // delabs.space слать ингест с чужого происхождения. По той же причине в
+  // Allow-Headers нет `Authorization` — заголовок нужен только POST'у.
+  // HEAD не называем сознательно: CORS считает его простым методом всегда.
   const h: Record<string, string> = {
     Vary: "Origin",
     "Access-Control-Allow-Methods": "GET, OPTIONS",
@@ -507,6 +516,31 @@ export function activityIdFromPath(pathname: string): string | null {
   return articleIdFromPath("activity", pathname);
 }
 
+/**
+ * Путь лежит в статейном пространстве имён (`/digest…`, `/activity…`), но
+ * формы `/<prefix>/<id>` не имеет: `/digest`, `/digest/`, `/digest/a/b`.
+ *
+ * Аудит 2026-09-11: без этой проверки вложенный путь проваливался мимо
+ * `digestIdFromPath` (её регэксп — `[^/]+`) прямо в `serveStatic`, а тот на
+ * любом не-ассетном маршруте отдаёт index.html со статусом **200**. То есть
+ * `/digest/foo/bar` возвращал главную страницу: og-теги главной, никакого
+ * `X-Robots-Tag: noindex` — ровно та дыра, которую закрывал аудит 2026-08-13,
+ * только зашедшая с другой стороны.
+ *
+ * Ни одного клиентского маршрута в этом пространстве, кроме `/digest/:id` и
+ * `/activity/:id`, нет (списки живут на `/digests` и `/activities`), так что
+ * всё остальное внутри него — заведомо 404, а не «какой-то маршрут SPA».
+ * Единственное и множественное различаем строго: `/digests` сюда не попадает.
+ */
+export function isStrayArticlePath(pathname: string): boolean {
+  for (const prefix of ["digest", "activity"]) {
+    if (pathname === `/${prefix}` || pathname.startsWith(`/${prefix}/`)) {
+      return articleIdFromPath(prefix, pathname) === null;
+    }
+  }
+  return false;
+}
+
 function htmlAttrEscape(s: string): string {
   return s
     .replace(/&/g, "&amp;")
@@ -755,8 +789,13 @@ function rfc822(iso: string): string {
  *
  * `/rss.xml` и `/sitemap.xml` собираются из БД синхронно, а `Cache-Control`
  * действует только на клиента: браузер уважает `max-age`, curl в цикле — нет.
- * Держим готовую строку 10 минут (столько же, сколько обещаем в заголовке) и
- * сбрасываем сразу после ингеста, чтобы свежая статья не ждала истечения.
+ * Держим готовую строку 10 минут — столько же, сколько обещаем в заголовке.
+ *
+ * Аудит 2026-09-11: здесь было написано «сбрасываем сразу после ингеста». Это
+ * неправда: `invalidateFeedCache` не зовёт ни один рабочий путь (только тесты,
+ * см. её докстроку). Свежесть держится целиком на `contentStamp()` — ингест
+ * меняет штамп, и следующий же запрос ленты строит её заново. Ленты после
+ * ингеста действительно свежие, но не потому, что кэш кто-то сбрасывает.
  */
 type FeedKey = "rss" | "sitemap";
 const feedCache = new Map<FeedKey, { xml: string; until: number; stamp: number }>();
@@ -775,7 +814,11 @@ function cachedFeed(key: FeedKey, build: () => string): string {
   return xml;
 }
 
-/** Сбросить кэш лент. Экспорт для тестов. */
+/**
+ * Сбросить кэш лент. Рабочих вызовов нет — только тесты, которым нужно
+ * состояние «лента ещё не строилась» между случаями. Ингест на кэш влияет
+ * через `contentStamp()`, а не через этот сброс (аудит 2026-09-11).
+ */
 export function invalidateFeedCache(): void {
   feedCache.clear();
 }
@@ -1824,7 +1867,10 @@ async function routeApi(
     //
     // Аудит 2026-08-29: условие было `=== 401`, то есть при незаданном
     // `SITE_INGEST_TOKEN` бесплатным становился уже сам зонд — env-гейт
-    // отвечает 404 (см. requireIngestAuth), и он мимо счёта не проходил.
+    // отвечает 404 (ветка `if (!configured)` двадцатью строками выше, а на
+    // POST — та же проверка в начале `authedJsonBody`; функции
+    // `requireIngestAuth`, на которую тут ссылались, в проекте нет), и он мимо
+    // счёта не проходил.
     // Считаем любую неудачу: у своего ингеста их не бывает, а у чужого это
     // единственный ответ, который он и получает.
     if (res.status >= 400 && !rateLimitOk(clientIp(req, server))) {
@@ -2204,6 +2250,12 @@ export function makeFetchHandler() {
       // Статьи нет — но путь заведомо статейный, значит это 404, а не
       // «какой-то маршрут SPA». Фронт не собран → null, и дальше всё как
       // раньше: пусть отвечает заглушка «не собрано», а не выдуманный 404.
+      const missing = articleNotFoundResponse();
+      if (missing) return withSecurityHeaders(missing);
+    } else if (isStrayArticlePath(url.pathname)) {
+      // Форму `/<prefix>/<id>` путь не держит, но пространство имён статейное
+      // — значит это 404, а не маршрут SPA. Иначе `serveStatic` отдал бы
+      // index.html с og-тегами главной и статусом 200 (аудит 2026-09-11).
       const missing = articleNotFoundResponse();
       if (missing) return withSecurityHeaders(missing);
     }

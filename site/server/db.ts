@@ -117,7 +117,11 @@ function migrate(db: Database): void {
       what_is         TEXT NOT NULL DEFAULT '',
       steps_json      TEXT NOT NULL DEFAULT '[]',
       raised          TEXT NOT NULL DEFAULT '',
-      investors_json  TEXT NOT NULL DEFAULT '[]',
+      -- Аудит 2026-09-11: здесь стояло DEFAULT '[]' — как у соседних
+      -- *_json-колонок, но эта хранит JSON-СТРОКУ, а не массив (см.
+      -- upsertActivity: COALESCE($investors, '""')). Строка, вставленная мимо
+      -- upsert'а, получала '[]' и вылезала пользователю дословным «[]».
+      investors_json  TEXT NOT NULL DEFAULT '""',
       spent           TEXT NOT NULL DEFAULT '',
       time            TEXT NOT NULL DEFAULT '',
       reward_type     TEXT NOT NULL DEFAULT '',
@@ -847,11 +851,25 @@ function parseStrArray(raw: string): string[] {
   return [];
 }
 
-/** Parse the investors JSON column back to a plain string. */
+/**
+ * Разобрать колонку инвесторов обратно в простую строку.
+ *
+ * Аудит 2026-09-11: разобранный, но не строковый JSON проваливался в `return
+ * raw`, то есть попадал к читателю дословно. На массиве это давало «[]» в
+ * карточке — ровно то, что клало в базу прежнее `DEFAULT '[]'` и что положил
+ * бы любой ручной INSERT без этой колонки. Разбор, который УДАЛСЯ, дальше как
+ * сырой текст не идёт: массив строк склеиваем (форма из старых выгрузок), всё
+ * прочее считаем пустым. `raw` остаётся ответом только там, где JSON не
+ * разобрался вовсе, — это легаси-строки без кавычек вида `a16z, Paradigm`.
+ */
 function parseStr(raw: string): string {
   try {
     const parsed = JSON.parse(raw);
     if (typeof parsed === "string") return parsed;
+    if (Array.isArray(parsed)) {
+      return parsed.filter((x): x is string => typeof x === "string").join(", ");
+    }
+    return "";
   } catch {
     /* malformed — treat the raw blob as the value */
   }
