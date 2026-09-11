@@ -772,8 +772,11 @@ export const FORCE_FIRST_TOOL_BLOCK =
 /**
  * Defense-in-depth hook for native SDK WebFetch permission events.
  *
- * The executable WebFetch route is the in-process MCP tool below; native
- * WebFetch is denylisted so the CLI cannot bypass the pinned fetch boundary.
+ * The executable WebFetch route is the in-process MCP tool `guardedWebFetchTool`
+ * (built above in this file); native WebFetch is denylisted so the CLI cannot
+ * bypass the pinned fetch boundary. The word here used to be "below" — it was
+ * true when the hook sat higher up, and a direction that rots is worth naming
+ * the symbol for instead.
  */
 function sdkHooks() {
   // Аудит 2026-08-28: `WEB_SEARCH_MAX_USES` на raw-пути уезжает в `max_uses`

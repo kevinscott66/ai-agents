@@ -509,7 +509,12 @@ async function runBackupUnlocked(
       const tmpPath = `${outPath}.tmp-${process.pid}-${randomUUID()}`;
       let published = false;
       try {
-        const res = Bun.spawnSync(["tar", "-czf", tmpPath, "-C", parent, base]);
+        // `--` перед именем участника: `base` — это basename каталога из
+        // MEMORY_DIR, то есть значение из окружения. Достижимого пути сегодня
+        // нет (каталог задаёт владелец в .env, и назвать его `-C` он не
+        // собирался), но разделитель — это не защита от злого умысла, а то,
+        // что отличает «имя файла» от «опции» в argv самого tar.
+        const res = Bun.spawnSync(["tar", "-czf", tmpPath, "-C", parent, "--", base]);
         if (res.exitCode !== 0) {
           const stderr = res.stderr ? new TextDecoder().decode(res.stderr) : "";
           throw new Error(`tar exit ${res.exitCode}: ${stderr.trim()}`);
