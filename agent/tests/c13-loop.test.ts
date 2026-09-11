@@ -4,7 +4,7 @@
  *
  * Bug scenario (from production Telegram screenshot):
  *   orchestrator → perm → tgdev → perm → tgdev → ...
- * The legacy `_depth` counter let this past because it didn't track WHICH
+ * The legacy _depth counter let this past because it didn't track WHICH
  * agents had already participated. We now thread an explicit ordered chain
  * through DispatchCtx → respondAs → runWithTools → ExecCtx, and reject any
  * DELEGATE_TO_ROLE whose target is already in the chain.

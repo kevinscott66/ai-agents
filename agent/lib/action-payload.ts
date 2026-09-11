@@ -168,7 +168,7 @@ export interface DelegateToRolePayload {
   task: string;
   /** Дополнительный контекст. */
   context?: string;
-  // Аудит 2026-08-10: тут было `_depth?: number` — «internal: depth in handoff
+  // Аудит 2026-08-10: тут было _depth?: number — «internal: depth in handoff
   // chain (set by dispatch, not by LLM)». Не ставил его никто: в схеме
   // инструмента поля нет, dispatch его не писал, и единственная запись во всём
   // репозитории была в тесте, который читавший его гейт и «проверял». Глубину

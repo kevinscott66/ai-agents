@@ -129,6 +129,7 @@ import {
   checkAndConsumeChatRateLimits,
   refundRateLimit,
   refundChatRateLimits,
+  releaseUnusedChatReservation,
 } from "./rate-limits.ts";
 import {
   respondAs as defaultRespondAs,
@@ -206,8 +207,8 @@ export interface DispatchCtx {
    * agent calls DELEGATE_TO_ROLE(role=X) and X is already in the chain, dispatch
    * returns ok:false with a clear "cycle" error in the tool_result.
    *
-   * Аудит 2026-08-10: здесь было «ортогонально legacy-счётчику `_depth`,
-   * оставленному как backstop». Backstop'а не было — `_depth` никто не ставил,
+   * Аудит 2026-08-10: здесь было «ортогонально legacy-счётчику _depth,
+   * оставленному как backstop». Backstop'а не было — _depth никто не ставил,
    * и гейт по нему не срабатывал ни разу; счётчик удалён. Длина этой цепочки —
    * единственный потолок глубины, и он же единственный, который растёт.
    */
@@ -526,8 +527,8 @@ export async function dispatchAction<T extends ActionType>(
             error: `delegation cycle: '${role}' is already in chain [${chain.join("→")}]`,
           };
         }
-        // Аудит 2026-08-10: здесь стоял второй потолок, `p._depth >=
-        // MAX_HANDOFF_DEPTH`. Поле объявлено как «set by dispatch, not by LLM»,
+        // Аудит 2026-08-10: здесь стоял второй потолок, p._depth >=
+        // MAX_HANDOFF_DEPTH. Поле объявлено как «set by dispatch, not by LLM»,
         // но не ставилось ни dispatch'ем, ни кем-либо ещё: в схеме инструмента
         // его нет, и единственной записью во всём репозитории была строка в
         // тесте c10, который этот же гейт и «проверял». Гейт не срабатывал
@@ -718,7 +719,7 @@ export async function dispatchAction<T extends ActionType>(
               // ровно то же число, только считаемое тем, что действительно
               // растёт на каждом хопе. Для обычного делегирования (chain =
               // [отправитель]) выходит 1 — как и было, когда сюда приходило
-              // `_depth + 1` при вечном `_depth = 0`. Разница видна только
+              // _depth + 1 при вечном _depth = 0. Разница видна только
               // глубоко в цепочке: делегат на четвёртом хопе больше не получает
               // полный запас каскада по упоминаниям, как будто он первый.
               depth: chain.length,
@@ -1897,10 +1898,27 @@ export async function gateOrDispatch<T extends ActionType>(
     ? checkAndConsumeRateLimit(ctx.agentKey, actionType)
     : reserveChat;
   if (!reserve.ok) {
-    // Агентский бакет проиграл гонку уже после того, как чат-слот занят —
-    // вернуть, иначе проигравший всё равно съедает лимит чата.
+    // Чат-слот уже занят, а агентский бакет отказал — отпустить, иначе ход,
+    // которого не было, съедает лимит чата у всех остальных ролей.
+    //
+    // Аудит 2026-09-11 — про эту ветку сразу два уточнения.
+    //
+    // Первое: сегодня она недостижима. Ранняя проверка наверху и эта
+    // резервация считают один и тот же предикат (обе идут в
+    // `evaluateAllBuckets`), между ними нет ни await, ни другого потребителя
+    // агентского бакета — значит отказать здесь, пройдя там, не может. Ветка
+    // остаётся сторожем на случай, когда между проверками появится await или
+    // второй потребитель: тогда она проснётся, и проснуться должна исправной.
+    //
+    // Второе: исправной она не была. Здесь стоял `refundChatRateLimits`, а
+    // его первая строка — выход по `NO_REFUND_ACTIONS`, где лежит
+    // GENERATE_IMAGE. То есть для единственного платного действия комментарий
+    // обещал возврат, которого не происходило. Набор заведён против другого
+    // повода — dispatch СОСТОЯЛСЯ и упал, возможно уже оплатив запрос к
+    // провайдеру; здесь dispatch'а не было вовсе, платить не за что. Разводить
+    // эти два повода и нужна `releaseUnusedChatReservation`.
     if (reserveChat.ok) {
-      refundChatRateLimits(
+      releaseUnusedChatReservation(
         ctx.botId,
         ctx.chatId,
         actionType,

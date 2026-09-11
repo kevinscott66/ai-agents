@@ -4,14 +4,23 @@
  * `processDiagTask` собирал payload ретрая как `{...parsed.payload}` — то есть
  * из ответа модели целиком. А в payload'ах этого проекта `_`-префикс означает
  * «контекст, который подставляет вызывающий»: `_userId` (единственное, что
- * проверяет whitelist MAC_USER_IDS), `_depth` и `_delegation_chain` (анти-луп
- * T-705), `_parent_*`, `_rerouted`.
+ * проверяет whitelist MAC_USER_IDS), `_delegation_path` (анти-луп C28/C13),
+ * `_parent_task_id`, `_rerouted_from`, `_retry_count`, `_fix_chain`, `_diag`.
  *
  * Цена: упавший payload печатается модели в промпте вместе с `_userId`
  * владельца, так что подставить валидный id — не угадывание, а копирование. С
  * ним `MAC_RUN_CLAUDE` проходит whitelist и на личной машине владельца
- * исполняется промпт, которого не писал ни один человек. `_depth: 0` в том же
- * ответе обнуляет счётчик, ради которого заводился T-705.
+ * исполняется промпт, которого не писал ни один человек. Пустой
+ * `_delegation_path` в том же ответе выдаёт делегата на четвёртом хопе за
+ * первого — то есть размыкает анти-луп.
+ *
+ * Аудит 2026-09-11: до этой даты здесь и в самой проверке ниже стояли _depth и
+ * _delegation_chain — поля, которых в коде нет: счётчик глубины удалён 2026-08-10
+ * (см. action-payload.ts у `_delegation_path`), а второго имени не было
+ * никогда. Тест клал их в payload руками и там же их и находил, потому что
+ * восстановление контекста работает по ПРЕФИКСУ, а не по списку имён: проходило
+ * любое выдуманное `_`-поле. Проверка была верной, предмет — вымышленным, и
+ * сторож протухших имён считал их живыми именно из-за этой строки.
  *
  * Инвариант: от модели — только содержательные поля; контекст восстанавливается
  * из упавшего payload, который пришёл из реального действия.
@@ -131,14 +140,16 @@ describe("self-diag: контекстные поля не приходят от 
     expect(dispatched._userId).toBeUndefined();
   });
 
-  test("_depth и _delegation_chain модель не обнуляет", async () => {
-    // T-705: счётчики глубины — единственное, что размыкает каскад фиксов.
+  test("_delegation_path модель не обрезает", async () => {
+    // Длина цепочки — единственный потолок глубины (action-dispatch.ts, ветка
+    // DELEGATE_TO_ROLE): пустой список означает «я первый хоп» на любой
+    // глубине, и каскад фиксов перестаёт размыкаться.
     const { dispatched } = await runWith(
-      { text: "привет", _depth: 3, _delegation_chain: ["pm", "backend"] },
-      { text: "привет", _depth: 0, _delegation_chain: [] },
+      { text: "привет", _delegation_path: ["pm", "backend"], _parent_task_id: "t-7" },
+      { text: "привет", _delegation_path: [], _parent_task_id: "t-подделка" },
     );
-    expect(dispatched._depth).toBe(3);
-    expect(dispatched._delegation_chain).toEqual(["pm", "backend"]);
+    expect(dispatched._delegation_path).toEqual(["pm", "backend"]);
+    expect(dispatched._parent_task_id).toBe("t-7");
   });
 
   test("содержательные поля модели проходят полностью", async () => {

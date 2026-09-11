@@ -100,6 +100,10 @@ const EXTERNAL: Record<string, string> = {
   api_id: "telegram",
   api_hash: "telegram",
   messageEntityCode: "telegram",
+  _buildingEntities: "telegram",
+  _updateLoop: "telegram",
+  _parseMessageText: "telegram",
+  _makeAbort: "@anthropic-ai/sdk",
   autoSelectFamily: "@types/node",
 };
 
@@ -111,6 +115,17 @@ const CAMEL = /^[a-z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*$/;
  * смешанное `Some_Thing` в прозе встречается как разрезанная фраза, а не как имя.
  */
 const SNAKE = /^([a-z][a-z0-9]*(?:_[a-z0-9]+)+|[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)$/;
+/**
+ * Поле контекста: ведущее подчёркивание. Соглашение проекта — ключ payload'а с
+ * `_`-префиксом подставляет вызывающий, а не модель, поэтому такие имена
+ * describe'ятся в комментариях чаще прочих и протухают так же.
+ *
+ * Отдельным шаблоном, а не послаблением в SNAKE: разрешить там одиночное слово
+ * ради _depth — значит впустить в проверку gunzip, printenv, getcwd, exports
+ * и прочую прозу, у которой подчёркивания нет вовсе. Префикс сам по себе
+ * достаточно редок в русском тексте, чтобы служить признаком имени.
+ */
+export const UNDERSCORE_FIELD = /^_[a-z][A-Za-z0-9_]*$/;
 /**
  * Короткие имена не проверяем: `isOk`, `toB` и им подобные слишком часто
  * встречаются в прозе как куски чужих выражений, а пользы от них ноль.
@@ -160,6 +175,8 @@ const codeIdents = new Set<string>();
 /** `#` — комментарий shell и YAML; в поиск имён такие строки не идут. */
 const SHELL_COMMENT = /^\s*#/;
 const UNDERSCORED = /\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b/g;
+/** Поля контекста в коде: `_userId`, `_delegation_path`, `_retry_count`. */
+export const LEADING_UNDERSCORE = /\b_[A-Za-z][A-Za-z0-9_]*\b/g;
 
 /**
  * Литеральный аргумент проверки на ОТСУТСТВИЕ в исходнике:
@@ -203,6 +220,9 @@ function collectIdents(src: string, isComment: (line: string) => boolean) {
     if (isComment(line)) continue;
     for (const m of line.matchAll(/\b[a-z][A-Za-z0-9]{3,}\b/g)) codeIdents.add(m[0]);
     for (const m of line.matchAll(UNDERSCORED)) codeIdents.add(m[0]);
+    // UNDERSCORED начинается с буквы, поэтому `_userId` целиком не собирает:
+    // границы слова перед `_` внутри имени нет. Отдельный проход за ними.
+    for (const m of line.matchAll(LEADING_UNDERSCORE)) codeIdents.add(m[0]);
   }
 }
 for (const src of read(IDENT_ROOTS).values()) {
@@ -224,7 +244,8 @@ describe("имена символов в комментариях не прот�
         for (const m of line.matchAll(/`([^`]+)`/g)) {
           const name = m[1].replace(/\(\)$/, "");
           if (name.length < MIN_LEN) continue;
-          if (!CAMEL.test(name) && !SNAKE.test(name)) continue;
+          if (!CAMEL.test(name) && !SNAKE.test(name) && !UNDERSCORE_FIELD.test(name))
+            continue;
           if (codeIdents.has(name) || name in EXTERNAL) continue;
           rotted.push(`${file}:${i + 1} \`${name}\``);
         }

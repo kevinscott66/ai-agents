@@ -18,8 +18,8 @@
  *   | no_available_agent: <role>     |  1   | ❌              |
  *   | delegate_skipped: <причина>    |  1   | ❌              |
  *
- * `delegation depth exceeded` осталась от второго потолка `p._depth >=
- * MAX_HANDOFF_DEPTH`, снесённого аудитом 2026-08-10 (комментарий на месте
+ * `delegation depth exceeded` осталась от второго потолка p._depth >=
+ * MAX_HANDOFF_DEPTH, снесённого аудитом 2026-08-10 (комментарий на месте
  * удаления — action-dispatch.ts). Гейт не срабатывал никогда, текст никто
  * не пишет.
  *

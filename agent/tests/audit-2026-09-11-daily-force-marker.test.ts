@@ -114,4 +114,24 @@ describe("форсированный суточный прогон не отме
     expect(decl).toContain("if (runDaily(today, true)) lastDailyYmd = today;");
     expect(decl.indexOf("runDaily(")).toBeLessThan(decl.lastIndexOf("lastDailyYmd = today"));
   });
+
+  test("форс-ветка runDaily отказаться не может — поэтому else и мёртв", () => {
+    // Круг 42: `else lastDailyYmd = null` в _runDailyNow недостижим, и это
+    // видно только отсюда. Сторож не запрещает ветку, а пинит причину: пока
+    // в форс-пути нет ни одного `return false`, `else` — заготовка, а не
+    // рабочий путь. Появится отказ — тест упадёт, и автор перечитает довод,
+    // записанный у самой ветки.
+    const src = require("node:fs").readFileSync(
+      new URL("../lib/db-maint.ts", import.meta.url),
+      "utf8",
+    ) as string;
+    const body = src.slice(src.indexOf("const runDaily = (today: string, force = false)"));
+    const forceArm = body.slice(body.indexOf("if (force) {"), body.indexOf("} else {"));
+    expect(forceArm).toContain("writeMaintMarker(DAILY_MARKER_KEY, today);");
+    expect(forceArm).not.toContain("return false");
+    // А в обычном тике отказ живой — иначе пинить было бы нечего.
+    expect(body.slice(0, body.indexOf("runDailySteps(today);\n    return true;"))).toContain(
+      'if (claim === "taken") return false;',
+    );
+  });
 });

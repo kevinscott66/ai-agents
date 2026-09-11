@@ -8,11 +8,14 @@
  *
  * Аудит 2026-09-11: шапка описывала «массив timestamps (ms)» — форму, которой
  * тут больше нет. На признаке резервации держится корректность возврата
- * слотов: `release` ищет запись по `reservationId`, а не по совпадению
- * времени, потому что обычный commit или соседняя резервация могут иметь тот
- * же `now`. Правка, сделанная по прежней шапке (сравнение элементов как чисел,
- * `arr.filter(t => t > cutoff)`, любой новый обходчик бакетов), молча снесла бы
- * это поле — и `release` начал бы вырезать из ведра чужие записи.
+ * слотов: `release`, который возвращает `reserveUserbotFloodSlots`, ищет
+ * запись по `reservationId`, а не по совпадению времени, потому что обычный
+ * commit или соседняя резервация могут иметь тот же `now`. Правка, сделанная
+ * по прежней шапке (сравнение элементов как чисел, `arr.filter(t => t >
+ * cutoff)`, любой новый обходчик бакетов), молча снесла бы это поле — и он
+ * начал бы вырезать из ведра чужие записи. (Не путать с
+ * `releaseUnusedChatReservation` ниже: у той резервации своего идентификатора
+ * нет, она снимается по `reservedAt` через `refundBucket`.)
  *
  * Не персистится, не делится между процессами. Этого достаточно: у нас один
  * процесс на VPS, рестарт = сброс. Цель — защита от багов и циклов внутри
@@ -467,6 +470,43 @@ export function refundChatRateLimits(
   reservedAt?: number,
 ): void {
   if (NO_REFUND_ACTIONS.has(actionType)) return;
+  const windowMs = perChatRule().windowMs;
+  const hasChat = !(chatId === undefined || chatId === null || chatId === "");
+  const hasBot = !(botId === undefined || botId === null || botId === "");
+  if (hasChat) refundBucket(`chat:${chatId}:${actionType}`, windowMs, now, reservedAt);
+  if (hasChat && hasBot) {
+    refundBucket(`bot:${botId}:chat:${chatId}:${actionType}`, windowMs, now, reservedAt);
+  }
+}
+
+/**
+ * Отпустить чат-резервацию, которой так и не воспользовались.
+ *
+ * Отличается от `refundChatRateLimits` ровно одним: не смотрит в
+ * `NO_REFUND_ACTIONS`. Разница не в силе, а в поводе. `refundChatRateLimits`
+ * отвечает на вопрос «dispatch провалился — вернуть ли слот?», и для
+ * GENERATE_IMAGE ответ «нет»: к моменту провала запрос к провайдеру мог быть
+ * уже оплачен, размен подписан в докблоке `NO_REFUND_ACTIONS`. Здесь вопрос
+ * другой: dispatch'а не было вовсе — резервацию сняли и тут же поняли, что
+ * ход не состоится. Платить не за что, охранять нечего, и держать слот чата
+ * занятым значит наказывать весь чат за ход, которого не было.
+ *
+ * Аудит 2026-09-11: единственный вызывающий — ветка «агентский бакет отказал
+ * после того, как чат-слот занят» в gateOrDispatch. Там стоял
+ * `refundChatRateLimits`, то есть для GENERATE_IMAGE — no-op, при
+ * комментарии, обещающем возврат. Новых вызывающих заводить не следует: у
+ * «резервация не использована» узкий и проверяемый смысл, а «верни слот за
+ * неудачу» — это соседняя функция, и сливать их обратно нельзя.
+ */
+export function releaseUnusedChatReservation(
+  botId: number | string | undefined,
+  chatId: number | string | undefined,
+  actionType: string,
+  now: number = Date.now(),
+  reservedAt?: number,
+): void {
+  // Порядок аргументов повторяет refundChatRateLimits намеренно: перепутать
+  // вызовы местами легко, и перепутанный должен хотя бы считать то же самое.
   const windowMs = perChatRule().windowMs;
   const hasChat = !(chatId === undefined || chatId === null || chatId === "");
   const hasBot = !(botId === undefined || botId === null || botId === "");

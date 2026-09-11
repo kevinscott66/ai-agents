@@ -16,6 +16,11 @@
  * Поэтому сторож не про текст, а про сверку текста с кодом: сколько веток под
  * /api/ реально стоит выше стены и названа ли каждая.
  *
+ * Круг 42: шапку дополнили вторым списком — что сервер исполняет сам, — и
+ * сторож упал, потому что считал буллеты всей шапки, а не буллеты своего
+ * списка. Ошибка того же рода, что и ловимая: счёт вёлся не по тому, про что
+ * утверждение. Теперь список выбирается вводной фразой.
+ *
  * ЧЕГО СТОРОЖ НЕ ДЕЛАЕТ. Он не проверяет маршруты вне /api/ (`/healthz`,
  * `/metrics`, `/readyz`, статика) — докблок про них не говорит, и они
  * аутентификации и не обещают. Он не проверяет, что сама стена достаточна, и
@@ -36,13 +41,27 @@ const WALL = LINES.findIndex((l) => l.includes("const auth = authOr401(req, url)
 const ROUTE = LINES.findIndex((l) => l.includes("async function route("));
 const PRE_WALL = LINES.slice(ROUTE, WALL).join("\n");
 
-/** Строки-буллеты из модульного докблока (первый комментарий файла). */
-function docBullets(): string[] {
-  const head = SRC.slice(0, SRC.indexOf("*/"));
-  return head
-    .split("\n")
-    .filter((l) => l.includes("•"))
-    .map((l) => l.replace(/^\s*\*\s*/, "").trim());
+/**
+ * Строки-буллеты того списка модульного докблока, который вводит `intro`.
+ *
+ * Круг 42: раньше брались ВСЕ буллеты шапки. Пока список в ней был один, это
+ * совпадало; когда рядом появился второй — перечень того, что сервер
+ * исполняет сам, — счёт поехал, и сторож стал отвечать про сумму двух
+ * списков, то есть про не тот список. Границу списка задаёт отступ: строки
+ * продолжения буллета идут с отступом от `*`, обычная проза — сразу за ним.
+ */
+function docBullets(intro = "Исключений"): string[] {
+  const head = SRC.slice(0, SRC.indexOf("*/")).split("\n");
+  const from = head.findIndex((l) => l.includes(intro));
+  if (from < 0) return [];
+  const out: string[] = [];
+  for (const l of head.slice(from + 1)) {
+    if (l.includes("•")) out.push(l.replace(/^\s*\*\s*/, "").trim());
+    else if (out.length === 0) continue;
+    else if (/^\s*\*\s{3,}\S/.test(l)) continue;
+    else break;
+  }
+  return out;
 }
 
 const NUMERALS: Record<string, number> = {
@@ -94,6 +113,17 @@ describe("докблок miniapp-server сходится со стеной authO
         expect(b).toContain("OPTIONS");
       }
     }
+  });
+
+  test("буллеты соседнего списка шапки в счёт не идут", () => {
+    // Круг 42: перечень исполняемых сервером маршрутов — такие же буллеты в
+    // той же шапке. Сторож обязан видеть только те, что стоят под «Исключений».
+    const all = (SRC.slice(0, SRC.indexOf("*/")).match(/•/g) ?? []).length;
+    const own = docBullets();
+    const neighbour = docBullets("Исполняет сервер");
+    expect(neighbour.length).toBeGreaterThan(0);
+    expect(own.length + neighbour.length).toBe(all);
+    expect(own.join("\n")).not.toContain("/api/mac/stop");
   });
 
   test("OPTIONS отвечает 204 без тела — почему это не дыра", () => {

@@ -176,10 +176,10 @@ describe("dispatchAction(DELEGATE_TO_ROLE)", () => {
 
   /**
    * Аудит 2026-08-10. Раньше здесь стоял тест «превышение MAX_HANDOFF_DEPTH
-   * через _depth → ok:false»: он руками клал в payload `_depth: 3` и проверял,
+   * через _depth → ok:false»: он руками клал в payload _depth: 3 и проверял,
    * что дальше дело не пошло. Проверка проходила — и не значила ничего.
    *
-   * `_depth` объявлен как «set by dispatch, not by LLM», но не ставился ни
+   * _depth объявлен как «set by dispatch, not by LLM», но не ставился ни
    * dispatch'ем, ни кем-либо ещё: в схеме инструмента, которую видит модель,
    * поля нет, а единственная его запись во всём репозитории была вот в этой
    * строке теста. Гейт `depth >= MAX_HANDOFF_DEPTH` не срабатывал в проде
@@ -225,8 +225,8 @@ describe("dispatchAction(DELEGATE_TO_ROLE)", () => {
   test("глубина каскада у делегата берётся из цепочки", async () => {
     // `depth` уходит в respondAs и ограничивает уже не делегирование, а каскад
     // по упоминаниям внутри делегата (handoff: рекурсия только при
-    // depth < MAX_HANDOFF_DEPTH). Раньше сюда шло `_depth + 1` при вечном
-    // `_depth = 0`, то есть ровно 1 на любой глубине: делегат на четвёртом хопе
+    // depth < MAX_HANDOFF_DEPTH). Раньше сюда шло _depth + 1 при вечном
+    // _depth = 0, то есть ровно 1 на любой глубине: делегат на четвёртом хопе
     // получал такой же запас каскада, как первый.
     const stub = mock(async (_o: RespondAsOpts, _d: HandoffDeps) => "");
     const target = fakeBot("design");
