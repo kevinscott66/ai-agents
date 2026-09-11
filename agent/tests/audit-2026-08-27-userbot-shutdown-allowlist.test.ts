@@ -174,7 +174,9 @@ describe("userbot-self-sends: откат пометки", () => {
     // `registered` (текст после парс-мода gramjs), а не сырой `text` — см.
     // audit-2026-08-28-userbot-markdown-self-echo.
     expect(src).toContain("markSelfSend(chatId, registered");
-    expect(src).toContain("unmarkSelfSend(chatId, registered)");
+    // Роль в откате обязана совпадать с ролью в регистрации: снимается запись
+    // своей роли, а не последняя по списку (круг 32, см. unmarkSelfSend).
+    expect(src).toContain("unmarkSelfSend(chatId, registered, opts?.agentKey)");
     expect(src).toContain("unmarkSelfSend(channelId, plain)");
   });
 });

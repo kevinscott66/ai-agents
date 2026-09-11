@@ -497,7 +497,7 @@ export function buildHandle(client: UserbotClientLike, Api: any): UserbotHandle 
         // Аудит 2026-08-27: отката не было, и после неудачной отправки
         // регистрация висела две минуты — съедая первое совпадающее сообщение
         // владельца, набранное руками. Эха не будет, снимаем.
-        unmarkSelfSend(chatId, registered);
+        unmarkSelfSend(chatId, registered, opts?.agentKey);
         throw e;
       }
     },

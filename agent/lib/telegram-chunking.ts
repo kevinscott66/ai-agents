@@ -155,7 +155,10 @@ function sliceOneEnd(
       // выдавало первой частью 13 символов и лишнее сообщение в чате. Тот же
       // дефект аудит 2026-08-29 уже чинил в `cutBlock` — сюда правило тогда
       // не перенесли, поэтому теперь оно одно на оба места.
-      const open = danglingLinkStart(chunk, line.slice(end, end + 1));
+      // Хвост отдаём целиком, а не одним символом: по одному символу ветка
+      // «`]` нет вовсе» доказательства обрыва предъявить не может и вырождается
+      // в «всегда обрыв» — см. `labelClosesInRest` в telegram-format.ts.
+      const open = danglingLinkStart(chunk, line.slice(end));
       if (open > 0) end = i + open;
     }
     if (end <= i) end = Math.min(i + 2, line.length);
