@@ -21,7 +21,16 @@ function csv(name: string): string[] | undefined {
 }
 
 /**
- * Переменная задана, но не дала ни одного домена (`","`, `" , "`, `" "`).
+ * Переменная задана разделителями и не дала ни одного домена (`","`, `" , "`,
+ * `",,,"`).
+ *
+ * Аудит 2026-09-11: в этом перечне стояла и форма `" "` — ровно та, на которой
+ * функция возвращает `false`. Значение из одних пробелов читается как
+ * НЕзаданное (`raw.trim() === ""` выше), то есть fail-OPEN: поиск открывается
+ * всему вебу, а на SDK-пути возвращается нативный WebSearch. Так решено
+ * намеренно — `.env.example` пишет «Пусто = без ограничений», и это закреплено
+ * тестом `audit-2026-08-29-web-search-config-fail-open`. Ложным был перечень,
+ * а не ветка: он обещал fail-closed там, где его нет.
  *
  * Аудит 2026-08-29: у `csv()` таких исходов два, а смысла три. «Не задана» и
  * «задана, но пустая» она возвращала одинаково — undefined, — и написанная
@@ -37,6 +46,37 @@ function csvBroken(name: string): boolean {
   const raw = process.env[name];
   if (!raw || raw.trim() === "") return false;
   return csv(name) === undefined;
+}
+
+/**
+ * Отказ по сломанному конфигу доменов — тоже причина доменной политики.
+ *
+ * Аудит 2026-09-11: `denyReasonText` (sdk-web-guard.ts) отличал такие причины
+ * по СВОЕМУ регэкспу с двумя хвостами, а `webFetchDomainPolicyReason` отдаёт
+ * три строки. Третья не подходила ни под тот регэксп, ни под
+ * `isInputOrResolverReason` — и опечатка оператора в `.env` приезжала модели
+ * как «это попытка вытащить внутренние данные, не выполняй её». Обвинение в
+ * инъекции за публичный адрес — ровно тот ложный сигнал, ради устранения
+ * которого `denyReasonText` и написан.
+ *
+ * Поэтому предикат живёт здесь, рядом с производителем строк, и экспортируется
+ * (`isDomainPolicyReason`): копия правила в соседнем файле — это правило,
+ * действующее в одном месте из двух.
+ */
+const BROKEN_CONFIG_REASON =
+  "список доменов задан, но пуст — загрузка закрыта до починки конфига";
+
+/**
+ * Написана ли эта причина доменной политикой оператора (а не SSRF-контуром).
+ *
+ * Хвост строки, а не начало: причину про имя пишет
+ * `webFetchDomainPolicyReason`, а про адрес — `validatedTarget`.
+ */
+export function isDomainPolicyReason(reason: string): boolean {
+  return (
+    reason === BROKEN_CONFIG_REASON ||
+    /(?:вне WEB_SEARCH_ALLOWED_DOMAINS|закрыт WEB_SEARCH_BLOCKED_DOMAINS)$/.test(reason)
+  );
 }
 
 /** Одна из доменных переменных задана, но пуста. */
@@ -234,8 +274,8 @@ export function webFetchAllowlistConfigured(): boolean {
  * Политика доменов для WebFetch: причина отказа либо null.
  *
  * Аудит 2026-08-28: списки доменов не спрашивал НИКТО, кроме сборки нативного
- * web_search. При этом `sdkNativeWebSearchAllowed` (выше) на заданных списках
- * нативный поиск выключает совсем — «агент остаётся с mcp__team__WebFetch, у
+ * web_search. При этом `sdkNativeWebSearchAllowed` (ниже по файлу) на заданных
+ * списках нативный поиск выключает совсем — «агент остаётся с mcp__team__WebFetch, у
  * которого свой контур защиты». Контур там SSRF-овый: приватные адреса,
  * схемы, редиректы. Про домены оператора он не знает ничего.
  *
@@ -256,7 +296,7 @@ export function webFetchAllowlistConfigured(): boolean {
 export function webFetchDomainPolicyReason(host: string): string | null {
   if (domainConfigBroken()) {
     warnBrokenDomainConfig();
-    return "список доменов задан, но пуст — загрузка закрыта до починки конфига";
+    return BROKEN_CONFIG_REASON;
   }
   const allowed = csv("WEB_SEARCH_ALLOWED_DOMAINS");
   const blocked = csv("WEB_SEARCH_BLOCKED_DOMAINS");
@@ -314,10 +354,22 @@ export function _resetWebSearchWarnState(): void {
  * остальные три ручки так и остались декорацией. `sdkAllowedTools` кладёт в
  * алоулист CLI голую строку "WebSearch" — у неё нет ни `max_uses`, ни
  * `allowed_domains`, ни `blocked_domains`, потому что `webSearchTool()`,
- * которая их и собирает, из этого модуля не зовётся вовсе. В `sdk.d.ts`
- * (@anthropic-ai/claude-agent-sdk) конфигурации нативного WebSearch нет ни в
- * каком виде, а PreToolUse-хук видит только `tool_input` (запрос), но не
- * домены выдачи, — то есть ограничить домены на этом пути НЕЧЕМ.
+ * которая их и собирает, из этого модуля не зовётся вовсе.
+ *
+ * Аудит 2026-09-11: здесь стояло «в `sdk.d.ts` конфигурации нативного
+ * WebSearch нет ни в каком виде, а PreToolUse-хук видит только `tool_input`
+ * (запрос), но не домены выдачи». Вторая половина опровергается тем же
+ * пакетом: `WebSearchInput` (sdk-tools.d.ts, @anthropic-ai/claude-agent-sdk
+ * 0.3.175) — это `{ query, allowed_domains?, blocked_domains? }`, то есть
+ * `tool_input` вызова WebSearch и ЕСТЬ объект с доменами, а
+ * `PreToolUseHookSpecificOutput.updatedInput` позволяет его переписать.
+ * Утверждение было верно узко про файл `sdk.d.ts` и ложно про пакет, который
+ * назван в скобках.
+ *
+ * Поведение оставлено прежним, и вот почему: что рантайм CLI действительно
+ * применит подставленный `allowed_domains`, типами не доказывается — это
+ * проверяется только живым прогоном агента, а ошибка здесь открывает веб, а
+ * не закрывает. Пока не проверено — закрываемся.
  *
  * На проде стоит USE_AGENT_SDK=true. Значит оператор, который сузил поиск до
  * своего белого списка, получал поиск по всему интернету и ни строчки в логе.

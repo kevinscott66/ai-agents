@@ -75,8 +75,19 @@ export interface BackgroundServicesHandle {
  * `undefined` (переменная не задана) возвращаем как есть — у каждого шедулера
  * свой дефолт, и подменять его здесь значило бы держать вторую копию.
  *
- * Санитайзер стоит здесь, а не внутри шедулеров: services.ts — единственное
- * место, где env вообще читается, остальные вызовы передают литералы.
+ * Санитайзер стоит здесь, а не внутри шедулеров: почти все вызовы шедулеров
+ * передают литералы, и разбор env собран в этом файле.
+ *
+ * Аудит 2026-09-11: здесь стояло «services.ts — единственное место, где env
+ * вообще читается». Это неправда дважды, и оба контрпримера рядом.
+ * `parseMessagesRetentionDays` (db-maint.ts) читает `MESSAGES_RETENTION_DAYS`
+ * сама, дефолтным значением параметра, и вызывается через `gcMessages` из
+ * шедулера, который поднимает как раз этот файл. А блок `DB_MAINT_ENABLED`
+ * ниже до той же правки обходил этот санитайзер тернарником
+ * `process.env.X ? Number(process.env.X) : def` — буквально формой, разобранной
+ * тремя абзацами выше как баг. Утверждение было основанием НЕ ставить
+ * санитайзеры внутрь шедулеров, и, оставшись ложным, приглашало следующего
+ * автора завести env-чтение мимо этой функции.
  *
  * Это не значит, что внутри шедулеров проверок нет: `sanitizeHourUTC` (digest.ts)
  * и `sanitizeMaintOpt` (db-maint.ts) стоят на своих местах и стерегут значение,
@@ -348,9 +359,12 @@ export async function startBackgroundServices(
     try {
       maint = startMaintScheduler({
         dailyHourUTC: _envHour("DB_MAINT_HOUR_UTC", 4),
-        archiveDays: process.env.DB_MAINT_ARCHIVE_DAYS
-          ? Number(process.env.DB_MAINT_ARCHIVE_DAYS)
-          : 30,
+        // Через `_envPositiveInt`, а не тернарником с `Number()`: последний
+        // отдаёт NaN на опечатке вроде `3O`. Здесь его ловит `sanitizeMaintOpt`
+        // (db-maint.ts), то есть провала не было, — но форма ровно та, что
+        // разобрана как баг в докблоке `_envPositiveInt`, и держать её в
+        // двадцати строках от него значит приглашать скопировать.
+        archiveDays: _envPositiveInt("DB_MAINT_ARCHIVE_DAYS", 30),
       });
     } catch (e) {
       log.error("[db-maint] failed to start", { error: String(e) });

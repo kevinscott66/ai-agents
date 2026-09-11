@@ -777,7 +777,21 @@ export async function processNextRoleTask(
       }
     }
     const output = await withRunDeadline(execute(item), maxRunMs, item.taskId);
-    if (leaseLost || (leaseId && leaseFencedOut(item.taskId, leaseId, database))) {
+    // Аудит 2026-09-11: результат этой проверки поднимает ФЛАГ, а не только
+    // бросает. Потерю аренды находят два независимых пути — интервальный
+    // heartbeat (двигал `leaseLost`) и эта финальная сверка (не двигала
+    // ничего). Развод на два кода ниже сделан по флагу, поэтому вторая
+    // находка уезжала в `role_runtime.task_failed` — «роль завершилась
+    // отказом» — и заодно тянула `failRoleTask`, который на потере аренды
+    // пропускают намеренно. То есть ровно тот сигнал, который аудит
+    // 2026-08-28 разводил, снова оказывался разбавлен.
+    //
+    // Короткое замыкание сохранено: при уже поднятом флаге в БД не ходим —
+    // см. разбор у `leaseLost = false` в heartbeat'е выше.
+    if (!leaseLost && leaseId && leaseFencedOut(item.taskId, leaseId, database)) {
+      leaseLost = true;
+    }
+    if (leaseLost) {
       throw new Error("role task lease lost before completion");
     }
     completeRoleTask(item.taskId, output, database, leaseId);

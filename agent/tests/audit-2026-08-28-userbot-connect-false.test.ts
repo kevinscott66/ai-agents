@@ -11,7 +11,8 @@
  * Дальше всё шло по счастливому пути: `registerSelfAccount` глотает свой
  * `getMe` в log.warn (так и задумано), обработчик вешался на мёртвого
  * клиента, `buildHandle` отдавал хендл с `isNoop: false`, а
- * `orchestrator/services.ts:347` печатал «[userbot] connected, listening».
+ * ветка `if (userbot.isNoop)` в `startBackgroundServices`
+ * (orchestrator/services.ts) печатала «[userbot] connected, listening».
  * Вместо честного no-op (у которого методы говорят «userbot not available»)
  * команда получала живой на вид юзербот, ломающийся на первом же вызове.
  *
