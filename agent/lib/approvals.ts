@@ -752,7 +752,8 @@ export function decideApproval(
   // Аудит 2026-09-11: решение меняло ТОЛЬКО эту таблицу. Строка действия,
   // заведённая гейтом в `pending_approval`, после отказа так и читалась «ждёт
   // аппрув» — навсегда (докблок `closeGatedActionRow`). Одобрение сюда не
-  // входит: у него исход пишет своя строка через `dispatchAndAudit`.
+  // входит: его строку закрывает `executeApproved` через
+  // `settleApprovedActionRow`, а провал исполнения — `markApprovalFailed`.
   if (updated.status === "rejected") {
     closeGatedActionRow(
       updated.action_id,
@@ -790,6 +791,16 @@ export function markApprovalFailed(id: string, error: string): Approval | null {
   closeAgentPromptProposals([id]);
   const updated = getApproval(id);
   if (updated) {
+    // Аудит 2026-09-14: строку гейта закрывали только отказы, известные
+    // заранее (`failBeforeDispatch`) и сам диспатч (`settleApprovedActionRow`).
+    // Исключение МЕЖДУ решением и диспатчем — резолвер бота, ошибка SQLite в
+    // гейте или бакетах — долетало сюда мимо обоих, заявка становилась
+    // `failed`, а действие навсегда «ждало аппрув»: санитара по
+    // `pending_approval` у решённой заявки нет. Условие внутри
+    // `closeGatedActionRow` — только `pending_approval`, так что уже закрытую
+    // строку (`approved` после диспатча, `forbidden` после отказа) это не
+    // перепишет.
+    closeGatedActionRow(updated.action_id, `исполнение не состоялось: ${error}`);
     busEmit("approval.decided", { id: updated.id, status: updated.status });
   }
   return updated;

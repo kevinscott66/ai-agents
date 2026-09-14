@@ -28,6 +28,7 @@ import { db } from "../lib/db.ts";
 import { createApproval, getApproval } from "../lib/approvals.ts";
 import { insertActionRow, ACTION_STATUSES } from "../lib/audit.ts";
 import { cmdApprove } from "../lib/commands.ts";
+import { gateOrDispatch } from "../lib/action-dispatch.ts";
 import { setPermission } from "../lib/permissions.ts";
 import { savePermissions } from "./_helpers.ts";
 import { TOOLS } from "../lib/tools-schema.ts";
@@ -48,11 +49,16 @@ function gated(): { actionId: string; approvalId: string } {
   // `_diag: true` — ручной opt-out self-diag: провал диспатча ниже иначе
   // заводит задачу для aieng, и она доживает до чужих тестовых файлов.
   const payload = { chatId: CHAT_ID, text: "текст на согласование", _diag: true };
+  // `requestId` — как у `gateOrDispatch`: без него хелпер моделировал схему,
+  // которой в проде нет (гейтовая строка с NULL), и по такому замеру уже
+  // однажды записали в докблок ложное «связать строки нельзя».
+  const requestId = crypto.randomUUID();
   const row = insertActionRow("SEND_MESSAGE", {
     agentKey: AGENT,
     chatId: CHAT_ID,
     payload,
     status: "pending_approval",
+    requestId,
   });
   const a = createApproval({
     actionId: row.id,
@@ -133,6 +139,28 @@ describe("одобрение, дошедшее до диспатча, закры
     expect(seen).toBe("approved");
   });
 
+  test("исключение между решением и диспатчем не оставляет строку «ждёт аппрув»", async () => {
+    // Всё, что бросает после `decideApproval` и до `settleApprovedActionRow`
+    // мимо `failBeforeDispatch` (резолвер бота, ошибка SQLite в гейте или в
+    // бакетах), ловит `cmdApprove` и помечает заявку `failed`. Строку гейта
+    // при этом не закрывал никто, а санитара по `pending_approval` нет.
+    const g = gated();
+    const out = await cmdApprove({
+      approvalId: g.approvalId,
+      decidedBy: "tg:1",
+      chatId: CHAT_ID,
+      deps: {
+        resolveAgent: () => {
+          throw new Error("реестр ботов недоступен");
+        },
+      },
+    });
+    expect(out).toContain("выполнение упало");
+    expect(getApproval(g.approvalId)?.status).toBe("failed");
+    expect(statusOf(g.actionId)).toBe("forbidden");
+    expect(statuses().pending_approval).toBeUndefined();
+  });
+
   test("отказ ДО диспатча по-прежнему forbidden, а не approved", async () => {
     const g = gated();
     // Протухшая заявка — один из ранних выходов `executeApproved`.
@@ -142,6 +170,41 @@ describe("одобрение, дошедшее до диспатча, закры
     );
     await cmdApprove({ approvalId: g.approvalId, decidedBy: "tg:1", chatId: CHAT_ID });
     expect(statusOf(g.actionId)).toBe("forbidden");
+  });
+});
+
+describe("две строки одного одобренного действия связаны", () => {
+  test("гейт и исполнение несут один request_id — крах между ними различим", async () => {
+    // Докблок `settleApprovedActionRow` первой редакции утверждал обратное
+    // («у гейтовой строки NULL, диспатч минтит свой») — по замеру на хелпере
+    // выше, который строку вставляет в обход гейта. Настоящий путь идёт через
+    // `gateOrDispatch`: он заводит `ctx.requestId` до записи строки, а
+    // `executeApproved` передаёт его в `dispatchAndAudit`.
+    setPermission(AGENT, "SEND_MESSAGE", { allowed: true, requires_approval: true });
+    const res = await gateOrDispatch(
+      "SEND_MESSAGE",
+      { chatId: CHAT_ID, text: "связь по request_id", _diag: true } as any,
+      { agentKey: AGENT, chatId: CHAT_ID },
+    );
+    expect(res.kind).toBe("pending_approval");
+    const approvalId = (res as any).approvalId as string;
+    await cmdApprove({
+      approvalId,
+      decidedBy: "tg:1",
+      chatId: CHAT_ID,
+      deps: { resolveTg: () => ({ sendMessage: async () => ({ message_id: 9 }) }) as any },
+    });
+    const rows = db
+      .prepare(`SELECT status, request_id FROM agent_actions WHERE chat_id = ? ORDER BY created_at, rowid`)
+      .all(CHAT_ID) as Array<{ status: string; request_id: string | null }>;
+    expect(rows.map((r) => r.status).sort()).toEqual(["approved", "ok"]);
+    expect(rows[0].request_id).toBeTruthy();
+    expect(new Set(rows.map((r) => r.request_id)).size).toBe(1);
+  });
+
+  test("докблок больше не называет связь невозможной", () => {
+    const src = readFileSync(new URL("../lib/audit.ts", import.meta.url), "utf8").replace(/\s*\n\s*\*\s*/g, " ");
+    expect(src).not.toContain("Связать две строки по `request_id` нельзя");
   });
 });
 
