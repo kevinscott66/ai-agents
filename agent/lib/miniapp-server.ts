@@ -572,6 +572,22 @@ export function startMiniappServer(
   // приписка, и она отбрасывается.
   const RAW_TG_ACTOR = /^tg:(\d+)(?: [\s\S]*)?$/;
 
+  /**
+   * Личный чат — это человек: наблюдателю `chat_id` такого чата не отдаём.
+   *
+   * Аудит 2026-09-14. Правило про актора выше смотрело только на строки
+   * `miniapp:<id>` / `tg:<id>`, а две ручки этого же сервера пишут аудит с
+   * `chatId: user.id` — POST /api/permissions и MAC_STOP. В Telegram id личного
+   * чата с ботом совпадает с id человека, так что рядом с укороченным
+   * `agent_key` стоял целый `chat_id` того же админа. Положительный id в Bot
+   * API — всегда личный чат; группы и каналы отрицательные и проходят как
+   * есть. Mini App поле строк не читает (только шлёт фильтром), поэтому `null`
+   * вместо числа наблюдателю ничего не ломает.
+   */
+  function hidePrivateChatId(out: Record<string, unknown>): void {
+    if (typeof out.chat_id === "number" && out.chat_id > 0) out.chat_id = null;
+  }
+
   function shortenActor(v: unknown): string | null {
     if (typeof v !== "string") return null;
     const mini = v.match(RAW_MINIAPP_ACTOR);
@@ -617,6 +633,7 @@ export function startMiniappServer(
       const short = shortenActor(v);
       if (short !== null) out[k] = short;
     }
+    hidePrivateChatId(out);
     return out;
   }
 
@@ -637,6 +654,7 @@ export function startMiniappServer(
         const short = shortenActor(v);
         if (short !== null) out[k] = short;
       }
+      hidePrivateChatId(out);
       return out as T;
     });
   }
@@ -683,6 +701,9 @@ export function startMiniappServer(
     const m = (req.headers.get("authorization") ?? "").match(/^Bearer\s+(.+)$/i);
     return !!m && constantTimeEqual(m[1], token);
   }
+
+  /** Потолок `approvals.reason` от человека; см. ручку decide. */
+  const APPROVAL_REASON_MAX = 2000;
 
   async function readJson(req: Request): Promise<any> {
     try {
@@ -1665,6 +1686,11 @@ export function startMiniappServer(
       if (!TASK_STATUSES.includes(body.status)) {
         return json({ error: "bad status" }, 400);
       }
+      // Аудит 2026-09-14: объект в `error` доезжал до биндинга SQLite, и
+      // клиент получал текстом ошибки API сообщение драйвера.
+      if (body.error !== undefined && body.error !== null && typeof body.error !== "string") {
+        return json({ error: "bad body: error must be a string" }, 400);
+      }
       try {
         const t = updateTaskStatus(taskStatusMatch[1], body.status, {
           output: body.output,
@@ -1732,13 +1758,28 @@ export function startMiniappServer(
       ) {
         return json({ error: "bad body: decision required" }, 400);
       }
+      // Аудит 2026-09-14: `reason` уходил в `approvals.reason` как есть —
+      // объект отвечал сообщением драйвера SQLite, а строка любой длины
+      // ложилась целиком (соседний писатель колонки, `markApprovalFailed`,
+      // режет до того же потолка). Отказ, а не обрезка: причину пишет человек,
+      // и молча отрезанный хвост он не увидит.
+      if (
+        body.reason !== undefined &&
+        body.reason !== null &&
+        (typeof body.reason !== "string" || body.reason.length > APPROVAL_REASON_MAX)
+      ) {
+        return json(
+          { error: `bad body: reason must be a string up to ${APPROVAL_REASON_MAX} chars` },
+          400,
+        );
+      }
       try {
         const decidedBy = `miniapp:${user.id}`;
         const a = decideApproval(
           approvalDecideMatch[1],
           body.decision,
           decidedBy,
-          body.reason,
+          body.reason ?? undefined,
         );
         // approval.decided поднимает сама decideApproval — иначе решение из
         // Telegram проходило мимо шины (аудит 2026-08-08).

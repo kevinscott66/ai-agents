@@ -148,6 +148,12 @@ describe("SSE: актор-человек не уезжает наблюдате�
         }),
       );
       expect(payload.agent).toBe(`miniapp:…${String(OWNER_ID).slice(-4)}`);
+      // Аудит 2026-09-14: ручки Mini App пишут аудит с `chatId: user.id`
+      // (POST /api/permissions, MAC_STOP) — личный чат с ботом, и его id и
+      // есть id человека. Укороченный актор при целом `chat_id` не прятал
+      // ничего. Групповой чат (отрицательный id) проходит — тест ниже.
+      expect(payload.chat_id).toBeNull();
+      expect(JSON.stringify(payload)).not.toContain(String(OWNER_ID));
     } finally {
       s.close();
     }
@@ -167,6 +173,7 @@ describe("SSE: актор-человек не уезжает наблюдате�
         }),
       );
       expect(payload.agent).toBe(TG_ACTOR);
+      expect(payload.chat_id).toBe(OWNER_ID);
     } finally {
       s.close();
     }
