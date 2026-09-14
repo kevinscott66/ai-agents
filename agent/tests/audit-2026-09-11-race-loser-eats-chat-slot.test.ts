@@ -157,11 +157,22 @@ describe("вызывающие разведены по поводу", () => {
     expect(fn).not.toContain("releaseUnusedChatReservation(");
   });
 
-  test("у release ровно один вызывающий во всём lib/", () => {
+  test("у release ровно два вызывающих во всём lib/ — обе ветки проигрыша", () => {
     // Смысл «резервация не использована» узкий и проверяемый; расползшись, он
     // превратится во второй refundChatRateLimits без NO_REFUND_ACTIONS.
+    // Второй вызывающий — тот же отказ агентского ведра в ретрае self-diag
+    // (аудит 2026-09-14, audit-2026-09-14-self-diag-unused-chat-slot).
     const calls = DISPATCH.match(/^\s*releaseUnusedChatReservation\(/gm) ?? [];
     expect(calls).toHaveLength(1);
+    const diag = readFileSync(join(import.meta.dir, "..", "lib", "self-diag.ts"), "utf8");
+    expect(diag.match(/^\s*releaseUnusedChatReservation\(/gm) ?? []).toHaveLength(1);
+    const lib = new Bun.Glob("**/*.ts");
+    const callers: string[] = [];
+    for (const f of lib.scanSync(join(import.meta.dir, "..", "lib"))) {
+      const src = readFileSync(join(import.meta.dir, "..", "lib", f), "utf8");
+      if (/^\s*releaseUnusedChatReservation\(/m.test(src)) callers.push(f);
+    }
+    expect(callers.sort()).toEqual(["action-dispatch.ts", "self-diag.ts"]);
     // В самом rate-limits.ts имя встречается ровно один раз — в объявлении.
     expect(LIMITS.match(/releaseUnusedChatReservation\(/g) ?? []).toHaveLength(1);
     expect(LIMITS).toContain("export function releaseUnusedChatReservation(");

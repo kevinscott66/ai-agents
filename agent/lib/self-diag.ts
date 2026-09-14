@@ -37,6 +37,7 @@ import {
   checkAndConsumeChatRateLimits,
   refundRateLimit,
   refundChatRateLimits,
+  releaseUnusedChatReservation,
 } from "./rate-limits.ts";
 import {
   evaluateGate,
@@ -866,8 +867,12 @@ Return JSON only.`;
     ? checkAndConsumeRateLimit(ctx.agentKey, retryAction)
     : reserveChat;
   if (!reserve.ok) {
+    // Аудит 2026-09-14: не `refundChatRateLimits` — тот для GENERATE_IMAGE
+    // no-op (NO_REFUND_ACTIONS), и отбитый ретрай держал слот чата весь час.
+    // Диспатча не было, резервацией не воспользовались — повод
+    // `releaseUnusedChatReservation`, как у той же ветки в gateOrDispatch.
     if (reserveChat.ok) {
-      refundChatRateLimits(
+      releaseUnusedChatReservation(
         ctx.botId,
         ctx.chatId,
         retryAction,
