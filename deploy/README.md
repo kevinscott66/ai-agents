@@ -4,8 +4,9 @@
 > Production migrated to `203.0.113.10` where HTTPS is served by **nginx** (vhost
 > `agents.example.com`, `listen 8443 ssl → 127.0.0.1:8787`; port 443 belongs to an
 > unrelated xray VPN). TLS is Let's Encrypt via certbot (auto-renew, webroot). The old
-> `203.0.113.11` references below are historical. See
-> `.claude/memory/notes/server-migration-2026-06-06.md` for the live setup.
+> `203.0.113.11` references below are historical. The live setup is recorded
+> outside this repository — the repo is public and infrastructure facts do not
+> belong in it; ask the operator for the current host, ports and paths.
 >
 > **▶️ To deploy now, run `deploy/deploy.sh`** (one command: snapshot → rsync `agent/` → bun install →
 > rebuild Mini App → restart → health-check, with rollback hint on failure). `DRY_RUN=1 deploy/deploy.sh`

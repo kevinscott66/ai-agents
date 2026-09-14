@@ -16,7 +16,7 @@
  *    `ok:false` — это ответ демона: `project_not_allowed`, `spawn_failed`,
  *    ненулевой код выхода CLI. Каждый уже оставил след в чате.
  *
- *    Сценарий: `MAC_AUTONOMOUS=true`, оркестратор просит путь вне `MAC_ROOTS`.
+ *    Сценарий: `MAC_AUTONOMOUS=true`, оркестратор просит путь вне `MAC_PROJECT_ROOTS`.
  *    Каждая попытка пишет в чат `[mac][fail] project_not_allowed …` и
  *    возвращает слот. Модель видит провал, повторяет, лимит не убывает.
  *

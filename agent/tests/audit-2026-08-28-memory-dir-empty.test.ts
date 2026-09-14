@@ -93,13 +93,32 @@ describe("бэкап вики при пустом MEMORY_DIR", () => {
 });
 
 describe("разбор MEMORY_DIR не размножается", () => {
-  test("ни один модуль не читает переменную через ??", () => {
-    for (const f of ["../lib/memory.ts", "../lib/memory-async.ts", "../lib/backup.ts"]) {
+  // Модули, которые читают переменную сами. `lib/memory-async.ts` из списка
+  // ушёл не потому, что перестал ходить в вики, а потому, что перестал
+  // разбирать переменную: каталог области он берёт у `scopeDir` из memory.ts
+  // (аудит 2026-09-11). Сторож, который требовал бы вызова и от него, требовал
+  // бы ровно того размножения разбора, ради запрета которого написан.
+  const RESOLVERS = ["../lib/memory.ts", "../lib/backup.ts"];
+
+  test("каждый читатель переменной разбирает её общим resolveMemoryDir", () => {
+    for (const f of RESOLVERS) {
       const src = readFileSync(new URL(f, import.meta.url), "utf8");
       expect(src).toContain("resolveMemoryDir(process.env.MEMORY_DIR)");
+    }
+  });
+
+  test("ни один модуль не читает переменную через ??", () => {
+    for (const f of [...RESOLVERS, "../lib/memory-async.ts"]) {
+      const src = readFileSync(new URL(f, import.meta.url), "utf8");
       // Тот самый разъезд, из-за которого правку 2026-08-27 применили только
       // к одной из двух переменных.
       expect(src.includes('process.env.MEMORY_DIR ??')).toBe(false);
     }
+  });
+
+  test("memory-async не заводит собственного корня вики", () => {
+    const src = readFileSync(new URL("../lib/memory-async.ts", import.meta.url), "utf8");
+    expect(src.includes("resolveMemoryDir")).toBe(false);
+    expect(src.includes("process.env.MEMORY_DIR")).toBe(false);
   });
 });

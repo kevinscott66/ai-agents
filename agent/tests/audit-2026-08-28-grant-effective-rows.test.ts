@@ -5,7 +5,7 @@
  * и `ROLE_EXPOSED_TOOLS`, — и её собственный комментарий объявлял, что рубежей
  * выше таблицы ровно два. Их четыре.
  *
- *  - `LOW_FRICTION_ACTIONS` (`permissions.ts:860`) отвечает `allow` РАНЬШЕ, чем
+ *  - `LOW_FRICTION_ACTIONS` (`permissions.ts`) отвечает `allow` РАНЬШЕ, чем
  *    ветви manual/semi_auto — единственные, которые читают `requires_approval`.
  *    `/grant qa COMMENT_TASK approval` рапортовал «права обновлены», флаг ложился
  *    в БД и не читался ни в одном режиме автономии. Владелец ставит тормоз,

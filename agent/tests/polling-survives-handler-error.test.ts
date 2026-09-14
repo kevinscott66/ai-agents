@@ -247,7 +247,7 @@ describe("длинный ответ admin-команды не роняет хе�
     const parts = splitForTelegram(reply);
     expect(parts.length).toBeGreaterThan(1);
     for (const p of parts) {
-      // Запас под префикс «(i/N) », который добавляет sendChunked.
+      // Запас под префикс «(i/N)», который добавляет sendChunked.
       expect(p.length + 8).toBeLessThanOrEqual(TELEGRAM_MESSAGE_HARD_LIMIT);
     }
     // Ничего не потеряли по дороге — иначе «починка» была бы обрезкой.

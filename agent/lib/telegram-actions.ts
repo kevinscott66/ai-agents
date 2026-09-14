@@ -9,10 +9,14 @@
  * валидация payload → строка approval). Именно gateOrDispatch, а не
  * dispatchAction: последняя — исполнитель, она вызывается уже ПОСЛЕ гейта и
  * прав не смотрит вовсе, так что комментарий указывал на функцию, в которой
- * описанной цепочки нет. Комментарий до 2026-08-11 отправлял
- * читателя к `gatedAction()` в tools-schema.ts: такой функции там не было
- * никогда, а одноимённая в lib/actions.ts была мёртвой и заведомо более
- * слабой копией гейта — см. tests/single-gate-invariant.test.ts.
+ * описанной цепочки нет. Комментарий до 2026-08-11 отправлял читателя в
+ * tools-schema.ts — к функции gatedAction(), которой там не было никогда, а
+ * одноимённая в lib/actions.ts была мёртвой и заведомо более слабой копией
+ * гейта — см. tests/single-gate-invariant.test.ts. Порядок слов здесь не
+ * случаен: сторож в том тесте запрещает саму связку «gatedAction() в
+ * tools-schema» как живую ссылку и цитату от ссылки не отличает — раньше их
+ * разводили обратные кавычки, но имя мёртвое, и кавычки с него сняты
+ * (audit-2026-09-11-death-proof-counted-as-life).
  */
 import type { Telegram } from "telegraf";
 import { sendWithHtml, plainTelegramLength, cutBlock } from "./telegram-format.ts";
@@ -382,7 +386,7 @@ export async function tgSetReaction(
   tg: Telegram,
   args: TgSetReactionArgs,
 ): Promise<{ ok: true }> {
-  // Повтор по 429 — см. докстроку у tgRetry ниже.
+  // Повтор по 429 — см. докстроку у tgRetry выше по файлу.
   await tgRetry("tgSetReaction", () =>
     tg.callApi("setMessageReaction" as never, {
       chat_id: args.chatId,
@@ -584,11 +588,22 @@ export async function tgSendPhoto(
         };
   // T-fmt: подпись к фото тоже рендерим Markdown→HTML (жирный, ссылки), с
   // плейн-текст-фолбэком при ошибке парсинга — как в tgSendMessage.
-  if (args.caption) {
-    const [head, ...tail] =
-      plainTelegramLength(args.caption) > TELEGRAM_CAPTION_LIMIT
-        ? splitForTelegram(args.caption, TELEGRAM_CAPTION_LIMIT, CAPTION_FITS)
-        : [args.caption];
+  //
+  // Аудит 2026-09-11: `head!` был ложным non-null. У splitForTelegram есть
+  // ранний выход `if (!text.trim()) return []`, то есть на подписи из одних
+  // пробелов длиннее лимита (замер на 1500 пробелах: plain 1500, частей 0)
+  // head === undefined. mdToTelegramHtml на этом не падает (`if (!input)
+  // return input`), и в tg.sendPhoto уезжало `caption: undefined,
+  // parse_mode: "HTML"`: фото без подписи, tail пуст, ответ — `ok: true` без
+  // captionTailIncomplete. Ни 400, ни лога, ни признака для модели, что
+  // подпись потеряна. Соседний tgSendDocument ровно этот случай проверяет
+  // явно (`parts.length === 0`) — здесь ветки просто не было.
+  const parts = !args.caption
+    ? []
+    : plainTelegramLength(args.caption) > TELEGRAM_CAPTION_LIMIT
+      ? splitForTelegram(args.caption, TELEGRAM_CAPTION_LIMIT, CAPTION_FITS)
+      : [args.caption];
+  if (parts.length > 0) {
     const m = await sendWithHtml(
       (caption, pm) =>
         tg.sendPhoto(
@@ -596,14 +611,17 @@ export async function tgSendPhoto(
           photoArg as never,
           pm ? { ...extra, caption, parse_mode: pm } : { ...extra, caption },
         ),
-      head!,
+      parts[0]!,
       CAPTION_PLAIN_FITS,
     );
     const messageId = (m as { message_id: number }).message_id;
-    if (tail.length === 0) return { ok: true, messageId };
-    const tailRes = await sendCaptionTail(tg, args.chatId, messageId, tail);
+    if (parts.length === 1) return { ok: true, messageId };
+    const tailRes = await sendCaptionTail(tg, args.chatId, messageId, parts.slice(1));
     return { ok: true, messageId, ...captionTailFields(tailRes) };
   }
+  // Сюда же попадает подпись, от которой после резки не осталось частей, —
+  // см. разбор выше.
+  //
   // Аудит 2026-08-21: без подписи звался голый tg.sendPhoto — мимо повтора по
   // 429, который у ветки С подписью есть (sendWithHtml обёрнут в него внутри).
   // Замер на заглушке, отдающей один 429 с retry_after: с подписью —

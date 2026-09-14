@@ -9,7 +9,7 @@
  *
  * Присваивание в замороженный объект — не редкость и не привилегия telegraf:
  * `Object.freeze` стоит, например, на `DISPATCH_ONLY_ACTIONS`
- * (`lib/permissions.ts:60`), и любое присваивание в такой объект даёт под Bun
+ * (`lib/permissions.ts`), и любое присваивание в такой объект даёт под Bun
  * ровно `TypeError: Attempted to assign to readonly property.`. Прилетев из
  * таймера или из колбэка — то есть мимо try/catch — такая ошибка попадала в
  * ветку «безвредный шум telegraf», писалась одной warn-строкой и процесс ехал

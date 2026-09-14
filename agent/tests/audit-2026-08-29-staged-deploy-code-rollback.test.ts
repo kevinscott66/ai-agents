@@ -94,7 +94,7 @@ exit 0
       "curl",
       `#!/bin/sh
 case "$*" in
-  *8788*) V="\${STAGING_OK:-true}" ;;
+  *8789*) V="\${STAGING_OK:-true}" ;;
   *) V="\${PROD_OK:-true}" ;;
 esac
 echo "{\\"ok\\":$V}"
@@ -274,7 +274,7 @@ describe("прежние гарантии не сломаны", () => {
     }
   });
 
-  slowTest("порты выставляются drop-in'ом: staging 8788, прод 8787", () => {
+  slowTest("порты выставляются drop-in'ом: staging 8789, прод 8787", () => {
     const sb = makeSandbox();
     try {
       const r = run(sb);
@@ -284,7 +284,7 @@ describe("прежние гарантии не сломаны", () => {
         "utf8",
       );
       expect(green).toContain("MINIAPP_PORT=8787");
-      expect(r.out).toContain("8788");
+      expect(r.out).toContain("8789");
     } finally {
       rmSync(sb.dir, { recursive: true, force: true });
     }

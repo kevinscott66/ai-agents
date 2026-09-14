@@ -12,7 +12,7 @@ import { ErrorBox } from "../components/ErrorBox";
 import { TASK_STATUS_LABELS, label } from "../lib/labels";
 import { ellipsize } from "../lib/text";
 import { adminFromAutonomy } from "../lib/admin";
-import { TASK_TRANSITIONS } from "../../../lib/task-fsm.ts";
+import { TASK_TRANSITIONS, nextStatuses } from "../../../lib/task-fsm.ts";
 
 const STATUSES: (TaskStatus | "")[] = [
   "",
@@ -28,6 +28,13 @@ const STATUSES: (TaskStatus | "")[] = [
 // Куда можно из текущего статуса. Раньше здесь лежала своя копия серверной
 // таблицы, и она разошлась: сервер разрешал pending/running → awaiting_approval,
 // а кнопки для этого не было ни в списке, ни в карточке. Теперь источник один.
+//
+// Кнопки строятся не отсюда, а из `nextStatuses`: таблица знает только статус,
+// а сервер отказывает ещё и по самой задаче (прогон временной роли). Аудит
+// 2026-09-11: пока кнопки строились по таблице, такой задаче рисовалось
+// «→ done», и жать её значило получить 400 — расхождение вернулось, просто
+// этажом выше. Здесь таблица остаётся ровно для `isTerminalStatus`, которому
+// задачи не дают: он отвечает про ЦЕЛЕВОЙ статус, а не про текущую задачу.
 const NEXT_STATUS = TASK_TRANSITIONS;
 
 /**
@@ -240,7 +247,7 @@ export default function Tasks() {
   async function requestStatus(t: Task, next: TaskStatus) {
     const ask = confirmStatusText(t.title, next);
     if (ask && !window.confirm(ask)) return;
-    if (!NEXT_STATUS[t.status].includes(next)) {
+    if (!nextStatuses(t).includes(next)) {
       toast(`Нельзя «${label(TASK_STATUS_LABELS, next)}» из «${label(TASK_STATUS_LABELS, t.status)}»`, "error");
       return;
     }
@@ -351,7 +358,7 @@ export default function Tasks() {
       ) : (
         tasks.map((t) => {
           const busy = !!busyIds[t.id];
-          const possible = NEXT_STATUS[t.status];
+          const possible = nextStatuses(t);
           return (
             <div className="list-item" key={t.id}>
               <div
@@ -421,7 +428,7 @@ export default function Tasks() {
               </>
             )}
             <div className="btn-row">
-              {NEXT_STATUS[selected.status].map((next) => (
+              {nextStatuses(selected).map((next) => (
                 <button
                   key={next}
                   className={`btn ${

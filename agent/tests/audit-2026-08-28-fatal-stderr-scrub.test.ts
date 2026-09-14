@@ -2,7 +2,9 @@
  * Аудит 2026-08-28: фатальный путь писал секреты в journald мимо скраббера.
  *
  * В обработчике `uncaughtException` два стока одного и того же текста. Первый —
- * `log.error("UNCAUGHT", { error: msg, stack })` — чистится (lib/log.ts:212).
+ * `log.error("UNCAUGHT", { error: msg, stack })` — чистится
+ * (`scrubSecretString` в lib/log.ts; номер строки убран кругом 51 — цепочка
+ * правил там растёт, и координата тухнет при каждом новом правиле).
  * Второй — синхронный `writeSync(2, …)` перед `process.exit(1)` — не чистился
  * вовсе, а идёт он прямиком в stderr, то есть в journald на VPS и в любой сбор
  * логов оттуда.
@@ -14,8 +16,8 @@
  * Ни одна не отсеивается `isTelegrafNoise`: стек указывает в node-fetch или в
  * чужую программу, не в telegraf.
  *
- * Инвариант lib/log.ts:13 — «ALWAYS on — secrets must never log» — на этом
- * пути не исполнялся.
+ * Инвариант из шапки lib/log.ts — «ALWAYS on — secrets must never log» —
+ * на этом пути не исполнялся.
  */
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";

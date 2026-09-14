@@ -428,7 +428,14 @@ export const api = {
   }) =>
     req<{
       ok: boolean;
-      mode: AutonomyMode | "inherit";
+      /**
+       * Что легло в БД. Для `inherit` — `null`: строка роли снята, режима
+       * после неё нет никакого (аудит 2026-09-11; раньше сюда эхом уходил
+       * `"inherit"` — значение, которого нет ни в одной строке autonomy_modes).
+       */
+      mode: AutonomyMode | null;
+      /** true — строку сняли, роль снова наследует чат и глобальный режим. */
+      inherit: boolean;
       chat_id: number | null;
       agent: string | null;
     }>(`/api/autonomy`, { method: "POST", body: JSON.stringify(body) }),

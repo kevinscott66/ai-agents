@@ -101,14 +101,47 @@ function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
 }
 
 /**
- * Process-global registry of latest per-agent health snapshots. Populated by
- * the active monitor's onSnapshot callback; queried by the delegation
- * fallback logic (lib/role-skills.ts).
+ * Process-global registry of latest per-agent health snapshots. Наполняет его
+ * `runTick` напрямую, БЕЗУСЛОВНО — не `onSnapshot`, как тут было написано.
+ * Разница не косметическая: `onSnapshot` необязателен, и читатель, поверив
+ * прежней формулировке, искал бы причину залипшего фолбэка в его проводке
+ * (orchestrator/services.ts), а не в тике. Спрашивает реестр логика фолбэка
+ * делегирования — `isAgentAvailable` в lib/role-skills.ts.
+ *
+ * Аудит 2026-09-11: реестр ПЕРЕЖИВАЛ `stop()`. `isAgentAvailable` держит
+ * fail-open ровно на отсутствии записи («No health info → treat as
+ * available (monitor may not be running)»), а после остановки монитора запись
+ * оставалась — с последним, уже неопровержимым `alive: false`. Замер: три
+ * неудачных тика по ключу `backend`, затем `stop()` — и
+ * `isAgentAvailable("backend")` навсегда `false`, `pickAvailableAgent("backend")`
+ * навсегда уводит в `tgdev`. Монитора, который мог бы это опровергнуть, уже
+ * нет; чинить нечего и некому. То есть остановка монитора не возвращала
+ * систему в состояние «о здоровье ничего не известно», а фиксировала худший
+ * из виденных снимков навсегда.
+ *
+ * Второй адресат правки — прогон тестов: реестр процессный, `bun test` гоняет
+ * все файлы в одном процессе, а хука сброса тут не было вовсе (у такой же
+ * модульной карты в watchdog.ts он есть — `_resetWatchdogState`). Сегодня не
+ * стреляет случайно: файлы, где бот падает, берут синтетические ключи
+ * (`beta`, `gamma`, `hung`, `flaky`), а единственный настоящий ключ с отказом
+ * — `orchestrator` в health-error-token-leak — набирает ровно один
+ * consecutiveFailure на свежем мониторе, и порог `> 2` его не ловит. Один
+ * лишний `_tick()` в той фикстуре сделал бы `pickAvailableAgent` в любом
+ * последующем файле зависящим от порядка прогона.
  */
 const HEALTH_REGISTRY = new Map<string, HealthSnapshot>();
 
 export function getHealthSnapshot(agentKey: string): HealthSnapshot | undefined {
   return HEALTH_REGISTRY.get(agentKey);
+}
+
+/**
+ * Только для тестов: чистит реестр целиком. В отличие от `_resetWatchdogState`,
+ * сбрасывает ВСЁ состояние, переживающее экземпляр: другого у монитора нет —
+ * `state`, `inFlight` и таймер живут внутри `startHealthMonitor`.
+ */
+export function _resetHealthRegistry(): void {
+  HEALTH_REGISTRY.clear();
 }
 
 export function startHealthMonitor(deps: HealthDeps): HealthMonitorHandle {
@@ -221,7 +254,13 @@ export function startHealthMonitor(deps: HealthDeps): HealthMonitorHandle {
   if (typeof (timer as any).unref === "function") (timer as any).unref();
 
   return {
-    stop: () => clearInterval(timer),
+    // Снимаем СВОИ ключи, а не весь реестр: чужие записи не наши, чтобы их
+    // отменять. Смысл — вернуть fail-open из `isAgentAvailable`: монитора
+    // больше нет, значит о здоровье этих ботов снова ничего не известно.
+    stop: () => {
+      clearInterval(timer);
+      for (const b of bots) HEALTH_REGISTRY.delete(b.def.key);
+    },
     snapshot: snapshotNow,
     _tick: tick,
   };

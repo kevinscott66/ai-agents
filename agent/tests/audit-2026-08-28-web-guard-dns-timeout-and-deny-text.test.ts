@@ -4,7 +4,7 @@
  * F1. Потолок на резолв не применялся НИ НА ОДНОМ прод-пути. `DNS_TIMEOUT_MS`
  *     и `withTimeout` жили только в `blockedFetchReasonResolved`, у которого
  *     прод-вызовов нет: PreToolUse-хук — `webFetchGuardHookAsync`
- *     (`agent-sdk-runtime.ts:660`), загрузка — `guardedWebFetch`, и оба звали
+ *     (`agent-sdk-runtime.ts`), загрузка — `guardedWebFetch`, и оба звали
  *     голый `dnsLookup`. У него таймаута нет вообще, потолок держит только
  *     системный резолвер (десятки секунд), и так на каждый из 11 возможных
  *     хопов редиректа. При этом `dns.lookup` блокирует слот libuv-пула (4 по

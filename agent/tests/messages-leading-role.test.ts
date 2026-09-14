@@ -4,8 +4,8 @@
  * Messages API требует, чтобы ПЕРВОЕ сообщение было от роли "user" — иначе 400
  * invalid_request_error, ход падает целиком. А оба сборщика messages в проекте
  * строят историю одинаково: строка чата становится "assistant", если её написал
- * сам этот агент (orchestrator/message-handler.ts:319 и
- * lib/handoff.ts:190 buildDelegateMessages). Про хвост оба заботятся —
+ * сам этот агент (orchestrator/message-handler.ts и
+ * lib/handoff.ts buildDelegateMessages). Про хвост оба заботятся —
  * message-handler дописывает user-реплику, buildDelegateMessages дописывает
  * триггер, — а про голову не заботится никто.
  *

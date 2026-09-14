@@ -85,6 +85,11 @@ const BLOCKED_TABLES = [
   "role_runtime_queue",
   "role_runtime_queue_archive",
   "content_calendar",
+  // Аудит 2026-09-14: виртуальная таблица статистики страниц — объём любой
+  // закрытой таблицы выше, постранично (движок собран с DBSTAT_VTAB).
+  // `sqlite_dbpage` в сборке нет; предпосылку держит тест
+  // audit-2026-09-14-query-db-dbstat.
+  "dbstat",
 ];
 
 const ALLOWED_PREFIX =
@@ -146,7 +151,7 @@ export function validateQueryDbSql(
   // имя закрытой таблицы (`"messages"`) по-прежнему ловится.
   //
   // Число строк это не спасало и не ломало — воркер обрывает итерацию по
-  // input.limit в любом случае (query-db-worker.ts:48). Спасает оно работу
+  // input.limit в любом случае (проверка `taken >= input.limit` в query-db-worker.ts). Спасает оно работу
   // САМОЙ базы: без LIMIT движок честно отрабатывает полный скан и сортировку,
   // и единственной защитой остаётся SIGKILL через 5 секунд.
   const withoutLiterals = lower
@@ -155,7 +160,7 @@ export function validateQueryDbSql(
   // Аудит 2026-08-28: здесь стояло `LIMIT ${limit}` — ровно то число, которое
   // уходит воркеру как input.limit. SQLite отдавал по этой границе ровно
   // столько строк, итератор завершался, и проверка `taken >= input.limit`
-  // (query-db-worker.ts:48), на которой держится признак `truncated`, в тело
+  // (проверка `taken >= input.limit` в query-db-worker.ts), на которой держится признак `truncated`, в тело
   // не заходила НИКОГДА. Обрыв по числу строк на дефолтном пути был
   // структурно непомечаем: пятьдесят строк из трёхсот приезжали к модели как
   // полный ответ.

@@ -42,6 +42,12 @@ export interface ChangeAgentStatusResult {
     target_agent_key: string;
     old: { status: AgentStatus; autonomy_mode: AutonomyMode };
     new: { status: AgentStatus; autonomy_mode: AutonomyMode };
+    /**
+     * Есть только когда просьба разошлась с фактом: строка `scope='agent'`
+     * записана, но в ЭТОМ чате её перекрывает стоп-кран. Молчать о расхождении
+     * нельзя — владелец решит, что просьбу потеряли.
+     */
+    requested_autonomy_mode?: AutonomyMode;
     reason: string;
   };
 }
@@ -170,8 +176,23 @@ export function handleChangeAgentStatus(
   const oldAutonomy = getAutonomy(ctx.chatId, target);
 
   const newStatus: AgentStatus = payload.new_status ?? oldStatus;
-  const newAutonomy: AutonomyMode =
-    payload.new_autonomy_mode ?? oldAutonomy;
+  /**
+   * Аудит 2026-09-11: `new.autonomy_mode` считался как `payload.new_autonomy_mode
+   * ?? oldAutonomy` — то есть как НАМЕРЕНИЕ, тогда как `old` снят с разрешения
+   * области (`getAutonomy`). В одной строке диффа сравнивались два разных
+   * понятия, и расходились они не теоретически: записываем мы строку
+   * `scope='agent'`, а `getAutonomy` читает чатовый стоп-кран РАНЬШЕ неё и
+   * из него же возвращает. При запертом чате действие сообщало переход
+   * `locked → auto`, писало его в `agent_actions` со `status:"ok"`, а режим
+   * агента в этом чате оставался `locked`.
+   *
+   * Отказывать в таком действии нельзя: строка `scope='agent'` глобальна, и в
+   * ОСТАЛЬНЫХ чатах она подействует. Поэтому лечим отчётность, а не право:
+   * значение перечитывается после записи, внутри той же транзакции, и диффом
+   * становится фактический эффект. Расхождение с просьбой не замалчивается —
+   * оно едет отдельным полем, иначе владелец решит, что просьбу потеряли.
+   */
+  let newAutonomy: AutonomyMode = oldAutonomy;
 
   // Аудит 2026-08-29: три записи — статус, режим автономии и строка аудита —
   // уходили тремя отдельными автокоммитами. Обрыв между ними оставлял ровно ту
@@ -194,6 +215,7 @@ export function handleChangeAgentStatus(
     ) {
       setAutonomy("agent", target, payload.new_autonomy_mode);
     }
+    newAutonomy = getAutonomy(ctx.chatId, target);
 
     // Dedicated audit row capturing the old → new diff.
     return insertActionRow("CHANGE_AGENT_STATUS", {
@@ -203,6 +225,10 @@ export function handleChangeAgentStatus(
         target_agent_key: target,
         old: { status: oldStatus, autonomy_mode: oldAutonomy },
         new: { status: newStatus, autonomy_mode: newAutonomy },
+        ...(payload.new_autonomy_mode != null &&
+        payload.new_autonomy_mode !== newAutonomy
+          ? { requested_autonomy_mode: payload.new_autonomy_mode }
+          : {}),
         reason: payload.reason,
         _diff: true,
       },
@@ -217,6 +243,10 @@ export function handleChangeAgentStatus(
       target_agent_key: target,
       old: { status: oldStatus, autonomy_mode: oldAutonomy },
       new: { status: newStatus, autonomy_mode: newAutonomy },
+      ...(payload.new_autonomy_mode != null &&
+      payload.new_autonomy_mode !== newAutonomy
+        ? { requested_autonomy_mode: payload.new_autonomy_mode }
+        : {}),
       reason: payload.reason,
     },
   };

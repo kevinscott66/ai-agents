@@ -210,14 +210,6 @@ const GZIP_MIN_BYTES = 1024;
 const GZIP_MAX_BYTES = 2_000_000;
 
 /**
- * T-311 — strip wildcard ACAO and set the real allowed origin (or none).
- *
- * Call this as the final post-processing step on every response leaving the
- * Mini App. It consults `MINIAPP_ALLOWED_ORIGINS` (via `pickAllowedOrigin`)
- * to decide whether to echo the request Origin. Same-origin requests
- * (no Origin header) keep no ACAO header — they don't need one.
- */
-/**
  * SEC-6 / T-604 — security headers applied to every Mini App response.
  *
  * CSP is tuned for the Telegram WebApp embedding (see miniapp/index.html):
@@ -244,6 +236,14 @@ export const SECURITY_HEADERS: Record<string, string> = {
   "content-security-policy": MINIAPP_CSP,
 };
 
+/**
+ * T-311 — strip wildcard ACAO and set the real allowed origin (or none).
+ *
+ * Call this as the final post-processing step on every response leaving the
+ * Mini App. It consults `MINIAPP_ALLOWED_ORIGINS` (via `pickAllowedOrigin`)
+ * to decide whether to echo the request Origin. Same-origin requests
+ * (no Origin header) keep no ACAO header — they don't need one.
+ */
 export function applyCorsToResponse(req: Request, resp: Response): Response {
   const reqOrigin = req.headers.get("origin");
   const allowed = pickAllowedOrigin(reqOrigin);
@@ -480,8 +480,8 @@ const LOOPBACK_PEERS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 /**
  * Ключ анонимного ведра — адрес клиента.
  *
- * За nginx (`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for`,
- * agent/docs/DEPLOY.md:42) сокет всегда 127.0.0.1, поэтому по peer-адресу
+ * За nginx (`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for` —
+ * блок про nginx в agent/docs/DEPLOY.md) сокет всегда 127.0.0.1, поэтому по peer-адресу
  * лимитировать бессмысленно: всё сольётся в одно ведро. Но и первому элементу
  * XFF верить нельзя — `$proxy_add_x_forwarded_for` ДОПИСЫВАЕТ remote_addr к
  * тому, что прислал клиент, то есть начало списка полностью подконтрольно

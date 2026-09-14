@@ -9,6 +9,10 @@ import type { Database } from "bun:sqlite";
 import { emitAlert } from "./alerting.ts";
 import { db } from "./db.ts";
 import { log } from "./log.ts";
+// Скраб+обрезка `tasks.error` живут в одном месте на весь репозиторий — см.
+// докблок `taskErrorValue`. Цикла нет: tasks.ts тянет только
+// task-fsm/errors/db/log, role-runtime среди них не значится.
+import { taskErrorValue } from "./tasks.ts";
 
 export const ROLE_PROVIDERS = ["internal", "claude", "codex"] as const;
 export type RoleProvider = (typeof ROLE_PROVIDERS)[number];
@@ -251,7 +255,7 @@ export function enqueueRoleTask(
   //
   // Терять нечего: единственным читателем этой копии была миграция 044,
   // разово перенёсшая легаси-строки в очередь; живой код берёт промпт из
-  // `role_runtime_queue.system_prompt` (:173). `queue_version: 2` — метка
+  // `role_runtime_queue.system_prompt` (`rowToItem`). `queue_version: 2` — метка
   // формата без промпта, чтобы старую строку было видно по данным, а не по
   // догадке. Старые строки чистит миграция 052.
   const queueInput = JSON.stringify({
@@ -588,7 +592,7 @@ export function failRoleTask(
     if (leaseId && activeLease?.leaseId !== leaseId) throw new Error("role task lease lost");
     database.prepare(`UPDATE role_runtime_queue SET state='failed' WHERE task_id=? AND state='running'`).run(taskId);
     if (task?.status === "running") {
-      database.prepare(`UPDATE tasks SET status='failed', error=?, updated_at=? WHERE id=? AND status='running'`).run(error.slice(0, 4000), now, taskId);
+      database.prepare(`UPDATE tasks SET status='failed', error=?, updated_at=? WHERE id=? AND status='running'`).run(taskErrorValue(error), now, taskId);
     }
   });
   tx.immediate();
@@ -777,7 +781,21 @@ export async function processNextRoleTask(
       }
     }
     const output = await withRunDeadline(execute(item), maxRunMs, item.taskId);
-    if (leaseLost || (leaseId && leaseFencedOut(item.taskId, leaseId, database))) {
+    // Аудит 2026-09-11: результат этой проверки поднимает ФЛАГ, а не только
+    // бросает. Потерю аренды находят два независимых пути — интервальный
+    // heartbeat (двигал `leaseLost`) и эта финальная сверка (не двигала
+    // ничего). Развод на два кода ниже сделан по флагу, поэтому вторая
+    // находка уезжала в `role_runtime.task_failed` — «роль завершилась
+    // отказом» — и заодно тянула `failRoleTask`, который на потере аренды
+    // пропускают намеренно. То есть ровно тот сигнал, который аудит
+    // 2026-08-28 разводил, снова оказывался разбавлен.
+    //
+    // Короткое замыкание сохранено: при уже поднятом флаге в БД не ходим —
+    // см. разбор у `leaseLost = false` в heartbeat'е выше.
+    if (!leaseLost && leaseId && leaseFencedOut(item.taskId, leaseId, database)) {
+      leaseLost = true;
+    }
+    if (leaseLost) {
       throw new Error("role task lease lost before completion");
     }
     completeRoleTask(item.taskId, output, database, leaseId);

@@ -35,6 +35,7 @@ import {
   speakerLabel,
   defuseSpeakerLabels,
   defuseTriggerText,
+  nowSystemText,
 } from "./agent-prompts.ts";
 
 export const MAX_HANDOFF_DEPTH = 3;
@@ -154,7 +155,7 @@ export interface RespondAsOpts {
    * разделяемый ВСЕМИ ветками рекурсии (одна ссылка). `visited` ограничивает
    * только линейный путь; budget режет суммарный fan-out при ветвлении.
    */
-  budget?: { n: number; max: number };
+  budget?: HandoffBudget;
   /**
    * Вложения хода пользователя (картинки, текстовые документы). Делегат должен
    * видеть их так же, как видел агент, которого позвали первым: в истории от
@@ -276,6 +277,22 @@ export function normalizeHandoffOutcome(
   return { status: "failed", reason: "delegate returned no result" };
 }
 
+/**
+ * Общий на весь ход пользователя объект вызовов ролей.
+ *
+ * `n`/`max` — потолок суммарного fan-out (S1). `invoked` — КАКИЕ роли уже
+ * отработали в этом ходе; без него каскад по @-упоминаниям в итоговом тексте
+ * агента запускал роль, которую тот же ход уже позвал через DELEGATE_TO_ROLE:
+ * второй платный прогон и второе сообщение в чате на одно сообщение
+ * пользователя. Число повторы не ловит — нужен именно список.
+ * См. tests/audit-2026-09-11-cascade-repeats-delegate.test.ts.
+ */
+export interface HandoffBudget {
+  n: number;
+  max: number;
+  invoked?: Set<string>;
+}
+
 export async function respondAs(
   opts: RespondAsOpts,
   deps: HandoffDeps,
@@ -312,9 +329,15 @@ export async function respondAs(
     };
   }
   // S1: жёсткий потолок суммарных handoff-вызовов на user-turn (общий budget).
-  // Если вызывающий счётчик не передал (путь DELEGATE_TO_ROLE — см. коммент к
-  // HANDOFF_MAX_INVOCATIONS), заводим свой на это дерево: ниже он уходит во все
-  // ветки, так что fan-out внутри делегата тоже ограничен.
+  // Если вызывающий счётчик не передал, заводим свой на это дерево: ниже он
+  // уходит во все ветки, так что fan-out внутри делегата тоже ограничен.
+  //
+  // Аудит 2026-09-11: здесь было сказано «путь DELEGATE_TO_ROLE» — это уже
+  // неправда и ровно наоборот. Счётчик заводит tool-loop один на ход (см.
+  // докблок HANDOFF_MAX_INVOCATIONS), а ветка DELEGATE_TO_ROLE в
+  // action-dispatch.ts передаёт его явно. Без счётчика сюда приходят только
+  // легаси-вызов по @-упоминанию мимо tool-loop и тесты; называть боевой путь
+  // тем, кто теряет потолок, опаснее всего — следующий пойдёт чинить починенное.
   const budget = opts.budget ?? { n: 0, max: HANDOFF_MAX_INVOCATIONS };
   if (budget.n >= budget.max) {
     log.warn("[handoff] invocation budget exhausted — skipping", {
@@ -328,6 +351,10 @@ export async function respondAs(
     };
   }
   budget.n += 1;
+  // Список ролей хода ведётся ровно там же, где счётчик: одно событие — одна
+  // запись, разойтись им негде. Пишется ДО хода делегата, как и счётчик:
+  // намерение позвать роль уже состоялось.
+  (budget.invoked ??= new Set<string>()).add(target.def.key);
   // Build chain extension for the target's own runWithTools call. If no chain
   // was given (legacy callers / direct @-mention path), derive one from visited
   // by inserting triggerAgentKey first, then target.
@@ -397,6 +424,10 @@ export async function respondAs(
         cache_control: { type: "ephemeral" },
       },
       ...(hitPages ? [{ type: "text" as const, text: hitPages }] : []),
+      // Аудит 2026-09-11: последним и БЕЗ cache_control — см. nowSystemText.
+      // Делегат планирует посты наравне с оркестратором, а «завтра» без даты
+      // считать не от чего.
+      { type: "text" as const, text: nowSystemText() },
     ];
 
     const messages = buildDelegateMessages(
@@ -489,10 +520,19 @@ export async function respondAs(
       fromName: target.username,
       text: reply,
       ts: (sent?.date ?? Math.floor(Date.now() / 1000)) * 1000,
-      // P2 dup-fix (2026-06-09): pass the sent message_id so the userbot's later
-      // observation of THIS same message dedups via OR IGNORE on
-      // (chat_id, tg_message_id). Without it, delegated-agent replies were
-      // recorded twice ([pm]/[backend] + userbot copy).
+      // P2 dup-fix (2026-06-09): отдаём message_id отправленного сообщения,
+      // чтобы позднее наблюдение ЭТОГО же сообщения userbot'ом схлопнулось по
+      // (chat_id, tg_message_id). Без него ответы делегированных ролей
+      // записывались дважды ([pm]/[backend] + копия от userbot'а).
+      //
+      // Аудит 2026-09-11: здесь было сказано «dedups via `OR IGNORE`», а
+      // `INSERT OR IGNORE` в `recordMessage` (memory.ts) сняли ещё аудитом
+      // 2026-08-12 — оно съедало расшифровки голосовых. Сейчас там
+      // `ON CONFLICT ... DO UPDATE`, и это не «ignore»: сохранённый ПУСТОЙ
+      // текст поздняя запись перезаписывает. На поведение `respondAs` это не
+      // влияет (он пишет непустой `reply`), но читатель, правящий путь
+      // голосовых, уходил отсюда с уверенностью, что вторая запись заведомо
+      // без эффекта.
       tgMessageId: sent?.message_id,
       transport: "bot_api",
     });

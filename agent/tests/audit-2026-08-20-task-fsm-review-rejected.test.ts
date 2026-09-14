@@ -16,7 +16,7 @@
  *  2. Агент, зовущий UPDATE_TASK_STATUS{failed} по задаче на ревью, получал
  *     `invalid status transition` — то есть тул отказывал ровно там, где
  *     честный ответ и требовался.
- *  3. `closeDelegatedTask` (`lib/action-dispatch.ts:908-923`) специально
+ *  3. `closeDelegatedTask` (`lib/action-dispatch.ts`) специально
  *     возвращает задачу из awaiting_review в running, чтобы записать провал
  *     делегата. Обход выглядит как «работу возобновили», хотя её закрыли.
  *  4. `gcStaleTasks` смотрит только pending/running — задача, оставленная в

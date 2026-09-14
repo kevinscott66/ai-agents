@@ -2,9 +2,9 @@
  * Аудит 2026-08-12: бюджет на картинки обходился вторым маршрутом.
  *
  * Лимит «6/час на агента, 30/час суммарно» подписан ценой прямо в комментарии
- * к RULES (lib/rate-limits.ts:31) — $0.04 за вызов OpenAI. Висит он на действии
+ * к RULES (lib/rate-limits.ts) — $0.04 за вызов OpenAI. Висит он на действии
  * GENERATE_IMAGE. Но к тому же самому API ведёт второй путь: PUBLISH_TO_CHANNEL
- * → generateCoverPng → generateImage (action-dispatch.ts:494), а
+ * → generateCoverPng → generateImage (action-dispatch.ts), а
  * PUBLISH_TO_CHANNEL в RULES отсутствует. Замер:
  *
  *   GENERATE_IMAGE через гейт: прошло 6 → rate limit: 6/3600s

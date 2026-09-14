@@ -116,9 +116,17 @@ function num(v: unknown): number | null {
   return null;
 }
 
-/** True for hex contract addresses like "0xabc123…" — never a real ticker. */
+/**
+ * True for hex contract addresses like "0xabc123…" — never a real ticker.
+ *
+ * Круг 28: вторая ветка была `|| /^0X[0-9A-F]{6,}$/`, и решить она не могла
+ * ничего: первая стоит с флагом `i`, то есть уже принимает и `0X`, и A-F, а
+ * `+` шире, чем `{6,}`. Любая строка, проходившая вторую, проходила первую —
+ * замер: 200 000 сгенерированных `0X`+hex, ноль расхождений. Убрана, чтобы не
+ * читалась как отдельное правило про заглавный префикс.
+ */
 function looksLikeHexAddress(s: string): boolean {
-  return /^0x[0-9a-f]+$/i.test(s) || /^0X[0-9A-F]{6,}$/.test(s);
+  return /^0x[0-9a-f]+$/i.test(s);
 }
 
 /**
@@ -552,6 +560,9 @@ export async function ensureUnlocks(): Promise<void> {
   }
 }
 
+/** Предел, за которым `new Date(ms).toISOString()` бросает — см. `lastUnlocksRefreshIso`. */
+const MAX_DATE_MS = 8.64e15;
+
 /**
  * Когда фид приезжал в последний раз, или null — если не приезжал никогда.
  *
@@ -570,8 +581,6 @@ export async function ensureUnlocks(): Promise<void> {
  * `new Date(1e300).toISOString()` бросает RangeError (диапазон Date ±8.64e15),
  * а бросок отсюда — это 500 сразу на обоих эндпоинтах.
  */
-const MAX_DATE_MS = 8.64e15;
-
 export function lastUnlocksRefreshIso(): string | null {
   const at = getMeta(CACHE_KEY);
   const ms = at ? Number(at) : NaN;

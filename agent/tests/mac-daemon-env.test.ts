@@ -26,4 +26,29 @@ describe("Mac daemon child environment", () => {
       key.startsWith("ANTHROPIC_") || key.startsWith("CLAUDE_")
     )).toBe(false);
   });
+
+  /**
+   * Аудит 2026-09-11: `PWD` наследовался от демона, а прогон запускается с
+   * `cwd: allowedProject` — ребёнок получал путь, указывающий не туда, где он
+   * работает, и обычно за пределы `MAC_PROJECT_ROOTS`.
+   */
+  test("PWD не наследуется от демона", () => {
+    const out = sanitizeChildEnv({ PATH: "/usr/bin", PWD: "/Users/tester/daemon-home" });
+
+    expect(out.PWD).toBeUndefined();
+  });
+
+  test("PWD выводится из каталога прогона", () => {
+    const out = sanitizeChildEnv(
+      { PATH: "/usr/bin", PWD: "/Users/tester/daemon-home" },
+      "/Users/tester/projects/site",
+    );
+
+    expect(out.PWD).toBe("/Users/tester/projects/site");
+  });
+
+  test("пустой cwd не заводит пустую переменную", () => {
+    // `PWD=""` — молчаливая ложь; без переменной `getcwd()` даёт правду.
+    expect(sanitizeChildEnv({ PATH: "/usr/bin" }, "")).toEqual({ PATH: "/usr/bin" });
+  });
 });

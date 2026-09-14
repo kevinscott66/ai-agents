@@ -20,7 +20,7 @@
  * ссылки меряются по якорю; в чат уезжал уже закрытый блок, где они меряются
  * целиком.
  *
- * Достижимость: подписи к медиа. `tgSendPhoto` (telegram-actions.ts:488) и
+ * Достижимость: подписи к медиа. `tgSendPhoto` (telegram-actions.ts) и
  * `tgSendDocument` (:544) режут подпись как
  * `splitForTelegram(caption, TELEGRAM_CAPTION_LIMIT, CAPTION_FITS)`, где
  * `CAPTION_FITS = htmlPartFits(1000)` — мерка чисто plain. Запаса между мягким

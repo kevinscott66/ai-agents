@@ -49,12 +49,11 @@ SSE-канал в Mini App, SQLite (`data/memory.db`) как единствен�
 
 ### `lib/` — ядро
 
-**После R1-R4 рефакторинга (2026-05-22):** action-dispatch.ts увеличился до 1245 LOC, добавлены новые утилиты http-utils.ts, auth-middleware.ts, mac-bridge.ts, db-maint.ts. Миграции #019-#020 поддерживают DB maintenance и Mac Control.
+**После R1-R4 рефакторинга (2026-05-22):** action-dispatch.ts заметно вырос, добавлены новые утилиты http-utils.ts, auth-middleware.ts, mac-bridge.ts, db-maint.ts. Миграции #019-#020 поддерживают DB maintenance и Mac Control. (Числа строк здесь не приводятся намеренно: они тухнут молча — см. tests/audit-2026-09-11-stale-line-coordinates.test.ts.)
 | Файл | Назначение |
 |---|---|
 | `action-dispatch.ts` | Маршрутизатор: получает структурированный action, прогоняет через gate, вызывает исполнителя. |
 | `action-payload.ts` | Нормализация полезной нагрузки действий, валидация. |
-| `actions.ts` | Перечень и константы поддерживаемых действий. |
 | `admin-commands.ts` | Обработка `/`-команд от админа в чате. |
 | `anthropic-client.ts` | Обёртка над SDK + лимит конкурентности (`ANTHROPIC_MAX_CONCURRENCY`). |
 | `anti-dup.ts` | Защита от дублирующих сообщений/действий. |
@@ -77,7 +76,7 @@ SSE-канал в Mini App, SQLite (`data/memory.db`) как единствен�
 | `miniapp-auth.ts` | HMAC-проверка Telegram WebApp initData. |
 | `miniapp-server.ts` | HTTP+SSE сервер для Mini App. **Большой и append-friendly** — не рефакторить ради рефакторинга. |
 | `openai-image.ts` | `GENERATE_IMAGE` (требует OPENAI_API_KEY, опционально). |
-| `permissions.ts` | Scopes (global/chat/agent), режимы автономии. |
+| `permissions.ts` | Перечень действий (`ACTION_TYPES`), scopes (global/chat/agent), режимы автономии. |
 | `rate-limits.ts` | Per-agent/per-chat rate limiting. |
 | `role-skills.ts` | Декларация скиллов на роль. |
 | `self-diag.ts` | Диагностика упавших действий, создаёт diag-task для aieng. |
@@ -139,10 +138,10 @@ MINIAPP_BOT_TOKEN=...       # тот же или отдельный, для WebA
 CLAUDE_CODE_OAUTH_TOKEN=...
 USE_AGENT_SDK=             # пусто = выбирается subscription при наличии OAuth
 # ANTHROPIC_API_KEY=...    # только для явного USE_AGENT_SDK=false
-ALLOWED_CHAT_IDS=-100123,-100456
-TG_API_ID=...               # MTProto
-TG_API_HASH=...
-TG_PHONE=+7...
+TELEGRAM_ALLOWED_GROUP_IDS=-100123,-100456
+TELEGRAM_API_ID=...         # MTProto
+TELEGRAM_API_HASH=...
+TELEGRAM_USERBOT_PHONE=+7...
 USERBOT_SESSION_KEY=...     # шифрование сессии на диске
 MINIAPP_PUBLIC_URL=https://agents.example.com:8443 # URL кнопки Mini App; только HTTPS
 MINIAPP_ALLOWED_ORIGINS=https://agents.example.com:8443   # опционально
@@ -185,7 +184,7 @@ cd miniapp && bun run build
 rsync -avz --delete dist/ root@203.0.113.11:/opt/agent-team/miniapp/dist/
 ```
 
-Перед Bun-сервером стоит **nginx** (SNI :14443 → bun:8787), сертификаты Let's Encrypt через certbot. **Mac bridge** слушает на `:8787`. Бэкапы SQLite — в `/opt/agent-team/data/backups/`, ротация настроена `lib/backup.ts`. **DB maintenance**: ежедневный архив в 04:00 UTC (`agent_actions_archive`, `audit_logs_archive`).
+Перед Bun-сервером стоит **nginx** (SNI :14443 → bun:8787), сертификаты Let's Encrypt через certbot. **Mac bridge** слушает на `:8788` (`DEFAULT_MAC_BRIDGE_PORT`); `:8787` — это HTTP-порт Mini App (`DEFAULT_MINIAPP_PORT`), порты разные и путать их нельзя. Бэкапы SQLite — в `/opt/agent-team/data/backups/`, ротация настроена `lib/backup.ts`. **DB maintenance**: ежедневный архив в 04:00 UTC (`agent_actions_archive`, `audit_logs_archive`).
 
 ## 6. 12 ролей + userbot
 
@@ -297,7 +296,7 @@ ssh root@203.0.113.11 'cp /opt/agent-team/data/memory.db /opt/agent-team/data/ba
 - **Anthropic rate-limits**: концентратор в `lib/anthropic-client.ts`, регулируется `ANTHROPIC_MAX_CONCURRENCY`. Если ловишь 529 — снижай.
 - **`data/userbot.session` нельзя удалять**. Иначе потребуется повторный логин с SMS-кодом, что больно из-под systemd. Plaintext-файл не удаляй: сначала мигрируй его через `tools/migrate-userbot-session.ts`.
 - **`lib/miniapp-server.ts` большой и append-friendly**. Не пытаться красиво распилить, пока не приспичит — туда добавляются ручки, и так норм.
-- **`ALLOWED_CHAT_IDS`** — без него бот не отвечает ни в одной группе. Частая причина «не работает».
+- **`TELEGRAM_ALLOWED_GROUP_IDS`** — без него бот не отвечает ни в одной группе: граница fail-closed, пустой список запрещает всем. Частая причина «не работает».
 - SQLite через `bun:sqlite` — не пытаться подключать `better-sqlite3` параллельно.
 
 ## 15. Mac Control (Stage A/B готово)
@@ -313,12 +312,12 @@ ssh root@203.0.113.11 'cp /opt/agent-team/data/memory.db /opt/agent-team/data/ba
 
 **Нужно для запуска:**
 - Запустить `agent/mac-daemon/daemon.ts` на Mac через launchd (Mac daemon не запущен — нужен launchd + TLS)
-- Настроить TLS перед `:8787` (ssh tunnel или nginx upstream)
+- Настроить TLS перед `:8788` (ssh tunnel или nginx upstream)
 - Проверить: `curl -s https://<host>/api/health | jq .mac_online` → `true`
 
 **Архитектура:**
 ```
-Claude Agent → MAC_RUN_CLAUDE action → WebSocket :8787 → Mac daemon → osascript/Automator
+Claude Agent → MAC_RUN_CLAUDE action → WebSocket :8788 → Mac daemon → Bun.spawn("claude")
 ```
 
 Stage B (5 режимов) готово, Stage C (Mini App UI вкладка для Mac-сессий) в разработке.

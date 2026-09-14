@@ -35,7 +35,7 @@ if (!process.env.MEMORY_DB_PATH) {
 }
 
 // Аудит 2026-08-20: до сих пор пинилась только БД. Каталог markdown-страниц
-// вики брался как `process.env.MEMORY_DIR ?? "memory"` (lib/memory.ts:35) на
+// вики брался как `process.env.MEMORY_DIR ?? "memory"` (lib/memory.ts) на
 // загрузке модуля, то есть относительно cwd прогона — а санкционированный
 // гейт запускается из `agent/`, значит тесты работали в РЕАЛЬНОМ `agent/memory`,
 // который лежит в гите.

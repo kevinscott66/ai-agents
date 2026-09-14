@@ -2,8 +2,8 @@
  * Аудит 2026-08-28: класс сбоя определялся по склейке, а не по сегментам.
  *
  * `res.error` для SPLIT_TASK — это `split failed: no roles accepted the task
- * (<joinDelegationErrors>)` (action-dispatch.ts:889), для фан-аута
- * DELEGATE_TO_ROLE — сама склейка (:873). То есть строка из N сегментов
+ * (<joinDelegationErrors>)` (ветка `SPLIT_TASK` в action-dispatch.ts), для
+ * фан-аута DELEGATE_TO_ROLE — сама склейка. То есть строка из N сегментов
  * `role: причина`, склеенных `"; "`. А `categorizeError` — регэкспы по всей
  * строке, где порядок проверок задаёт победителя.
  *

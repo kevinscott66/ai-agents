@@ -98,7 +98,8 @@ export async function generateCoverPng(
     // получали ИМЕННО ТО, что фикс 2026-08-13 закрывал, только нарисованное
     // Claude вместо OpenAI. Гейт был декоративным.
     //
-    // Отказ здесь не роняет публикацию: вызывающий (action-dispatch.ts:606)
+    // Отказ здесь не роняет публикацию: вызывающий — `handlePublishToChannel`
+    // в dispatch/publish.ts, единственное место, зовущее `generateCoverPng` —
     // ловит исключение обложки, логирует роль и постит текстом — см. разбор
     // аудита 2026-08-11 там же.
     if (!isToolExposedToRole("GENERATE_SVG_IMAGE", agentKey)) {
@@ -113,7 +114,7 @@ export async function generateCoverPng(
   if (!isToolExposedToRole("GENERATE_IMAGE", agentKey)) {
     // Аудит 2026-08-27: ниже стоял `cheapCover`, который для такой роли ВСЕГДА
     // бросает. `ROLE_EXPOSED_TOOLS.GENERATE_IMAGE` и `.GENERATE_SVG_IMAGE` —
-    // один и тот же список `["design","orchestrator"]` (permissions.ts:156-157),
+    // один и тот же список `["design","orchestrator"]` (permissions.ts),
     // а `isToolExposedToRole` читает статическую карту без БД-оверрайдов; значит
     // «нет растра» ⟹ «нет и SVG», и `cheapCover` упирается в собственный гейт.
     // То есть каждый заведомо безнадёжный вызов сначала СПИСЫВАЛ слот
@@ -122,8 +123,9 @@ export async function generateCoverPng(
     // сообщение подменялось на «бюджет картинок исчерпан» — чинимый диагноз
     // («роли не выдан GENERATE_IMAGE», лечится /grant) превращался в
     // нечинимый, и вместе с ним выгорал общий часовой бюджет дизайнера.
-    // `audit-2026-08-20-cover-svg-role-gate.test.ts:91` утверждает «отказ это
-    // не расход», но делает ОДИН вызов при лимите 6 и проходил вхолостую.
+    // Тест «роль без обоих инструментов бакет не трогает — отказ это не
+    // расход» (audit-2026-08-20-cover-svg-role-gate.test.ts) утверждает именно
+    // это, но делает ОДИН вызов при лимите 6 и проходил вхолостую.
     if (!isToolExposedToRole("GENERATE_SVG_IMAGE", agentKey)) {
       throw new Error(
         `роли ${agentKey} не выдан ни GENERATE_IMAGE, ни GENERATE_SVG_IMAGE — обложку рисовать нечем`,
@@ -146,8 +148,9 @@ export async function generateCoverPng(
   if (!slot.ok) {
     // Аудит 2026-08-28: этот рукав не считался вообще ни в один бакет.
     // Растровый по определению пуст (мы в его отказе), а SVG-бакет —
-    // `GENERATE_SVG_IMAGE: 20/мин на агента` (rate-limits.ts:41) — никто не
-    // трогал. То есть после шестой картинки за час начинался ровно тот обход,
+    // `GENERATE_SVG_IMAGE: 20/мин на агента` (`RULES` в rate-limits.ts) —
+    // никто не трогал. То есть после шестой картинки за час начинался ровно тот
+    // обход,
     // который чинили 2026-08-12, только движком Claude вместо OpenAI: сколько
     // публикаций пропустит общий гейт (60/мин), столько и запросов к Claude.
     // Замер до правки: 25 обложек подряд → 25 вызовов.

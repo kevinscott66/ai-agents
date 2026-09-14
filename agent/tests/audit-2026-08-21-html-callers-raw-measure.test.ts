@@ -7,7 +7,7 @@
  * чате — только якорь. Замер на отчёте из 45 строк
  * `- [ai-agents#NNN](https://github.com/kevinscott66/ai-agents/pull/NNN) — …`:
  * сырая длина 4916, видимая 2486. По сырой мерке это ТРИ сообщения с
- * префиксами «(1/3) », по видимой — одно.
+ * префиксами «(1/3)», по видимой — одно.
  *
  * Ровно этот разбор уже сделан для подписи к фото (`CAPTION_FITS`,
  * telegram-actions.ts, аудит 2026-08-19): сырая граница снимается там, где у
@@ -114,7 +114,9 @@ describe("сырые отправители не тронуты", () => {
       return { message_id: sent.length };
     }, REPORT);
     expect(sent).toHaveLength(3);
-    expect(sent[0]).toContain("(1/3) ");
+    // Счётчик отбит переводом строки, а не пробелом: разбор «почему» — в
+    // audit-2026-09-11-chunk-counter-anchors-markdown.
+    expect(sent[0]).toContain("(1/3)\n");
   });
 
   test("sendChunked с меркой шлёт одним сообщением", async () => {

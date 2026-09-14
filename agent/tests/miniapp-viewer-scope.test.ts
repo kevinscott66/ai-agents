@@ -97,8 +97,11 @@ beforeAll(() => {
     error: `400: message text is invalid: ${SECRET_TEXT}`,
   }).id;
 
-  // Ровно то, что делает C15 self-diag: провалившийся payload уезжает в
-  // inputPayload задачи, а текст ошибки — в description.
+  // Старая форма задачи C15 self-diag: провалившийся payload копией в
+  // inputPayload, текст ошибки — в description. Новые задачи вместо payload
+  // несут `failedActionId` (аудит 2026-09-14); миграция 056 чистит только
+  // терминальные строки, живые старой формы остаются — и редакция обязана
+  // их закрывать.
   taskId = createTask({
     chatId: CHAT_ID,
     createdBy: "smm",

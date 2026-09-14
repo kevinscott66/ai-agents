@@ -5,13 +5,19 @@
  * the event loop during file operations in action-dispatch.ts and other hot paths.
  * 
  * See T-303 for context on removing synchronous FS from hot path.
+ *
+ * Разбор slug → путь и канонический ключ берутся из memory.ts, своих копий
+ * здесь нет. Копия была — и уже разошлась с оригиналом: фикс канонического
+ * ключа 2026-08-08 доехал только до memory.ts, а через async идёт WRITE_WIKI,
+ * то есть все записи агентов. Теперь и ключ (`upsertWikiFts`), и путь
+ * (`pagePath`) выводятся в одном месте.
  */
 import { readFile, writeFile, appendFile, mkdir, access, open, rename, rm } from "node:fs/promises";
 import { constants } from "node:fs";
 import { dirname } from "node:path";
 import {
   type Scope,
-  sanitizeWikiContent,
+  sanitizeWikiLogLine,
   prepareWikiPage,
   upsertWikiFts,
   pagePath,
@@ -20,24 +26,9 @@ import {
   buildWikiIndex,
   WIKI_LOG_TAIL_BYTES,
   trimWikiLog,
+  scopeDir,
 } from "./memory.ts";
 import { join } from "node:path";
-import { resolveMemoryDir } from "./memory-dir.ts";
-
-const MEMORY_DIR = resolveMemoryDir(process.env.MEMORY_DIR);
-
-function scopeDir(scope: Scope): string {
-  return join(MEMORY_DIR, scope);
-}
-
-/**
- * Резолвинг slug → путь общий с синхронной половиной (memory.ts).
- *
- * Здесь была своя копия — и она уже расходилась с оригиналом: фикс
- * канонического ключа 2026-08-08 доехал только до memory.ts, а через async
- * идёт WRITE_WIKI, то есть все записи агентов. Копий больше нет: и ключ
- * (upsertWikiFts), и путь (pagePath) выводятся в одном месте.
- */
 
 /**
  * Async version of wikiRead
@@ -129,8 +120,10 @@ export async function wikiAppendLogAsync(scope: Scope, line: string, agentKey: s
   const p = join(scopeDir(scope), "log.md");
   await mkdir(dirname(p), { recursive: true });
   const ts = new Date().toISOString().slice(0, 16).replace("T", " ");
-  // Sanitize user-PII patterns before persisting to wiki log
-  const safeLine = sanitizeWikiContent(line).replace(/\n/g, " ").slice(0, 240);
+  // Аудит 2026-09-11: здесь стояла вторая, отдельно написанная санитизация —
+  // посимвольная копия синхронной. Зовём общую по той же причине, по которой
+  // общей стала подрезка строкой ниже: разъезд этой пары уже стоил двух багов.
+  const safeLine = sanitizeWikiLogLine(line);
   await appendFile(p, `\n${ts} | ${agentKey} | ${safeLine}`);
   // Аудит 2026-08-12: здесь стояла вторая, отдельно написанная подрезка —
   // `stat` → чтение хвоста → `writeFile`, три `await` подряд. Всё, что успело

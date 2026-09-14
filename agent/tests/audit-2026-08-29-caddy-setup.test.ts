@@ -17,7 +17,7 @@
  *    заготовленная утечка, а сегодня — просто шум.
  * 4. Сам Caddyfile не прошёл бы `caddy validate`: `header` не является
  *    глобальной опцией; `keepalive`/`dial_timeout` — субдирективы
- *    `transport http`, а не `reverse_proxy`; `read_timeout`/`write_timeout`
+ *    `transport http`, а не `reverse_proxy`; read_timeout/write_timeout
  *    там не существуют вовсе; `rate_limit` — сторонний плагин, которого нет в
  *    пакете из cloudsmith-репозитория, тот самый, что ставит этот скрипт.
  *

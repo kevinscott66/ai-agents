@@ -4,7 +4,10 @@
  * отвечает через Claude (Anthropic SDK напрямую).
  *
  * Этап 1: bare-bones smoke test без eliza-runtime.
- * Eliza-память / actions подключим, когда базовый цикл будет работать стабильно.
+ *
+ * Аудит 2026-09-11, круг 51: обещание «Eliza-память / actions подключим»
+ * снято здесь по той же причине, что и в orchestrator-bot.ts — зависимости
+ * eliza в проекте нет, а память и действия давно сделаны своими модулями.
  */
 
 import { TelegramClient, Api } from "telegram";

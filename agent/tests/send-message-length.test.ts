@@ -95,7 +95,7 @@ describe("SEND_MESSAGE: длина", () => {
     expect(sent.length).toBeGreaterThan(1);
     for (const m of sent) {
       expect(m.text.length).toBeLessThanOrEqual(4096);
-      expect(m.text).toMatch(/^\(\d+\/\d+\) /);
+      expect(m.text).toMatch(/^\(\d+\/\d+\)\n/);
     }
   });
 

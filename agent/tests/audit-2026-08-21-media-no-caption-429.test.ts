@@ -4,7 +4,7 @@
  *
  * `tgSendPhoto`/`tgSendDocument` идут двумя ветками. С подписью — через
  * `sendWithHtml`, а тот внутри обёрнут в `withTelegramRateLimitRetry`
- * (telegram-format.ts:339). Без подписи вызывался голый `tg.sendPhoto` /
+ * (telegram-format.ts). Без подписи вызывался голый `tg.sendPhoto` /
  * `tg.sendDocument`, мимо всякого повтора.
  *
  * Замер до правки (заглушка отдаёт один 429 с retry_after, дальше успех):

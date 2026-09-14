@@ -12,7 +12,7 @@
 //     доске).
 //   • tools-schema.ts:105 — enum в JSON-схеме UPDATE_TASK_STATUS; агент не
 //     сможет назвать статус, который FSM разрешает.
-//   • miniapp-server.ts:1074 — POST /api/tasks/:id/status отвечает «bad
+//   • miniapp-server.ts, POST /api/tasks/:id/status — отвечает «bad
 //     status» на переход, который updateTaskStatus() принял бы.
 //
 // Поэтому список выводится из таблицы переходов, а не дублирует её.
