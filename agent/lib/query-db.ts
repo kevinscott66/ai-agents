@@ -85,6 +85,11 @@ const BLOCKED_TABLES = [
   "role_runtime_queue",
   "role_runtime_queue_archive",
   "content_calendar",
+  // Аудит 2026-09-14: виртуальная таблица статистики страниц — объём любой
+  // закрытой таблицы выше, постранично (движок собран с DBSTAT_VTAB).
+  // `sqlite_dbpage` в сборке нет; предпосылку держит тест
+  // audit-2026-09-14-query-db-dbstat.
+  "dbstat",
 ];
 
 const ALLOWED_PREFIX =
