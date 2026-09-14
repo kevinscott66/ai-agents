@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
  *
  * Достижимого пути сегодня нет, и врать об этом не нужно: обе метки закрыты
  * сверху — `version` приходит из package.json, `status` пишется через
- * `ActionStatus` (шесть литералов, см. `ACTION_STATUSES` в lib/audit.ts).
+ * `ActionStatus` (закрытый набор литералов, см. `ACTION_STATUSES` в lib/audit.ts).
  * Но держится это на вызывающих, а не здесь: колонка `agent_actions.status` —
  * просто `TEXT NOT NULL` без CHECK, а рендер берёт значение из `GROUP BY` по
  * ней, то есть тем, что в колонке лежит. Инвариант формата должен принадлежать

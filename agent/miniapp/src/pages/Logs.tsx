@@ -24,6 +24,7 @@ const STATUSES = [
   "forbidden",
   "pending_approval",
   "rate_limited",
+  "approved",
 ];
 
 // Heuristic mapping: log "level" is a synthetic dimension over status.

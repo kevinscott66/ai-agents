@@ -24,7 +24,7 @@ import {
   listAgentAutonomyOverrides,
 } from "./permissions.ts";
 import { getDiscussionMode, setDiscussionMode } from "./chat-settings.ts";
-import { listActions, closeGatedActionRow } from "./audit.ts";
+import { listActions, closeGatedActionRow, settleApprovedActionRow } from "./audit.ts";
 import {
   listPendingApprovals,
   countPendingApprovalsInChat,
@@ -170,8 +170,9 @@ export function isAutonomyMode(s: string): s is AutonomyMode {
  * `forbidden` — тот же статус и тот же смысл, что у отказа человека и у
  * протухшей заявки (докблок `closeGatedActionRow`): наружу не ушло, потому что
  * не разрешили. Пятый способ отказать — провал самого диспатча — сюда не
- * заходит: у него своя пара строк с тем же `request_id`, и переписывать здесь
- * ещё и первую значило бы посчитать один ход дважды.
+ * заходит: исход у него записан своей строкой исполнения, а первую закрывает
+ * `settleApprovedActionRow` статусом `approved` — решение, а не второй исход
+ * (аудит 2026-09-14).
  */
 function failBeforeDispatch(approval: Approval, msg: string): never {
   closeGatedActionRow(approval.action_id, msg);
@@ -288,6 +289,10 @@ export async function executeApproved(
     handoffDeps: deps.handoffDeps,
     respondAsImpl: deps.respondAsImpl,
   });
+  // Аудит 2026-09-14: до диспатча дошли — решение исполнено, исход записан
+  // строкой исполнения. Строку гейта закрываем при обоих исходах, иначе она
+  // вечно «ждёт аппрув» (докблок `settleApprovedActionRow`).
+  settleApprovedActionRow(approval.action_id);
   if (!res.ok) {
     // Как в gateOrDispatch: неудавшийся диспатч не должен съедать лимит.
     //

@@ -34,7 +34,7 @@ export const APPROVAL_STATUS_LABELS: Record<string, string> = {
 /**
  * Аудит 2026-08-13: карта расходилась со словарём сервера. `ActionStatus` в
  * agent/lib/audit.ts — `attempted | ok | error | forbidden | pending_approval |
- * rate_limited`, то есть двух реальных статусов здесь не было, а `pending` и
+ * rate_limited` (с 2026-09-14 ещё `approved`), то есть двух реальных статусов здесь не было, а `pending` и
  * `invalid` не приходят никогда. `label()` при промахе отдаёт сырой ключ, и в
  * «Последних событиях» сводки среди русских подписей светились латиницей
  * `attempted` и `pending_approval`. Logs.tsx патчил ровно эти два ключа
@@ -50,6 +50,7 @@ export const ACTION_STATUS_LABELS: Record<string, string> = {
   forbidden: "запрещено",
   pending_approval: "ждёт аппрув",
   rate_limited: "лимит",
+  approved: "одобрено",
   pending: "ждёт",
   invalid: "невалидно",
 };

@@ -64,7 +64,8 @@ export type ActionStatus =
   | "error"
   | "forbidden"
   | "pending_approval"
-  | "rate_limited";
+  | "rate_limited"
+  | "approved";
 
 export interface AgentAction {
   id: string;

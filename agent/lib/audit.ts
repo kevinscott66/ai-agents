@@ -18,6 +18,7 @@ export const ACTION_STATUSES = [
   "forbidden",
   "pending_approval",
   "rate_limited",
+  "approved",
 ] as const;
 
 export type ActionStatus = (typeof ACTION_STATUSES)[number];
@@ -378,10 +379,11 @@ export function finalizeActionRow(
  * отдельным PR; ни один счётчик (`alerting.ts` — `rate_limited`, `digest.ts` —
  * `error`) на `forbidden` не смотрит, так что метрики правка не двигает.
  *
- * Одобрение сюда не заходит: у него последствие уже записано СВОЕЙ строкой —
- * `executeApproved` идёт через `dispatchAndAudit`, а тот заводит пару
- * `attempted` → `ok`/`error` с тем же `request_id`. Перевести здесь и её
- * значило бы посчитать одно действие дважды в том же статусе.
+ * Одобрение, дошедшее до диспатча, сюда не заходит: у него последствие уже
+ * записано СВОЕЙ строкой — `executeApproved` идёт через `dispatchAndAudit`, а
+ * тот заводит пару `attempted` → `ok`/`error`. Перевести в исход и первую
+ * значило бы посчитать одно действие дважды. Её закрывает
+ * `settleApprovedActionRow` ниже — решением, а не исходом.
  *
  * Событие в шину не поднимаем: `forbidden` не терминален в смысле
  * TERMINAL_STATUSES (гейт пишет свои отказы молча), а открытая вкладка про
@@ -400,6 +402,44 @@ export function closeGatedActionRow(actionId: string, error: string): boolean {
     // с правилом, и наружу уходит его начало нетронутым (см. `scrubbedHead`
     // в lib/log.ts — тот же помощник, та же каверза).
     .run(scrubSecretString(error).slice(0, 2000), actionId);
+  return res.changes > 0;
+}
+
+/**
+ * Одобрено и отдано на исполнение: строку гейта закрываем решением.
+ *
+ * Аудит 2026-09-14. `closeGatedActionRow` закрывал отказ, протухание и отказы
+ * `executeApproved` до диспатча, а самый частый исход — одобрение, дошедшее
+ * до `dispatchAndAudit`, — оставлял первую строку в `pending_approval`
+ * навсегда. Замер: после успешного исполнения в журнале две строки,
+ * `pending_approval` и `ok`. Каждое одобренное действие копилось «ждёт
+ * аппрув» в `/audit`, в ленте Mini App, в GET_LOGS у самой модели и в ряду
+ * `agent_actions_recent{status="pending_approval"}` метрики.
+ *
+ * Почему не `ok`/`error`: исход уже записан строкой исполнения, вторая копия
+ * удвоила бы счётчики (`digest.ts` считает `error`, лента — `ok`). Почему не
+ * `forbidden`: действие как раз разрешили, и вкладка «запрещено» соврала бы
+ * обратное. `approved` — пара к `forbidden`: «решение принято, наружу пошло,
+ * чем кончилось — в строке исполнения». Ни один счётчик исходов на него не
+ * смотрит; в TERMINAL_STATUSES его нет по той же причине, что и `forbidden`
+ * (событие о решении шлёт `decideApproval`).
+ *
+ * Связать две строки по `request_id` нельзя: у гейтовой строки он NULL, а
+ * диспатч минтит свой (замер того же аудита). Поэтому и крах МЕЖДУ решением и
+ * исполнением неотличим здесь от успеха — строка заявки в обоих случаях
+ * `approved`, а строка исполнения может отсутствовать по обеим причинам. Это
+ * ограничение схемы, а не этой функции; она закрывает только доказанный путь.
+ *
+ * `WHERE status='pending_approval'` — тот же приём, что у соседей: уже
+ * закрытую строку (отказ, протухание) не перепишет.
+ */
+export function settleApprovedActionRow(actionId: string): boolean {
+  const res = db
+    .prepare(
+      `UPDATE agent_actions SET status='approved'
+       WHERE id=? AND status='pending_approval'`,
+    )
+    .run(actionId);
   return res.changes > 0;
 }
 

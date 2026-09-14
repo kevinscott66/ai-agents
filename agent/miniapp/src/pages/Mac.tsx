@@ -91,10 +91,11 @@ export default function Mac() {
       // on the Mac) and the real execution after approval — so we drop the
       // non-execution statuses to avoid showing one run as two sessions.
       // Аудит 2026-08-10: `denied`/`completed`/`failed` тут не бывает — вокабуляр
-      // статусов ровно шесть значений (`ACTION_STATUSES` в lib/audit.ts). Ветки под них были
+      // статусов — закрытый набор `ACTION_STATUSES` в lib/audit.ts. Ветки под них были
       // мёртвыми; работу тянули `ok` и `error`, поэтому вреда не было, но и
       // защиты, которую они изображали, тоже.
-      const NON_RUN = new Set<string>(["pending_approval", "forbidden", "rate_limited"]);
+      // `approved` — та же гейтовая строка, закрытая решением (аудит 2026-09-14).
+      const NON_RUN = new Set<string>(["pending_approval", "forbidden", "rate_limited", "approved"]);
       const macSessions: MacSession[] = actions
         .filter(action => !NON_RUN.has(action.status))
         .map(toMacSession);

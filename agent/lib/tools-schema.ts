@@ -556,7 +556,7 @@ export const TOOLS: Anthropic.Tool[] = [
         },
         status: {
           type: "string",
-          enum: ["attempted", "ok", "error", "forbidden", "pending_approval", "rate_limited"],
+          enum: ["attempted", "ok", "error", "forbidden", "pending_approval", "rate_limited", "approved"],
           description: "Фильтр по статусу (опц.). Только из списка; «неуспех» — это 'error', не 'failed'.",
         },
         limit: { type: "integer", description: "Сколько записей (1..50, дефолт 20)." },
