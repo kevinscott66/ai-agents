@@ -113,6 +113,26 @@ describe("одобрение, дошедшее до диспатча, закры
     expect(getApproval(g.approvalId)?.status).toBe("failed");
   });
 
+  test("строка закрыта уже ВО ВРЕМЯ исполнения — крах посреди вызова её не оставит", async () => {
+    const g = gated();
+    let seen = "";
+    await cmdApprove({
+      approvalId: g.approvalId,
+      decidedBy: "tg:1",
+      chatId: CHAT_ID,
+      deps: {
+        resolveTg: () =>
+          ({
+            sendMessage: async () => {
+              seen = statusOf(g.actionId);
+              return { message_id: 8 };
+            },
+          }) as any,
+      },
+    });
+    expect(seen).toBe("approved");
+  });
+
   test("отказ ДО диспатча по-прежнему forbidden, а не approved", async () => {
     const g = gated();
     // Протухшая заявка — один из ранних выходов `executeApproved`.

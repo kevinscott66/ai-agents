@@ -416,6 +416,10 @@ export function closeGatedActionRow(actionId: string, error: string): boolean {
  * аппрув» в `/audit`, в ленте Mini App, в GET_LOGS у самой модели и в ряду
  * `agent_actions_recent{status="pending_approval"}` метрики.
  *
+ * Зовётся ДО `dispatchAndAudit`, сразу за последним отказом: решение к этому
+ * моменту окончательное, а долгий вызов, прерванный рестартом, иначе оставил
+ * бы строку открытой — санитара по `pending_approval` у одобренной заявки нет.
+ *
  * Почему не `ok`/`error`: исход уже записан строкой исполнения, вторая копия
  * удвоила бы счётчики (`digest.ts` считает `error`, лента — `ok`). Почему не
  * `forbidden`: действие как раз разрешили, и вкладка «запрещено» соврала бы

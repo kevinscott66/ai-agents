@@ -272,6 +272,13 @@ export async function executeApproved(
       reason: chatSlot.reason ?? agentSlot.reason,
     });
   }
+  // Аудит 2026-09-14: отказы позади — решение окончательное, строку гейта
+  // закрываем им, иначе она вечно «ждёт аппрув» (докблок
+  // `settleApprovedActionRow`). ДО диспатча, а не после: вызов бывает долгим
+  // (GENERATE_IMAGE, многочастный SEND_DOCUMENT), и рестарт юнита посреди него
+  // оставил бы строку открытой навсегда. Так после краха остаются `approved` и
+  // `attempted`, а вторую добирает `expireStaleAttempts`.
+  settleApprovedActionRow(approval.action_id);
   const res = await dispatchAndAudit(actionType, payload, {
     agentKey: byAgent,
     chatId: approval.chat_id,
@@ -289,10 +296,6 @@ export async function executeApproved(
     handoffDeps: deps.handoffDeps,
     respondAsImpl: deps.respondAsImpl,
   });
-  // Аудит 2026-09-14: до диспатча дошли — решение исполнено, исход записан
-  // строкой исполнения. Строку гейта закрываем при обоих исходах, иначе она
-  // вечно «ждёт аппрув» (докблок `settleApprovedActionRow`).
-  settleApprovedActionRow(approval.action_id);
   if (!res.ok) {
     // Как в gateOrDispatch: неудавшийся диспатч не должен съедать лимит.
     //
