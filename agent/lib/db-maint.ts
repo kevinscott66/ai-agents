@@ -23,7 +23,7 @@ import { statSync } from "node:fs";
 import { db, DB_PATH } from "./db.ts";
 import { log } from "./log.ts";
 import { safeTick } from "./safe-timer.ts";
-import { rollupParent } from "./tasks.ts";
+import { OPEN_TASK_STATUSES, rollupParent } from "./tasks.ts";
 import { approvalTtlMs } from "./approvals.ts";
 import { closeAgentPromptProposals } from "./dispatch/agent-prompt.ts";
 import { closeGatedActionRow } from "./audit.ts";
@@ -595,6 +595,30 @@ export interface GcStaleResult {
 }
 
 /**
+ * Условие «у задачи нет незакрытых детей» для отбора зависших.
+ *
+ * Аудит 2026-09-14: родитель, пока работают дети, свой `updated_at` не
+ * трогает — смена статуса ребёнка пишет строку ребёнка, `rollupParent` пишет
+ * родителя только по закрытому набору, а родитель SPLIT_TASK всю жизнь
+ * `pending`. Без этого условия санитар проваливал родителя, у которого
+ * ребёнок сутки лежит на ревью или просто долго работает, и ошибка была
+ * необратимой: `rollupParent` на терминальном родителе выходит сразу, так что
+ * успешное закрытие ребёнка итог уже не меняло.
+ *
+ * Зависший ребёнок от этого не спасает родителя навечно: ребёнок сам попадает
+ * под санитар, и родителя закрывает каскад `rollupParent` ниже — с ошибкой
+ * ребёнка, а не безликим `gc_stale`. Открытые статусы — из FSM
+ * (`OPEN_TASK_STATUSES`), а не литералом: новый статус не выпадет из проверки.
+ *
+ * Функция, а не константа модуля: db-maint и tasks связаны импортами, и
+ * значение, вычисленное при загрузке, могло бы увидеть массив ещё не готовым.
+ */
+function noOpenChildrenSql(): string {
+  const open = OPEN_TASK_STATUSES.map((st) => `'${st}'`).join(",");
+  return `NOT EXISTS (SELECT 1 FROM tasks c WHERE c.parent_id = tasks.id AND c.status IN (${open}))`;
+}
+
+/**
  * Помечает зависшие pending/running задачи без обновлений > staleMs как failed
  * с error='gc_stale'. Каскадит rollup на parent.
  *
@@ -625,7 +649,8 @@ export function gcStaleTasks(opts: GcStaleOpts = {}): GcStaleResult {
       // — счётчик `tasks_open`, и он как раз awaiting_review не считал; см.
       // OPEN_TASK_STATUSES в tasks.ts и tests/task-open-statuses.test.ts.
       `SELECT id, parent_id FROM tasks
-       WHERE status IN ('pending','running') AND updated_at < ?`,
+       WHERE status IN ('pending','running') AND updated_at < ?
+         AND ${noOpenChildrenSql()}`,
     )
     .all(cutoff) as Array<{ id: string; parent_id: string | null }>;
 
@@ -641,7 +666,8 @@ export function gcStaleTasks(opts: GcStaleOpts = {}): GcStaleResult {
   // подходит под определение зависшей.
   const upd = db.prepare(
     `UPDATE tasks SET status='failed', error='gc_stale', updated_at=?
-     WHERE id=? AND status IN ('pending','running') AND updated_at < ?`,
+     WHERE id=? AND status IN ('pending','running') AND updated_at < ?
+       AND ${noOpenChildrenSql()}`,
   );
   const failedRows: Array<{ id: string; parent_id: string | null }> = [];
   const tx = db.transaction((ts: number) => {
