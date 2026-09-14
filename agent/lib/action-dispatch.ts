@@ -1515,9 +1515,15 @@ export async function dispatchAndAudit<T extends ActionType>(
           assignedTo: DIAG_ASSIGNEE,
           title: `Tool error: ${actionType}`,
           description: res.error,
+          // Аудит 2026-09-14: не `payload`, а ссылка на строку аудита. Копия
+          // payload'а в `tasks.input` отдавала через QUERY_DB (`tasks`
+          // читаема) содержимое, ради которого `agent_actions` в денилисте, —
+          // тот же класс, что промпт временной роли (миграция 052). Сам
+          // payload `processDiagTask` берёт по этой ссылке; `actionId` здесь
+          // всегда настоящий — аварийные ветки аудита вернулись выше.
           inputPayload: {
             actionType,
-            payload,
+            failedActionId: actionId,
             error: res.error,
             _diag: true,
             _retry_count: retryCount,

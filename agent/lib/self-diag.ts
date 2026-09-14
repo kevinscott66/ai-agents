@@ -152,7 +152,16 @@ function gateFor(
 
 export interface DiagInput {
   actionType: ActionType;
-  payload: Record<string, unknown>;
+  /**
+   * Id строки `agent_actions` упавшего действия — отсюда `processDiagTask`
+   * берёт payload (см. `loadFailedPayload`).
+   */
+  failedActionId?: string;
+  /**
+   * Старая форма: payload копией в самой задаче. Новые задачи его не несут
+   * (аудит 2026-09-14), читается ради задач, заведённых до этого.
+   */
+  payload?: Record<string, unknown>;
   error: string;
   _diag: true;
   _retry_count: number;
@@ -598,6 +607,46 @@ function contextFieldsOf(payload: unknown): Record<string, unknown> {
 }
 
 /**
+ * Payload упавшего действия для diag-задачи.
+ *
+ * Аудит 2026-09-14: задача больше не хранит payload копией — `tasks` читаема
+ * через QUERY_DB, а `agent_actions` закрыта именно из-за payload'ов. Берём по
+ * ссылке `failedActionId` из закрытой таблицы, а если строку уже унесла
+ * архивация — из её архива. Старая форма (`payload` в самой задаче)
+ * читается как раньше.
+ *
+ * Ссылку разыменовываем только в пределах того же чата и того же типа
+ * действия: id — ключ к закрытой таблице, и задача одного чата не должна
+ * доставать им чужой payload, даже если строку `tasks.input` кто-то собрал
+ * вручную.
+ */
+function loadFailedPayload(
+  task: Task,
+  input: Partial<DiagInput>,
+): Record<string, unknown> | null {
+  if (input.payload && typeof input.payload === "object") return input.payload;
+  if (typeof input.failedActionId !== "string") return null;
+  for (const table of ["agent_actions", "agent_actions_archive"] as const) {
+    const row = db
+      .prepare(`SELECT chat_id, action_type, payload FROM ${table} WHERE id = ?`)
+      .get(input.failedActionId) as
+      | { chat_id: number | null; action_type: string; payload: string | null }
+      | undefined;
+    if (!row) continue;
+    if (row.chat_id !== task.chat_id || row.action_type !== input.actionType) return null;
+    try {
+      const parsed = JSON.parse(row.payload ?? "null") as unknown;
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
  * Process a single diag task. Exported for tests.
  */
 export async function processDiagTask(
@@ -605,12 +654,19 @@ export async function processDiagTask(
   deps: SelfDiagDeps,
 ): Promise<void> {
   const input = task.input as Partial<DiagInput> | null;
-  if (!input || !input.actionType || !input.payload) {
+  if (!input || !input.actionType) {
     failTask(task.id, "diag task missing actionType/payload");
     return;
   }
+  const failedPayload = loadFailedPayload(task, input);
+  if (!failedPayload) {
+    failTask(
+      task.id,
+      "diag task payload unavailable: failed action row not found for this chat",
+    );
+    return;
+  }
   const actionType = input.actionType as ActionType;
-  const failedPayload = input.payload as Record<string, unknown>;
   const failedError = input.error ?? task.error ?? "(no error recorded)";
   const retryCount =
     typeof input._retry_count === "number" ? input._retry_count : 0;

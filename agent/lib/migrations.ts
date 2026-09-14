@@ -1467,6 +1467,48 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    /*
+     * Аудит 2026-09-14: копия payload'а упавшего действия в `tasks.input`.
+     *
+     * C15 self-diag заводил задачу «Tool error: …» с payload действия целиком,
+     * а `tasks` читаема через QUERY_DB — в отличие от `agent_actions`, закрытой
+     * ровно из-за payload'ов. Новые задачи несут ссылку `failedActionId`
+     * (`dispatchAndAudit`), эта миграция убирает копии из старых. Класс и
+     * приём те же, что у 052.
+     *
+     * Только терминальные задачи. Живой старой задаче payload ещё нужен
+     * `processDiagTask`, а ссылки на строку действия у неё нет; живут такие
+     * задачи один тик поллера, так что к моменту деплоя их практически нет.
+     * Список статусов литеральный намеренно: миграция — снимок, и новый
+     * статус FSM не должен задним числом менять то, что она сделала.
+     */
+    name: "056_tasks_input_drop_diag_payload",
+    up: (db) => {
+      const rows = db
+        .prepare(
+          `SELECT id, input FROM tasks
+            WHERE title LIKE 'Tool error:%'
+              AND status IN ('done', 'failed', 'cancelled')
+              AND input LIKE '%"_diag":true%'
+              AND input LIKE '%"payload"%'`,
+        )
+        .all() as Array<{ id: string; input: string | null }>;
+      const update = db.prepare(`UPDATE tasks SET input = ? WHERE id = ?`);
+      for (const row of rows) {
+        try {
+          const payload = JSON.parse(row.input ?? "{}");
+          if (payload?._diag !== true) continue;
+          if (!("payload" in payload)) continue;
+          delete payload.payload;
+          // `updated_at` не трогаем — уборка хранения, не событие задачи (052).
+          update.run(JSON.stringify(payload), row.id);
+        } catch {
+          // Битый JSON оставляем как есть, по той же причине, что в 052.
+        }
+      }
+    },
+  },
 ];
 
 /**
