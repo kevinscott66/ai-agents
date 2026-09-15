@@ -12,6 +12,7 @@ import { bridgeSecretTransportError } from "./bridge-url.ts";
 import { cancelRun, killAll, type KillableChild } from "./kill.ts";
 import { parseBridgeMsg, toPermissionMode, type RunMsg } from "./protocol.ts";
 import { sanitizeChildEnv, resolveClaudeBin } from "./child-env.ts";
+import { runAssistantOperation } from "./assistant.ts";
 import { createAuthGate } from "./auth-gate.ts";
 // Порт в подсказке при старте: раньше литерал 8787 — это HTTP-порт Mini App,
 // а не мост. Оператор по такой подсказке открывал WS к серверу панели, где
@@ -106,6 +107,7 @@ function resolveAllowedProject(project: string): string | null {
   }
 }
 
+const assistantControllers = new Map<string, AbortController>();
 const activeChildren = new Map<string, ReturnType<typeof Bun.spawn>>();
 
 function sendChunk(
@@ -260,6 +262,7 @@ async function handleRun(ws: WebSocket, msg: RunMsg): Promise<void> {
 }
 
 function killAllChildren(): void {
+  for (const controller of assistantControllers.values()) controller.abort();
   // SIGINT с переходом на SIGKILL — см. mac-daemon/kill.ts. Раньше здесь был
   // только SIGINT, а следом clear(): процесс, проигнорировавший сигнал,
   // оставался жить, и демон о нём уже не помнил.
@@ -358,6 +361,20 @@ function connect(): void {
         console.error("[daemon] auth failed:", msg.error);
         ws.close();
         return;
+      case "assistant":
+        if (assistantControllers.size) {
+          sendResult(ws, msg.id, false, undefined, "assistant_busy");
+          return;
+        }
+        const controller = new AbortController();
+        assistantControllers.set(msg.id, controller);
+        runAssistantOperation(msg.operation, undefined, undefined, controller.signal).then(output => {
+          sendChunk(ws, msg.id, "stdout", output);
+          sendResult(ws, msg.id, true, 0);
+        }).catch(() => {
+          sendResult(ws, msg.id, false, undefined, "assistant_unavailable");
+        }).finally(() => { assistantControllers.delete(msg.id); });
+        return;
       case "run":
         handleRun(ws, msg).catch((e) => {
           console.error("[daemon] handleRun error:", e);
@@ -378,6 +395,7 @@ function connect(): void {
         sendResult(ws, msg.id, false, undefined, `bad_run_msg: ${msg.reason}`);
         return;
       case "cancel": {
+        assistantControllers.get(msg.id)?.abort();
         // Точечная отмена одного прогона. Мост шлёт её по своему таймауту —
         // до аудита 2026-08-11 брошенный `claude` продолжал работать в проекте
         // владельца, хотя ответа от него уже никто не ждал.

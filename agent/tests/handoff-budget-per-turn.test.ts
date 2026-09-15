@@ -266,7 +266,7 @@ describe("вход не может забыть счётчик", () => {
     );
     const fn = src.indexOf("export async function runWithTools");
     const dflt = src.indexOf("opts.handoffBudget ??", fn);
-    const sdkBranch = src.indexOf("if (useAgentSdk())", fn);
+    const sdkBranch = src.indexOf('if (useAgentSdk() && inferenceProvider() === "claude")', fn);
     expect(dflt).toBeGreaterThan(-1);
     expect(sdkBranch).toBeGreaterThan(dflt);
     // И сам счётчик должен доехать до SDK-прогона, а не потеряться по дороге.

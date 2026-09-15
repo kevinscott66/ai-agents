@@ -1,3 +1,4 @@
+import { inferenceProvider } from "./inference-provider.ts";
 /**
  * Альтернативный inference-рантайм через @anthropic-ai/claude-agent-sdk —
  * работает на ПОДПИСКЕ Claude (OAuth), а не на API-кредитах raw-SDK.
@@ -827,6 +828,12 @@ export async function runTextViaAgentSdk(opts: {
   model?: string;
   agentKey?: string;
 }): Promise<string> {
+  if (inferenceProvider() === "codex") {
+    const { callAnthropic } = await import("./anthropic-client.ts");
+    const response = await callAnthropic({ model: "codex", max_tokens: 2000,
+      system: opts.system, messages: [{ role: "user", content: opts.prompt }] }, null, opts.agentKey ?? "_sdk");
+    return response.content.filter(b => b.type === "text").map(b => b.text).join("\n");
+  }
   const agentKey = opts.agentKey ?? "_sdk";
   // Симметрично usageWriter ниже: раз расход пишется под этим ключом, то и
   // лимит по нему должен действовать. Вспомогательные вызовы (компактор) жгут

@@ -398,6 +398,17 @@ function frameAccepted(ret: unknown): boolean {
 }
 
 export function sendToMac(req: MacRunRequest): Promise<MacRunResult> {
+  return sendMacRequest(req);
+}
+
+/** Explicit personal commands only: caller must be the allowlisted Mac user in their DM. */
+export function sendAssistantToMac(operation: "calendar_today" | "open_workspace", userId: string, chatId: number): Promise<MacRunResult> {
+  if (!isUserAllowed(userId) || String(chatId) !== userId || chatId <= 0) return Promise.reject(new Error("forbidden"));
+  if (!isMacOnline()) return Promise.reject(new Error("mac_offline"));
+  return sendMacRequest({ operation });
+}
+
+function sendMacRequest(req: MacRunRequest | { operation: "calendar_today" | "open_workspace" }): Promise<MacRunResult> {
   return new Promise<MacRunResult>((resolve, reject) => {
     if (!activeSocket) {
       reject(new Error("mac_offline"));
@@ -419,7 +430,7 @@ export function sendToMac(req: MacRunRequest): Promise<MacRunResult> {
         cancelOnMac(id);
         p.reject(new Error("mac_timeout"));
       }
-    }, _readRunTimeoutMs());
+    }, "operation" in req ? 30_000 : _readRunTimeoutMs());
     pending.set(id, {
       id,
       stdout: "",
@@ -429,7 +440,7 @@ export function sendToMac(req: MacRunRequest): Promise<MacRunResult> {
       resolve,
       reject,
       timer,
-      onProgress: req.onProgress,
+      onProgress: "operation" in req ? undefined : req.onProgress,
     });
     const dropRun = (err: Error): void => {
       const p = pending.get(id);
@@ -442,7 +453,9 @@ export function sendToMac(req: MacRunRequest): Promise<MacRunResult> {
     try {
       const accepted = frameAccepted(
         activeSocket.send(
-          JSON.stringify({
+          JSON.stringify("operation" in req ? {
+            type: "assistant", id, operation: req.operation,
+          } : {
             type: "run",
             id,
             project: req.project,

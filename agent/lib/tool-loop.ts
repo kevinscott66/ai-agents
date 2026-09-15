@@ -1,3 +1,4 @@
+import { inferenceProvider } from "./inference-provider.ts";
 /**
  * Anthropic tool_use loop: на каждом шаге пушим ассистент-блок в messages,
  * выполняем все tool_use → пушим user-сообщение с tool_result, повторяем.
@@ -221,7 +222,7 @@ export async function runWithTools(opts: RunWithToolsOpts): Promise<string> {
   // Подписочный путь (Claude Agent SDK, OAuth) вместо raw-SDK (API-кредиты).
   // При наличии OAuth это также дефолт; USE_AGENT_SDK=false явно возвращает
   // raw-путь для аварийной совместимости.
-  if (useAgentSdk()) {
+  if (useAgentSdk() && inferenceProvider() === "claude") {
     try {
       return await runViaAgentSdk({ ...opts, handoffBudget });
     } catch (e) {
@@ -274,7 +275,7 @@ export async function runWithTools(opts: RunWithToolsOpts): Promise<string> {
     requestId,
     forceFirstTool,
   } = opts;
-  if (!anthropic) {
+  if (!anthropic && inferenceProvider() === "claude") {
     throw new Error(
       "Anthropic API client unavailable: configure CLAUDE_CODE_OAUTH_TOKEN or set USE_AGENT_SDK=false with ANTHROPIC_API_KEY",
     );

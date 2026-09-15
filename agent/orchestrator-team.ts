@@ -26,6 +26,7 @@ import type { RunningBot } from "./lib/types.ts";
 import { log } from "./lib/log.ts";
 import { getErrorMessage } from "./lib/errors.ts";
 import { DEFAULT_MESSAGE_HISTORY_LIMIT } from "./lib/constants.ts";
+import { configureNativeLead } from "./lib/native-api.ts";
 import { registerVoiceHandler } from "./orchestrator/voice-handler.ts";
 import { registerMessageHandler } from "./orchestrator/message-handler.ts";
 import { startBackgroundServices } from "./orchestrator/services.ts";
@@ -122,8 +123,10 @@ export async function buildBot(def: CharacterDef): Promise<RunningBot | null> {
   }
 
   // T-320: voice + message handlers extracted to ./orchestrator/*.ts
-  registerVoiceHandler(bot, def, running, ALLOWED);
-  registerMessageHandler(bot, def, running, {
+  // Register voice first (Telegraf's message handler otherwise swallows it).
+  let processVoice: (ctx: import("telegraf").Context, voice: { text: string; native?: boolean }) => Promise<void>;
+  registerVoiceHandler(bot, def, running, ALLOWED, (ctx, voice) => processVoice(ctx, voice));
+  processVoice = registerMessageHandler(bot, def, running, {
     bots,
     allowed: ALLOWED,
     historyLimit: HISTORY_LIMIT,
@@ -132,6 +135,24 @@ export async function buildBot(def: CharacterDef): Promise<RunningBot | null> {
     handoffDeps,
   });
 
+  if (def.key === "orchestrator") {
+    let nativeMessageId = -Date.now() * 1000;
+    configureNativeLead(async (userId, text, reply) => {
+      const messageId = nativeMessageId--;
+      const chat = { id: Number(userId), type: "private" as const };
+      const from = { id: Number(userId), is_bot: false, first_name: "Owner" };
+      const ctx = {
+        chat, from, message: { message_id: messageId, date: Math.floor(Date.now() / 1000), chat, from, text },
+        telegram: bot.telegram, botInfo: { id: running.id, username: running.username },
+        sendChatAction: async () => true,
+        reply: async (answer: string) => {
+          reply(answer);
+          return { message_id: nativeMessageId--, date: Math.floor(Date.now() / 1000), chat, text: answer };
+        },
+      } as unknown as import("telegraf").Context;
+      await processVoice(ctx, { text, native: true });
+    });
+  }
   return running;
 }
 

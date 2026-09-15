@@ -6,6 +6,7 @@
  * a handle whose stop() tears them all down (except bots and process.exit, which
  * stay in main's own signal handler).
  */
+import { createAssistantHealthAlerts } from "../lib/assistant-alerts.ts";
 import Anthropic from "@anthropic-ai/sdk";
 import { dirname } from "node:path";
 import { DEFAULT_MINIAPP_PORT, MAX_TIMER_MS } from "../lib/constants.ts";
@@ -193,6 +194,12 @@ export async function startBackgroundServices(
     },
   });
 
+  const assistantAlerts = createAssistantHealthAlerts(async (userId, text) => {
+    if (!lead || !ALLOWED.includes(userId)) return false;
+    await lead.bot.telegram.sendMessage(userId, text);
+    return true;
+  });
+
   // C22: active health checks (Telegram getMe per bot, cached).
   let health: HealthMonitorHandle | null = null;
   if (process.env.HEALTH_ENABLED !== "false") {
@@ -202,6 +209,7 @@ export async function startBackgroundServices(
         bots,
         intervalMs,
         onSnapshot: (snap) => {
+          void assistantAlerts(snap);
           // M2: SSE fan-out. Imported lazily to avoid cycles.
           import("../lib/events-bus.ts").then(({ emit }) => {
             // publicHealth, а не сырой snap: подписчиков SSE фильтрует только

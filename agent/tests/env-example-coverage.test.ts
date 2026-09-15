@@ -190,7 +190,7 @@ const DECLARED_WITHOUT_READER: Record<string, string> = {
 
 describe("agent/.env.example описывает всё, что читает код", () => {
   const missing = [...READ_BY_CODE.keys()]
-    .filter((n) => !DECLARED.has(n))
+    .filter((n) => !DECLARED.has(n) && n !== "PATH") // OS executable search path, not an application setting.
     .sort();
 
   test("нет переменных, которые код читает, а шаблон не описывает", () => {

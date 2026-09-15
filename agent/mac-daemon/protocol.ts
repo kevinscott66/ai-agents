@@ -68,7 +68,14 @@ export interface CancelMsg {
   id: string;
 }
 
+export interface AssistantMsg {
+  type: "assistant";
+  id: string;
+  operation: "calendar_today" | "open_workspace";
+}
+
 export type BridgeMsg =
+  | AssistantMsg
   | RunMsg
   | PingMsg
   | AuthOkMsg
@@ -105,6 +112,10 @@ export function parseBridgeMsg(raw: unknown): ParsedMsg {
   if (typeof obj !== "object" || obj === null) return null;
   const m = obj as Record<string, unknown>;
   switch (m.type) {
+    case "assistant":
+      if (!isNonEmptyString(m.id) || m.id.length > 100) return null;
+      if (m.operation !== "calendar_today" && m.operation !== "open_workspace") return null;
+      return { type: "assistant", id: m.id, operation: m.operation };
     case "ping":
       return { type: "ping" };
     case "auth_ok":

@@ -1,3 +1,5 @@
+import { inferenceProvider } from "./inference-provider.ts";
+import { callCodex } from "./codex-runtime.ts";
 /**
  * Singleton Anthropic client + global concurrency limiter + 429/5xx retry.
  *
@@ -488,6 +490,16 @@ export async function callAnthropic(
   override?: Anthropic | null,
   agentKey?: string,
 ): Promise<Anthropic.Message> {
+  if (inferenceProvider() === "codex") {
+    if (agentKey) checkBudget(agentKey);
+    await acquire();
+    try {
+      const response = await callCodex(params, (input, output) => {
+        if (agentKey) recordUsage(agentKey, input, output);
+      });
+      return response;
+    } finally { release(); }
+  }
   const client = override ?? getAnthropic();
   // C16: enforce per-agent daily input-token budget BEFORE acquiring the
   // concurrency slot so a budget-exceeded agent doesn't starve the queue.
