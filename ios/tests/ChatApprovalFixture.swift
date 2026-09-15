@@ -4,12 +4,17 @@ import Foundation
  static var token = "test"
  static var posts = 0
  static var fail = false
+ static var savedDecision: String?
 }
 @MainActor struct Credentials { static func read(server: String) -> String? { Fixture.token } }
 struct AgentAPI { let server: String; func ownerID(expectedToken: String? = nil) async throws -> String { "123456" } }
 enum AgentError: LocalizedError { case message(String); var errorDescription: String? { if case .message(let s) = self { s } else { nil } } }
 @MainActor enum PanelTransport {
  static func request(server: String, path: String, method: String, body: String?, expectedToken: String? = nil) async throws -> [String: Any] {
+  if method == "GET", let saved = Fixture.savedDecision {
+   let body = path.contains("status=" + saved) ? Fixture.item.replacingOccurrences(of:"pending",with:saved) : ""
+   return ["status":200,"body":"{\"approvals\":[" + body + "]}"]
+  }
   if method == "GET" { return ["status":200,"body":"{\"approvals\":[" + Fixture.item + "]}"] }
   Fixture.posts += 1
   if Fixture.fail { throw AgentError.message("network") }
@@ -32,6 +37,13 @@ enum AgentError: LocalizedError { case message(String); var errorDescription: St
   await uncertain.refresh(server:"https://test")
   await uncertain.decide(uncertain.items[0], approve:true, server:"https://test")
   precondition(Fixture.posts == 2 && uncertain.outcomes["approval-1"]!.contains("неизвестен"))
+  Fixture.savedDecision = "approved"
+  await uncertain.refresh(server:"https://test")
+  precondition(uncertain.outcomes["approval-1"]!.contains("принято сервером") && Fixture.posts == 2)
+  Fixture.savedDecision = "failed"
+  await uncertain.refresh(server:"https://test")
+  precondition(uncertain.outcomes["approval-1"]!.contains("ошибкой") && Fixture.posts == 2)
+  Fixture.savedDecision = nil
   let switched = ChatApprovals(); await switched.refresh(server:"https://test")
   let card = switched.items[0]; Fixture.token = "different-account"
   await switched.decide(card, approve:true, server:"https://test")

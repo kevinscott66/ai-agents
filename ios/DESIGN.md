@@ -72,3 +72,7 @@ Mac adds a project/task form with a single submission button. It preserves input
 ### Confirmation refresh lifecycle (0.1.5)
 
 The polling task is keyed by server and active ScenePhase so an initial inactive capture cannot keep refresh disabled. Completing a lead turn triggers an immediate confirmation refresh. Refresh failures expose a Retry action. A reported missing Mac confirmation was verified pending on the server for the paired owner; no approval was executed during diagnosis.
+
+### Ambiguous decision recovery (0.1.6)
+
+A decision POST may time out while the server awaits a long Mac action. The client freezes submission and reconciles unresolved IDs using owner-scoped approved/failed/rejected lists. Approved means decision accepted, not execution complete; later failure remains visible. Identity checks still apply and no POST is retried. Regression covers timeout → approved → failed with an unchanged POST count.

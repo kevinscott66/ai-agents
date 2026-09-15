@@ -36,20 +36,21 @@ indirect enum ApprovalValue: Decodable {
     @Published var error: String?
     private var currentServer = ""
     private var refreshing = false
+    private var awaitingDecision: Set<String> = []
     private var currentOwner = ""
     private var credential: String?
     private func matches(_ server: String, _ token: String) -> Bool { currentServer == server && credential == token && Credentials.read(server: server) == token }
     func refresh(server: String) async {
         let token = Credentials.read(server: server)
         if currentServer != server || credential != token {
-            currentServer = server; credential = token; currentOwner = ""; items = []; outcomes = [:]; working = []
+            currentServer = server; credential = token; currentOwner = ""; items = []; outcomes = [:]; working = []; awaitingDecision = []
         }
         guard !refreshing, let token else { return }
         refreshing = true; defer { refreshing = false }
         do {
             let owner = try await AgentAPI(server: server).ownerID(expectedToken: token)
             guard matches(server, token) else { return }
-            if currentOwner != owner { currentOwner = owner; items = []; outcomes = [:]; working = [] }
+            if currentOwner != owner { currentOwner = owner; items = []; outcomes = [:]; working = []; awaitingDecision = [] }
             let data = try await PanelTransport.request(server: server, path: "/api/approvals?status=pending&chat_id=\(owner)&limit=200", method: "GET", body: nil, expectedToken: token)
             guard matches(server, token) else { return }
             guard data["status"] as? Int == 200, let text = data["body"] as? String else { throw AgentError.message("Не удалось проверить подтверждения") }
@@ -61,6 +62,23 @@ indirect enum ApprovalValue: Decodable {
             }
             let oldIDs = Set(items.map(\.id))
             items += incoming.filter { !oldIDs.contains($0.id) }
+            if !awaitingDecision.isEmpty {
+                for status in ["approved", "failed", "rejected"] {
+                    let response = try await PanelTransport.request(server: server, path: "/api/approvals?status=\(status)&chat_id=\(owner)&limit=200", method: "GET", body: nil, expectedToken: token)
+                    guard matches(server, token) else { return }
+                    guard response["status"] as? Int == 200, let body = response["body"] as? String else { throw AgentError.message("Не удалось проверить решение") }
+                    let resolved = try JSONDecoder().decode(List.self, from: Data(body.utf8)).approvals
+                    for item in resolved where awaitingDecision.contains(item.id) && String(item.chat_id) == owner && item.status == status {
+                        if status == "approved" {
+                            // Decision is durable before execution finishes. Never infer completion.
+                            outcomes[item.id] = "Подтверждение принято сервером. Действие выполняется или уже завершено. Результат можно проверить у Агента."
+                        } else {
+                            outcomes[item.id] = status == "failed" ? "Подтверждение принято, но выполнение завершилось ошибкой. Уточните результат у Агента." : "Отклонено. Действие не выполнено."
+                            awaitingDecision.remove(item.id)
+                        }
+                    }
+                }
+            }
             error = nil
         } catch { if matches(server, token) { self.error = "Не удалось обновить подтверждения. \(error.localizedDescription)" } }
     }
@@ -73,6 +91,7 @@ indirect enum ApprovalValue: Decodable {
         defer { if matches(server, token) { working.remove(item.id) } }
         // Freeze the card before POST. An uncertain transport result never retries itself.
         outcomes[item.id] = "Отправляем решение…"
+        awaitingDecision.insert(item.id)
         do {
             let body = "{\"decision\":\"\(approve ? "approved" : "rejected")\"}"
             let response = try await PanelTransport.request(server: server, path: "/api/approvals/\(item.id)/decide", method: "POST", body: body, expectedToken: token)
@@ -83,6 +102,7 @@ indirect enum ApprovalValue: Decodable {
                let result = try? JSONDecoder().decode(Decision.self, from: Data(text.utf8)),
                result.approval.id == item.id, result.approval.chat_id == item.chat_id,
                result.approval.status == (approve ? "approved" : "rejected"), result.executed == approve {
+                awaitingDecision.remove(item.id)
                 outcomes[item.id] = approve ? "Подтверждено. Сервер завершил выполнение действия." : "Отклонено. Действие не выполнено."
             } else {
                 outcomes[item.id] = "Сервер не подтвердил выполнение (\(status)). Проверьте результат у Агента перед повтором."
