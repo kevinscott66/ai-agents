@@ -106,7 +106,15 @@ struct AgentGlass: ViewModifier {
     }
 }
 @main struct AgentApp: App {
-    var body: some Scene { WindowGroup { RootView().tint(.primary) } }
+    var body: some Scene { WindowGroup {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--panel-preview") {
+            NavigationStack { PanelView(server: "https://agent.invalid") }.tint(.primary)
+        } else { RootView().tint(.primary) }
+        #else
+        RootView().tint(.primary)
+        #endif
+    } }
 }
 struct RootView: View {
     @StateObject private var model = ChatModel()
@@ -150,6 +158,7 @@ struct RootView: View {
                 List {
                     Section {
                         Label("Чат с лидом", systemImage: "bubble.left.and.bubble.right")
+                        NavigationLink { PanelView(server: server) } label: { Label("Панель команды", systemImage: "rectangle.grid.2x2") }
                         NavigationLink { ActionsView { choose($0); menu = false } } label: { Label("Все действия", systemImage: "square.grid.2x2") }
                         NavigationLink { SettingsView(server: $server) } label: { Label("Подключение", systemImage: "slider.horizontal.3") }
                     }
@@ -160,7 +169,7 @@ struct RootView: View {
                     }
                     Section { Text("Один собеседник. Команда из 12 ролей.").font(.footnote).foregroundStyle(.secondary) }
                 }.navigationTitle("Агент").toolbar { ToolbarItem(placement: .confirmationAction) { Button("Готово") { menu = false } } }
-            }.presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
+            }.presentationDetents([.large]).presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $actions) {
             NavigationStack { ActionsView { choose($0); actions = false }.toolbar { ToolbarItem(placement: .confirmationAction) { Button("Готово") { actions = false } } } }

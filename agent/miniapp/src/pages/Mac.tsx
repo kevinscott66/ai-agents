@@ -1,3 +1,4 @@
+import { useNativeRefresh } from "../lib/native-refresh";
 import { useEffect, useState } from "react";
 import { api, formatApiError } from "../lib/api";
 import type { AgentAction } from "../lib/types";
@@ -72,6 +73,8 @@ export default function Mac() {
 
     return unsubscribe;
   }, []);
+
+  useNativeRefresh(loadMacHistory);
 
   async function loadMacHistory() {
     setError(null);
@@ -203,7 +206,7 @@ export default function Mac() {
   return (
     <div className="page">
       <div className="page-header">
-        <h2>Mac Control Sessions</h2>
+        <h2>Сессии на Mac</h2>
         <p style={{ color: "#666", margin: 0 }}>
           История запусков Claude Code на Mac
         </p>

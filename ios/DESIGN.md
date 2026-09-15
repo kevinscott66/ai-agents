@@ -56,3 +56,9 @@ Native sheets with a drag handle, clear title and Done. Work shortcuts prepare e
 - Connection edits are staged until successful pairing; fields are disabled during pairing.
 - Primary send/dictation action has a 44 pt hit target.
 - Native protocol and chat-race regression fixtures run with `python3 ios/tests/run.py`.
+
+## Embedded team panel
+
+Menu → «Панель команды» opens all nine Mini App sections inside a full-height native navigation sheet. The existing interface is bundled in the IPA and restyled with monochrome SVG icons, system typography, 44-point controls, rounded content surfaces and a translucent section rail. SwiftUI owns outer navigation; WebKit renders the shared panel forms. No Telegram launch is required. Light/dark follows iOS. Connection errors use a neutral actionable card.
+
+The bridge uses the paired Keychain credential without exposing it to scripts. Six live data sections refresh every 15 seconds while visible and not editing; older Logs pages are retained. Settings, permissions and wiki are loaded on entry and keep their existing explicit refresh behavior.

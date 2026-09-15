@@ -1,3 +1,4 @@
+import { useNativeRefresh } from "../lib/native-refresh";
 import { useEffect, useState } from "react";
 import { api, formatApiError } from "../lib/api";
 import type { Task, TaskStatus } from "../lib/types";
@@ -145,6 +146,8 @@ export default function Tasks() {
   // перезапишет свежий список, и сам он уже не починится.
   const beginLoad = useLatestRun();
   const coalescer = useCoalescer();
+
+  useNativeRefresh(load);
 
   async function load() {
     const isCurrent = beginLoad();

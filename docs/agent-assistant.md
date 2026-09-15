@@ -50,3 +50,9 @@ GitHub/серверы/домены/Cloudflare: iPhone передаёт запр�
 Т-Банк: форма подготовки реквизитов/суммы, локальное копирование на 2 минуты, переход в [интернет-банк](https://www.tbank.ru/mybank/). Это не API автоматического денежного перевода. Реквизиты формы не отправляются лиду.
 
 Микрофон включается по нажатию; постоянного фонового прослушивания нет. Озвучивание ответов — системное iOS TTS. Push через APNs, автоматическая утренняя рассылка, полное управление произвольными iPhone-приложениями и новые внешние аккаунты в этой версии не настраиваются. Сервер, Mac daemon и Calendar TCC требуют отдельной активации после review/разрешения на деплой.
+
+## iPhone team panel
+
+The companion bundles all Mini App sections (dashboard, tasks, approvals, agents, permissions, logs, wiki, settings, Mac). `ios/build-unsigned.sh` builds the native web bundle before Xcode packaging. The normal Telegram web build is unchanged.
+
+Panel API requests may authenticate using an enabled native device bearer, subject to both the live assistant-owner ACL and `MINIAPP_ALLOWED_USER_IDS`. Existing `MINIAPP_ADMIN_USER_IDS`, chat scoping and action-specific owner gates still apply. Origin-bearing native authentication is rejected. No bearer enters HTML, JavaScript, cookies or URLs; a bounded Swift bridge injects it into HTTPS requests to an explicit data-route allowlist. The bundled WebKit page has no remote script/network/frame capability. Bearer revocation also revokes panel access.

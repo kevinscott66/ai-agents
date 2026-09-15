@@ -1,3 +1,6 @@
+import PanelIcon from "./components/PanelIcon";
+import { nativePanel } from "./lib/native";
+import "./native.css";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { isTabNavKey, nextTabIndex, TABS, type TabKey } from "./lib/tabnav";
 import { tg } from "./lib/tg";
@@ -37,6 +40,12 @@ export default function App() {
   const [tab, setTab] = useState<TabKey>("dashboard");
   const [userName, setUserName] = useState<string>("");
   const [conn, setConn] = useState<ConnState>("closed");
+  useEffect(() => {
+    if (nativePanel) {
+      const key = location.hash.slice(1);
+      if (TABS.some(t => t.key === key)) setTab(key as TabKey);
+    }
+  }, []);
   // M4 — offline indicator.
   const [online, setOnline] = useState<boolean>(
     typeof navigator === "undefined" ? true : navigator.onLine !== false,
@@ -102,7 +111,7 @@ export default function App() {
   }, []);
 
   return (
-    <div className="app">
+    <div className={nativePanel ? "app native-panel" : "app"}>
       {!online && (
         <div
           role="status"
@@ -147,8 +156,8 @@ export default function App() {
         </div>
       )}
       <header className="header">
-        <h1>AI Agents</h1>
-        <div className="header-right">
+        <h1>{nativePanel ? TABS.find(t => t.key === tab)?.label : "AI Agents"}</h1>
+        <div className="header-right" hidden={nativePanel}>
           <span
             className="sse-dot"
             title={`связь: ${CONN_LABEL[conn]}`}
@@ -204,8 +213,8 @@ export default function App() {
               if (nextIndex !== currentIndex) setTab(TABS[nextIndex].key);
             }}
           >
-            <span className="icon" aria-hidden="true">{t.icon}</span>
-            <span>{t.label}</span>
+            <span className="icon" aria-hidden="true">{nativePanel ? <PanelIcon tab={t.key} /> : t.icon}</span>
+            <span>{nativePanel && t.key === "approvals" ? "Согласования" : nativePanel && t.key === "wiki" ? "Знания" : t.label}</span>
           </button>
         ))}
       </nav>

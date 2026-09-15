@@ -1,3 +1,4 @@
+import { nativePanel } from "../lib/native";
 interface Props {
   message?: string | null;
   onRetry?: () => void;
@@ -10,6 +11,10 @@ interface Props {
  */
 export function ErrorBox({ message, onRetry, hint }: Props) {
   if (!message) return null;
+  if (nativePanel) return <div className="native-error" role="alert">
+    <strong>Панель недоступна</strong><p>{message}</p>
+    {onRetry && <button className="btn secondary" onClick={onRetry}>Обновить</button>}
+  </div>;
   return (
     <div className="error-box" role="alert">
       <div style={{ fontWeight: 600, marginBottom: 4 }}>

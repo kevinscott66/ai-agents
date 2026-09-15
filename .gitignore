@@ -75,3 +75,6 @@ agent/memory/_team/projects/wiki-view-test-page.md
 
 /ios/build/
 /ios/**/xcuserdata/
+
+# Reproducible bundled iPhone panel
+ios/Agent/Panel/

@@ -27,3 +27,12 @@ with tempfile.TemporaryDirectory(prefix='agent-ios-tests-') as scratch:
     binary = temp / 'chat-check'
     subprocess.run(compiler + ['-parse-as-library', str(generated), '-o', str(binary)], check=True, timeout=90)
     subprocess.run([str(binary)], check=True, timeout=15)
+
+# Exercise the URL boundary from production code without linking UIKit/WebKit.
+with tempfile.TemporaryDirectory(prefix='agent-panel-tests-') as scratch:
+    temp = Path(scratch)
+    panel = (root / 'Agent/PanelView.swift').read_text()
+    panel = panel[panel.index('enum PanelTransport {'):]
+    (temp / 'PanelTransport.swift').write_text('import Foundation\n' + panel)
+    subprocess.run(['xcrun', 'swiftc', '-module-cache-path', str(temp / 'cache'), str(root / 'Agent/API.swift'), str(temp / 'PanelTransport.swift'), str(root / 'tests/PanelTransportFixture.swift'), '-o', str(temp / 'panel')], check=True, timeout=90)
+    subprocess.run([str(temp / 'panel')], check=True, timeout=15)

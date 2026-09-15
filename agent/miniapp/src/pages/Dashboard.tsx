@@ -1,3 +1,5 @@
+import { nativePanel } from "../lib/native";
+import { useNativeRefresh } from "../lib/native-refresh";
 import { useEffect, useState } from "react";
 import { api, formatApiError } from "../lib/api";
 import { telegramLaunchState } from "../lib/tg";
@@ -117,6 +119,8 @@ export default function Dashboard({ onNav }: Props) {
   // перезагрузку и вызвало. Приём общий для страниц — `lib/stale.ts`.
   const beginLoad = useLatestRun();
 
+  useNativeRefresh(load);
+
   async function loadAggregated(isCurrent: () => boolean): Promise<boolean> {
     try {
       const startOfDay = new Date();
@@ -200,7 +204,7 @@ export default function Dashboard({ onNav }: Props) {
     const isCurrent = beginLoad();
     setErr(null);
     const launch = telegramLaunchState();
-    if (!launch.inTelegram || !launch.hasInitData) {
+    if (!nativePanel && (!launch.inTelegram || !launch.hasInitData)) {
       setErr("Telegram-сессия не найдена. Откройте панель кнопкой Mini App в Telegram.");
       setInitialLoading(false);
       return;

@@ -1,3 +1,4 @@
+import { useNativeRefresh } from "../lib/native-refresh";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, formatApiError } from "../lib/api";
 import type { AgentAction } from "../lib/types";
@@ -166,6 +167,8 @@ export default function Logs() {
   useEffect(() => {
     void loadAgents(() => api.agents()).then(setAgentsState);
   }, []);
+
+  useNativeRefresh(async () => { if (!paged.current) await load(true); });
 
   async function load(reset = false) {
     if (reset) {

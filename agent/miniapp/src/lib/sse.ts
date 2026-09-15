@@ -1,3 +1,4 @@
+import { nativePanel } from "./native";
 /**
  * Mini App SSE client (M2).
  *
@@ -246,6 +247,10 @@ function scheduleReconnect() {
 }
 
 export function subscribe(eventName: string, handler: Handler): () => void {
+  if (nativePanel) {
+    // Native views own explicit refresh callbacks; never fabricate domain events.
+    return () => {};
+  }
   let set = handlers.get(eventName);
   if (!set) {
     set = new Set();

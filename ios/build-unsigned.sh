@@ -1,6 +1,7 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")"
+(cd ../agent/miniapp && bun run build --mode native)
 agent_build="${AGENT_IOS_BUILD_DIR:-$PWD/build}"
 mkdir -p "$agent_build"
 xcodebuild -project Agent.xcodeproj -scheme Agent -configuration Release \

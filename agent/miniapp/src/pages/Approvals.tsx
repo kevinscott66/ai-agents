@@ -1,3 +1,4 @@
+import { useNativeRefresh } from "../lib/native-refresh";
 import { useEffect, useState } from "react";
 import { api, formatApiError } from "../lib/api";
 import type { Approval } from "../lib/types";
@@ -174,6 +175,8 @@ export default function Approvals() {
   // одобрить второй раз. Аппрув стоит на необратимом, второго раза быть не
   // должно.
   const beginLoad = useLatestRun();
+
+  useNativeRefresh(load);
 
   async function load() {
     const isCurrent = beginLoad();
