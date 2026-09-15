@@ -8,11 +8,12 @@ import UniformTypeIdentifiers
 }
 struct PanelView: View {
     let server: String
+    var onMacStart: ((String, String) throws -> Void)? = nil
     @StateObject private var state = PanelLoadState()
     @State private var generation = UUID()
     var body: some View {
         ZStack {
-            PanelWebView(server: server, state: state).id(generation)
+            PanelWebView(server: server, state: state, onMacStart: onMacStart).id(generation)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             if state.loading { ProgressView("Открываем панель…").padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20)) }
             if let error = state.error {
@@ -30,7 +31,8 @@ struct PanelView: View {
 struct PanelWebView: UIViewRepresentable {
     let server: String
     @ObservedObject var state: PanelLoadState
-    func makeCoordinator() -> Coordinator { Coordinator(server: server, state: state) }
+    var onMacStart: ((String, String) throws -> Void)? = nil
+    func makeCoordinator() -> Coordinator { Coordinator(server: server, state: state, onMacStart: onMacStart) }
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
@@ -61,7 +63,8 @@ struct PanelWebView: UIViewRepresentable {
         var entry = URL(string: "agent-panel://bundle/index.html")!
         private var watchdog: Task<Void, Never>?
         private var closed = false
-        init(server: String, state: PanelLoadState) { self.server = server; self.state = state }
+        let onMacStart: ((String, String) throws -> Void)?
+        init(server: String, state: PanelLoadState, onMacStart: ((String, String) throws -> Void)?) { self.server = server; self.state = state; self.onMacStart = onMacStart }
         func load(_ view: WKWebView) {
             guard !closed else { return }
             view.load(URLRequest(url: entry))
@@ -108,10 +111,30 @@ struct PanelWebView: UIViewRepresentable {
                let input = message.body as? [String: Any], input["ready"] as? Bool == true {
                 state.loading = false; watchdog?.cancel(); replyHandler(["ok": true], nil); return
             }
-            guard message.frameInfo.isMainFrame, message.frameInfo.request.url?.scheme == "agent-panel",
+            if !closed, message.frameInfo.isMainFrame, message.frameInfo.request.url?.scheme == "agent-panel",
+               message.frameInfo.request.url?.host == "bundle", let input = message.body as? [String: Any],
+               let launch = input["macStart"] as? [String: String] {
+                guard let project = launch["project"], let prompt = launch["prompt"],
+                      !project.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, project.count <= 500,
+                      !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, prompt.count <= 4000,
+                      let onMacStart else { replyHandler(nil, "Не удалось передать задачу в чат"); return }
+                do { try onMacStart(project, prompt); replyHandler(["ok": true], nil) }
+                catch { replyHandler(nil, error.localizedDescription) }
+                return
+            }
+            guard !closed, message.frameInfo.isMainFrame, message.frameInfo.request.url?.scheme == "agent-panel",
                   message.frameInfo.request.url?.host == "bundle", let input = message.body as? [String: Any],
                   let path = input["path"] as? String, let method = input["method"] as? String,
                   ["GET", "POST"].contains(method), jobs.count < 16 else { replyHandler(nil, "Запрос панели отклонён"); return }
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("--dashboard-fixture"), method == "GET" {
+                let names = ["Лид команды", "Планирование", "Продукт", "Backend", "Frontend", "Тестирование", "Аналитика", "Контроль качества", "Безопасность", "Контент", "Дизайн", "Проекты"]
+                let agents = names.enumerated().map { ["key": "preview-" + String($0.offset), "title": $0.element, "provider": "internal", "execution_state": "running", "status": "running", "health": ["alive":true,"consecutiveFailures":0]] as [String: Any] }
+                let value: [String: Any] = path.hasPrefix("/api/dashboard") ? ["counts": ["tasksPending":0,"approvalsPending":0,"actionsSince":0], "agents":agents,"recentActions":[],"budgets":[]] : path.hasPrefix("/api/autonomy") ? ["mode":"locked","admin":false] : ["mac_online":true,"actions":[]]
+                let data = try! JSONSerialization.data(withJSONObject: value)
+                replyHandler(["status":200,"body":String(data:data,encoding:.utf8)!], nil); return
+            }
+            #endif
             let body = input["body"] as? String; let id = UUID()
             jobs[id] = Task { @MainActor in
                 defer { jobs.removeValue(forKey: id) }

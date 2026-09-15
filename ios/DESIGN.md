@@ -62,3 +62,9 @@ Native sheets with a drag handle, clear title and Done. Work shortcuts prepare e
 Menu → «Панель команды» opens all nine Mini App sections inside a full-height native navigation sheet. The existing interface is bundled in the IPA and restyled with monochrome SVG icons, system typography, 44-point controls, rounded content surfaces and a translucent section rail. SwiftUI owns outer navigation; WebKit renders the shared panel forms. No Telegram launch is required. Light/dark follows iOS. Connection errors use a neutral actionable card.
 
 The bridge uses the paired Keychain credential without exposing it to scripts. Six live data sections refresh every 15 seconds while visible and not editing; older Logs pages are retained. Settings, permissions and wiki are loaded on entry and keep their existing explicit refresh behavior.
+
+## Dialog history and Mac launch (0.1.3)
+
+Compose starts a separate dialog. Menu lists synchronized titles/dates; «Предыдущие сообщения» loads older messages while retaining loaded pages during refresh. Another device's active turn is explained with a text status. Connection switching is disabled during pending work.
+
+Mac adds a project/task form with a single submission button. It preserves input on rejected local submission and directs accepted requests to chat for results and confirmations. Status cards use a full-width wrapping name row, with metadata and the status badge below; this removes one-letter truncation at iPhone widths.

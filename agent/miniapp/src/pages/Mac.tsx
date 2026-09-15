@@ -1,5 +1,6 @@
 import { useNativeRefresh } from "../lib/native-refresh";
-import { useEffect, useState } from "react";
+import { nativePanel } from "../lib/native";
+import { useEffect, useRef, useState } from "react";
 import { api, formatApiError } from "../lib/api";
 import type { AgentAction } from "../lib/types";
 import { subscribe as sseSubscribe } from "../lib/sse";
@@ -24,6 +25,22 @@ interface MacOutputEvent {
 }
 
 export default function Mac() {
+  const [project, setProject] = useState("");
+  const [prompt, setPrompt] = useState("");
+  const [launchStatus, setLaunchStatus] = useState("");
+  const [launchBusy, setLaunchBusy] = useState(false);
+  const launching = useRef(false);
+  async function startSession(event: React.FormEvent) {
+    event.preventDefault();
+    if (launching.current) return;
+    launching.current = true; setLaunchBusy(true); setLaunchStatus("");
+    try {
+      const result = await (window as any).webkit.messageHandlers.panel.postMessage({macStart:{project:project.trim(),prompt:prompt.trim()}});
+      if (result?.ok !== true) throw new Error("Не удалось передать запрос");
+      setPrompt(""); setLaunchStatus("Запрос добавлен в чат. Там появятся ответ и необходимое подтверждение.");
+    } catch (error) { setLaunchStatus(formatApiError(error)); }
+    finally { launching.current = false; setLaunchBusy(false); }
+  }
   const [sessions, setSessions] = useState<MacSession[]>([]);
   const [history, setHistory] = useState<AgentAction[]>([]);
   const [loading, setLoading] = useState(true);
@@ -212,6 +229,12 @@ export default function Mac() {
         </p>
       </div>
 
+      {nativePanel && <form onSubmit={startSession} className="mac-launch-form">
+        <label>Проект на Mac<input value={project} onChange={e => setProject(e.currentTarget.value)} maxLength={500} required placeholder="Папка проекта или его название" /></label>
+        <label>Задача<textarea value={prompt} onChange={e => setPrompt(e.currentTarget.value)} maxLength={4000} required rows={4} placeholder="Что нужно сделать в этой сессии?" /></label>
+        <button type="submit" disabled={launchBusy || !project.trim() || !prompt.trim()}>{launchBusy ? "Передаём задачу…" : "Запустить сессию"}</button>
+        {launchStatus && <p role="status">{launchStatus}</p>}
+      </form>}
       {/*
         Аварийный стоп стоит здесь, а не в списке сессий, и не спрашивает,
         сколько их сейчас активно.

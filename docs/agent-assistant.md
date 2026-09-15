@@ -60,3 +60,13 @@ Panel API requests may authenticate using an enabled native device bearer, subje
 ## Confirmations in native chat
 
 Pending approvals for the authenticated owner's direct-chat ID appear as inline cards in the conversation, refreshed every5 seconds while active. The user can inspect parameters and explicitly approve/reject via the existing admin-gated decision endpoint. Status is shown in the same card. The client freezes a decision before POST and never automatically retries an ambiguous outcome. Card/request identity is bound to the current Keychain credential; re-pairing invalidates prior cards. `GET /api/native/status` now includes the authenticated `userId` for scoping.
+
+## Synchronized native dialogs (0.1.3)
+
+GET/POST `/api/native/conversations` and GET `/api/native/conversations/:id?before=<seq>` use the authenticated owner, never a client-supplied owner ID. The index returns the most recent 200 conversations and owner-wide running state. History pages contain up to 100 messages with a backwards cursor. A turn optionally names an owned `conversationId`; messages are archived transactionally and shared across that owner's paired devices. Polling remains device-bound. The short context passed to both lead and delegates uses the selected dialog; shared assistant memory/wiki remain shared.
+
+`native.db` adds `conversations`, `conversation_turns`, and `conversation_messages`. The archive has no automatic seven-day deletion; only polling rows expire. Persistent turn links prevent replay of archived IDs. Startup migrates retained legacy app messages into owner-scoped, randomly identified «Ранее в приложении» dialogs before pruning. The `legacy-` namespace cannot be newly created by clients. Previously expired messages cannot be recovered by this migration. Back up the database before deployment.
+
+The iPhone restores the selected dialog and polls history while foregrounded. Pending request recovery stores the dialog ID and original server and only polls, never re-submits the action. Server/credential changes invalidate asynchronous display writes. Connection settings are disabled during pending work. No separate cross-device account is required: pair each device to the same assistant owner.
+
+The native Mac section accepts a project and task, then submits an ordinary explicit user request through the existing lead and permission/approval pipeline. The bridge acknowledges local acceptance, not execution completion. Result and approval are shown in chat; completed execution enters the existing Mac action journal. This does not bypass `MAC_RUN_CLAUDE` permissions or guarantee that an offline Mac can run a session.

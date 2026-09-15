@@ -105,6 +105,7 @@ export function findHandoffTargets(
 }
 
 export interface HandoffDeps {
+  nativeHistory?: import("./db.ts").ChatRow[];
   /** Per-turn native reply transport; never a global or model-controlled destination. */
   nativeReply?: (agentKey: string, text: string) => Promise<{ message_id: number; date: number }>;
   anthropic: Anthropic | null;
@@ -358,7 +359,7 @@ export async function respondAs(
   try {
     await target.bot.telegram.sendChatAction(chatId, "typing").catch(() => {});
 
-    const recent = getRecentMessages(chatId, historyLimit);
+    const recent = deps.nativeHistory ? deps.nativeHistory.slice(-historyLimit) : getRecentMessages(chatId, historyLimit);
     const teamIdx = wikiIndex("_team");
     const teamLog = tailLines(wikiLog("_team"), 30);
     const privIdx = wikiIndex(target.def.key);

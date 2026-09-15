@@ -1,50 +1,131 @@
 import SwiftUI
 import AVFoundation
 
-struct ChatLine: Identifiable, Codable { var id = UUID(); let role: String; let text: String }
+struct ChatLine: Identifiable, Codable { var id = UUID().uuidString; let role: String; let text: String }
 @MainActor final class ChatModel: ObservableObject {
     @Published var lines: [ChatLine] = []
     @Published var busy = false
     @Published var pending = UserDefaults.standard.string(forKey: "pendingTurn") != nil
     @Published var error: String?
     @Published var draft = ""
+    @Published var conversations: [ConversationRecord] = []
+    @Published var conversationId: String?
+    @Published var moreHistory = false
+    @Published var remoteBusy = false
+    private var boundServer = ""
+    private var boundToken: String?
+    @Published var historyError: String?
+    private var fresh = false
+    private var firstSequence: Int?
+    private var syncing = false
+    private var syncGeneration = UUID()
+    private func bind(server: String) {
+        let token = Credentials.read(server: server)
+        if boundServer != server || boundToken != token {
+            operation = UUID(); polling?.cancel(); polling = nil; busy = false
+            syncGeneration = UUID(); boundServer = server; boundToken = token
+            lines = []; conversations = []; fresh = false; firstSequence = nil; moreHistory = false; remoteBusy = false
+            conversationId = UserDefaults.standard.string(forKey: "conversation:" + server)
+        }
+    }
+    func newConversation(server: String) {
+        guard !busy, !pending else { return }
+        bind(server: server)
+        syncGeneration = UUID(); conversationId = nil; lines = []; draft = ""; fresh = true; moreHistory = false; firstSequence = nil
+        UserDefaults.standard.removeObject(forKey: "conversation:" + server)
+    }
+    func selectConversation(_ id: String, server: String) async {
+        guard !busy, !pending else { return }
+        bind(server: server)
+        syncGeneration = UUID(); conversationId = id; fresh = false; lines = []; draft = ""; firstSequence = nil; moreHistory = false
+        UserDefaults.standard.set(id, forKey: "conversation:" + server)
+        await synchronize(server: server)
+    }
+    func synchronize(server: String, older: Bool = false) async {
+        bind(server: server)
+        guard !busy, !pending, !syncing, let token = boundToken else { return }
+        let generation = syncGeneration
+        syncing = true; defer { syncing = false }
+        do {
+            let index = try await AgentAPI(server: server).conversations(expectedToken: token)
+            guard generation == syncGeneration, Credentials.read(server: server) == token, !busy, !pending else { return }
+            let list = index.conversations
+            conversations = list; remoteBusy = index.running
+            if let id = conversationId, !list.contains(where: { $0.id == id }) { conversationId = nil; lines = []; firstSequence = nil }
+            if conversationId == nil && !fresh { conversationId = list.first?.id }
+            if let id = conversationId {
+                let history = try await AgentAPI(server: server).history(id, before: older ? firstSequence : nil, expectedToken: token)
+                guard generation == syncGeneration, Credentials.read(server: server) == token, conversationId == id, !busy, !pending else { return }
+                let incoming = history.messages.map { ChatLine(id:$0.id,role:$0.role == "user" ? "Вы" : "Агент",text:$0.text) }
+                if older {
+                    let ids = Set(lines.map(\.id)); lines = incoming.filter { !ids.contains($0.id) } + lines
+                    firstSequence = history.messages.first?.seq ?? firstSequence; moreHistory = history.more
+                } else {
+                    // Retain already loaded older pages while replacing the current server window.
+                    let first = incoming.first.flatMap { item in lines.firstIndex(where: { $0.id == item.id }) }
+                    lines = (first.map { Array(lines.prefix($0)) } ?? []) + incoming
+                    if firstSequence == nil || first == nil { firstSequence = history.messages.first?.seq; moreHistory = history.more }
+                }
+                remoteBusy = history.running
+                UserDefaults.standard.set(id, forKey:"conversation:" + server)
+            }
+            historyError = nil
+        } catch { if generation == syncGeneration { historyError = "Не удалось синхронизировать диалоги: " + error.localizedDescription } }
+    }
     private let speaker = AVSpeechSynthesizer()
     private var polling: Task<Void, Never>?
     private var currentReplies = 0
     private var currentTurn: String?
     private var operation = UUID()
-    func send(server: String) {
+    @discardableResult func send(server: String) -> Bool {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !busy else { return }
-        guard !pending else { error = "Сначала проверьте ответ на предыдущий запрос."; return }
+        guard !text.isEmpty, !busy, !remoteBusy else { return false }
+        guard !pending else { error = "Сначала проверьте ответ на предыдущий запрос."; return false }
+        bind(server: server)
+        guard let token = boundToken else { error = "Подключите устройство в настройках"; return false }
+        let dialogID = conversationId ?? UUID().uuidString
+        conversationId = dialogID; fresh = false; syncGeneration = UUID()
+        UserDefaults.standard.set(dialogID, forKey: "conversation:" + server)
         let id = UUID().uuidString
         draft = ""; error = nil; busy = true; pending = true; currentReplies = 0; currentTurn = id
-        lines.append(ChatLine(role: "Вы", text: text))
+        lines.append(ChatLine(id: id + ":user", role: "Вы", text: text))
         // Save the request ID before sending. A reconnect only polls this ID.
         UserDefaults.standard.set(id, forKey: "pendingTurn")
         UserDefaults.standard.set(server, forKey: "pendingServer")
+        UserDefaults.standard.set(dialogID, forKey: "pendingConversation")
         let activeOperation = UUID()
         operation = activeOperation
         polling = Task {
+            var submitted = false
             do {
-                let first = try await AgentAPI(server: server).send(text, id: id)
+                try await AgentAPI(server: server).createConversation(dialogID, title: text, expectedToken: token)
                 try Task.checkCancellation()
+                submitted = true
+                let first = try await AgentAPI(server: server).send(text, id: id, conversationId: dialogID, expectedToken: token)
+                try Task.checkCancellation()
+                guard boundServer == server, boundToken == token, Credentials.read(server: server) == token else { throw AgentError.message("Подключение изменилось") }
                 consume(first)
-                if first.status == "running" { try await watch(server: server, id: id) }
+                if first.status == "running" { try await watch(server: server, id: id, token: token) }
             } catch is CancellationError { } catch {
                 guard operation == activeOperation, !Task.isCancelled else { return }
-                self.error = error.localizedDescription + " Если запрос принят сервером, нажмите «Проверить ответ»."; busy = false }
+                if !submitted { clearPending(); draft = text; lines.removeAll { $0.id == id + ":user" } }
+                self.error = error.localizedDescription + (submitted ? " Если запрос принят сервером, нажмите «Проверить ответ»." : ""); busy = false }
         }
+        return true
     }
     func resume() {
         guard !busy, let pendingServer = UserDefaults.standard.string(forKey: "pendingServer"),
               let id = UserDefaults.standard.string(forKey: "pendingTurn") else { return }
+        bind(server: pendingServer)
+        guard let token = boundToken else { error = "Подключите устройство в настройках"; return }
+        conversationId = UserDefaults.standard.string(forKey:"pendingConversation")
+        boundServer = pendingServer
         if currentTurn != id { currentReplies = 0; currentTurn = id }
         error = nil; busy = true
         let activeOperation = UUID()
         operation = activeOperation
         polling = Task {
-            do { try await watch(server: pendingServer, id: id) }
+            do { try await watch(server: pendingServer, id: id, token: token) }
             catch is CancellationError { }
             catch {
                 guard operation == activeOperation, !Task.isCancelled else { return }
@@ -52,11 +133,12 @@ struct ChatLine: Identifiable, Codable { var id = UUID(); let role: String; let 
             }
         }
     }
-    private func watch(server: String, id: String) async throws {
+    private func watch(server: String, id: String, token: String) async throws {
         for _ in 0..<300 {
             try Task.checkCancellation()
-            let result = try await AgentAPI(server: server).poll(id)
+            let result = try await AgentAPI(server: server).poll(id, expectedToken: token)
             try Task.checkCancellation()
+            guard boundServer == server, boundToken == token, Credentials.read(server: server) == token else { throw AgentError.message("Подключение изменилось") }
             consume(result)
             if result.status != "running" { return }
             try await Task.sleep(for: .seconds(2))
@@ -65,20 +147,21 @@ struct ChatLine: Identifiable, Codable { var id = UUID(); let role: String; let 
         error = "Запрос ещё выполняется. Нажмите «Проверить ответ» позже."
     }
     private func consume(_ turn: Turn) {
-        for text in turn.replies.dropFirst(currentReplies) { lines.append(ChatLine(role: "Агент", text: text)) }
+        for (index, text) in turn.replies.enumerated().dropFirst(currentReplies) { lines.append(ChatLine(id: turn.id + ":reply:" + String(index + 1), role: "Агент", text: text)) }
         currentReplies = turn.replies.count
         if turn.status != "running" {
-            busy = false; pending = false
-            UserDefaults.standard.removeObject(forKey: "pendingTurn")
-            UserDefaults.standard.removeObject(forKey: "pendingServer")
+            busy = false; clearPending()
             if turn.status == "interrupted" { error = "Сервер перезапущен. Задача могла выполнить часть действий — уточните её состояние." }
         }
+    }
+    private func clearPending() {
+        pending = false
+        for key in ["pendingTurn", "pendingServer", "pendingConversation"] { UserDefaults.standard.removeObject(forKey: key) }
     }
     func abandonWaiting() {
         operation = UUID()
         polling?.cancel(); polling = nil; busy = false; pending = false
-        UserDefaults.standard.removeObject(forKey: "pendingTurn")
-        UserDefaults.standard.removeObject(forKey: "pendingServer")
+        clearPending()
         error = "Ожидание сброшено. Серверная задача могла продолжить работу; перед повтором проверьте её состояние."
     }
     func speak(_ text: String) {
@@ -144,7 +227,7 @@ struct RootView: View {
                         Button { menu = true } label: { Image(systemName: "line.3.horizontal").font(.system(size: 19, weight: .medium)) }.accessibilityLabel("Открыть меню")
                     }
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button { typing = true } label: { Image(systemName: "square.and.pencil").font(.system(size: 20, weight: .regular)) }.accessibilityLabel("Написать сообщение")
+                        Button { model.newConversation(server: server); typing = true } label: { Image(systemName: "square.and.pencil").font(.system(size: 20, weight: .regular)) }.disabled(model.busy || model.pending).accessibilityLabel("Новый диалог")
                     }
                 }
                 .safeAreaInset(edge: .bottom, spacing: 0) { composer }
@@ -152,7 +235,7 @@ struct RootView: View {
         }
         .task(id: server) {
             while !Task.isCancelled {
-                if scenePhase == .active { await approvals.refresh(server: server) }
+                if scenePhase == .active { await approvals.refresh(server: server); await model.synchronize(server: server) }
                 do { try await Task.sleep(for: .seconds(5)) } catch { break }
             }
         }
@@ -167,9 +250,26 @@ struct RootView: View {
                 List {
                     Section {
                         Label("Чат с лидом", systemImage: "bubble.left.and.bubble.right")
-                        NavigationLink { PanelView(server: server) } label: { Label("Панель команды", systemImage: "rectangle.grid.2x2") }
+                        NavigationLink { PanelView(server: server, onMacStart: { project, task in
+                            guard !model.busy && !model.pending && !model.remoteBusy else { throw AgentError.message("Дождитесь завершения текущего запроса") }
+                            model.draft = "Запусти рабочую сессию на моём Mac через MAC_RUN_CLAUDE. Проект: \(project). Задача: \(task)"
+                            guard model.send(server: server) else { throw AgentError.message(model.error ?? "Не удалось отправить запрос") }
+                        }) } label: { Label("Панель команды", systemImage: "rectangle.grid.2x2") }
                         NavigationLink { ActionsView { choose($0); menu = false } } label: { Label("Все действия", systemImage: "square.grid.2x2") }
-                        NavigationLink { SettingsView(server: $server) } label: { Label("Подключение", systemImage: "slider.horizontal.3") }
+                        NavigationLink { SettingsView(server: $server).disabled(model.busy || model.pending) } label: { Label("Подключение", systemImage: "slider.horizontal.3") }
+                    }
+                    Section("Диалоги") {
+                        if let error = model.historyError { Text(error).font(.caption).foregroundStyle(.secondary) }
+                        Button("Новый диалог", systemImage: "square.and.pencil") { model.newConversation(server: server); menu = false }.disabled(model.busy || model.pending)
+                        ForEach(model.conversations) { conversation in
+                            Button { Task { await model.selectConversation(conversation.id, server: server); menu = false } } label: {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(conversation.title).lineLimit(2)
+                                    Text(Date(timeIntervalSince1970: conversation.updated / 1000), style: .date).font(.caption).foregroundStyle(.secondary)
+                                }
+                            }.disabled(model.busy || model.pending)
+                        }
+                        Button("Обновить историю") { Task { await model.synchronize(server: server) } }
                     }
                     Section("Быстрый старт") {
                         Button { choose("Агент, начни мой день"); menu = false } label: { Label("Начать день", systemImage: "sun.max") }
@@ -185,7 +285,7 @@ struct RootView: View {
                 .presentationDetents([.large]).presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $settings) {
-            NavigationStack { SettingsView(server: $server).toolbar { ToolbarItem(placement: .confirmationAction) { Button("Готово") { settings = false } } } }
+            NavigationStack { SettingsView(server: $server).disabled(model.busy || model.pending).toolbar { ToolbarItem(placement: .confirmationAction) { Button("Готово") { settings = false } } } }
                 .presentationDragIndicator(.visible)
         }
         .alert("Сбросить ожидание?", isPresented: $abandon) {
@@ -197,6 +297,7 @@ struct RootView: View {
     private var chat: some View {
         ScrollViewReader { proxy in
             ScrollView {
+                if model.remoteBusy && !model.busy { Text("Агент выполняет запрос с другого устройства. Ответ появится в соответствующем диалоге.").font(.footnote).foregroundStyle(.secondary).padding() }
                 if model.lines.isEmpty && approvals.items.isEmpty {
                     VStack(spacing: 14) {
                         Spacer(minLength: 140)
@@ -212,6 +313,7 @@ struct RootView: View {
                     }.frame(maxWidth: .infinity).padding(.horizontal, 24)
                 } else {
                     LazyVStack(alignment: .leading, spacing: 26) {
+                        if model.moreHistory { Button("Предыдущие сообщения") { Task { await model.synchronize(server: server, older: true) } } }
                         ForEach(model.lines) { line in
                             if line.role == "Вы" {
                                 HStack { Spacer(minLength: 44); Text(line.text).font(.body).textSelection(.enabled).padding(.horizontal, 18).padding(.vertical, 12).background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 24)) }.id(line.id)
@@ -275,7 +377,7 @@ struct RootView: View {
                 } label: {
                     Image(systemName: model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "waveform" : "arrow.up")
                         .font(.system(size: 18, weight: .semibold)).foregroundStyle(inverseInk).frame(width: 40, height: 40).background(ink, in: Circle()).frame(width: 44, height: 44)
-                }.disabled(model.busy || model.pending).accessibilityLabel(model.draft.isEmpty ? "Начать голосовой ввод" : "Отправить").padding(.vertical, 3).padding(.trailing, 4)
+                }.disabled(model.busy || model.pending || model.remoteBusy).accessibilityLabel(model.draft.isEmpty ? "Начать голосовой ввод" : "Отправить").padding(.vertical, 3).padding(.trailing, 4)
             }.padding(6).modifier(AgentGlass(radius: 30))
             Text(voice.recording ? "Нажмите стоп, проверьте текст и отправьте" : "Агент помогает действовать. Важное проверяйте.")
                 .font(.system(size: 11)).foregroundStyle(.secondary).multilineTextAlignment(.center)

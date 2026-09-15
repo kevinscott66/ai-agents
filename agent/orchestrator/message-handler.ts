@@ -376,11 +376,11 @@ export function registerMessageHandler(
   def: CharacterDef,
   running: RunningBot,
   deps: MessageHandlerDeps,
-): (ctx: Context, voice: { text: string; native?: boolean }) => Promise<void> {
+): (ctx: Context, voice: { text: string; native?: boolean; history?: import("../lib/db.ts").ChatRow[] }) => Promise<void> {
   const { bots, allowed, historyLimit, anthropic, model, handoffDeps } = deps;
 
   // Only the trusted voice handler calls this continuation after ingest/dedup.
-  const processMessage = async (ctx: Context, voice?: { text: string; native?: boolean }) => {
+  const processMessage = async (ctx: Context, voice?: { text: string; native?: boolean; history?: import("../lib/db.ts").ChatRow[] }) => {
     if (!ctx.chat || !ctx.message) return;
     try {
       const chatId = ctx.chat.id.toString();
@@ -531,9 +531,10 @@ export function registerMessageHandler(
 
       const turnHandoffDeps: HandoffDeps = voice?.native ? {
         ...handoffDeps,
+        nativeHistory: voice.history,
         nativeReply: async (agentKey, answer) => ctx.reply(`[${agentKey}]\n${answer}`),
       } : handoffDeps;
-      const recent = getRecentMessages(chatId, historyLimit);
+      const recent = voice?.native && voice.history ? voice.history.slice(-historyLimit) : getRecentMessages(chatId, historyLimit);
       // T-303: run all wiki I/O concurrently (async) to avoid blocking the
       // event loop with sequential readFileSync calls on the hot path.
       const hits = wikiSearch(text, ["_team", def.key], 4);

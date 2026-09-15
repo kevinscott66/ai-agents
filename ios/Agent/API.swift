@@ -1,3 +1,7 @@
+struct ConversationRecord: Codable, Identifiable { let id: String; let title: String; let updated: Double }
+struct ConversationMessage: Codable, Identifiable { let seq: Int; let id: String; let role: String; let text: String }
+struct ConversationIndex: Decodable { let conversations: [ConversationRecord]; let running: Bool }
+struct ConversationHistory: Decodable { let messages: [ConversationMessage]; let more: Bool; let running: Bool }
 import Foundation
 import Security
 
@@ -69,7 +73,8 @@ struct AgentAPI {
         guard var parts = URLComponents(string: server), parts.scheme == "https", parts.host != nil,
               parts.user == nil, parts.password == nil, parts.query == nil, parts.fragment == nil,
               parts.path.isEmpty || parts.path == "/" else { throw AgentError.message("Укажите HTTPS-адрес сервера без пути") }
-        parts.path = path
+        guard let route = URLComponents(string: path), route.scheme == nil, route.host == nil, route.fragment == nil else { throw AgentError.message("Некорректный путь запроса") }
+        parts.path = route.path; parts.percentEncodedQuery = route.percentEncodedQuery
         guard let url = parts.url else { throw AgentError.message("Некорректный адрес") }
         var request = URLRequest(url: url)
         request.timeoutInterval = 25
@@ -99,6 +104,17 @@ struct AgentAPI {
         let data = try await Self.readBody(bytes)
         return try JSONDecoder().decode(T.self, from: data)
     }
+    func conversations(expectedToken: String? = nil) async throws -> ConversationIndex {
+        return try await request("/api/native/conversations", expectedToken: expectedToken)
+    }
+    func createConversation(_ id: String, title: String, expectedToken: String? = nil) async throws {
+        struct Result: Decodable { let conversation: ConversationRecord }
+        let _: Result = try await request("/api/native/conversations", body: ["id":id,"title":String(title.prefix(80))], expectedToken: expectedToken)
+    }
+    func history(_ id: String, before: Int? = nil, expectedToken: String? = nil) async throws -> ConversationHistory {
+        guard id.range(of: #"^[a-zA-Z0-9-]{16,64}$"#, options: .regularExpression) != nil else { throw AgentError.message("Некорректный диалог") }
+        return try await request("/api/native/conversations/" + id + (before.map { "?before=\($0)" } ?? ""), expectedToken: expectedToken)
+    }
     func ownerID(expectedToken: String? = nil) async throws -> String {
         struct Status: Decodable { let userId: String }
         let status: Status = try await request("/api/native/status", expectedToken: expectedToken)
@@ -109,12 +125,14 @@ struct AgentAPI {
         let result: Pairing = try await request("/api/native/pair", body: ["code": code.trimmingCharacters(in: .whitespacesAndNewlines)], authenticated: false)
         try Credentials.save(result.validatedToken(), server: server)
     }
-    func send(_ text: String, id: String) async throws -> Turn {
-        let turn: Turn = try await request("/api/native/turns", body: ["id": id, "text": text])
+    func send(_ text: String, id: String, conversationId: String? = nil, expectedToken: String? = nil) async throws -> Turn {
+        var body = ["id": id, "text": text]
+        if let conversationId { body["conversationId"] = conversationId }
+        let turn: Turn = try await request("/api/native/turns", body: body, expectedToken: expectedToken)
         return try turn.validated(for: id)
     }
-    func poll(_ id: String) async throws -> Turn {
-        let turn: Turn = try await request("/api/native/turns/\(id)")
+    func poll(_ id: String, expectedToken: String? = nil) async throws -> Turn {
+        let turn: Turn = try await request("/api/native/turns/\(id)", expectedToken: expectedToken)
         return try turn.validated(for: id)
     }
 }
