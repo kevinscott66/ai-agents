@@ -25,6 +25,7 @@ interface MacOutputEvent {
 }
 
 export default function Mac() {
+  const [provider, setProvider] = useState<"claude" | "codex">("claude");
   const [project, setProject] = useState("");
   const [prompt, setPrompt] = useState("");
   const [launchStatus, setLaunchStatus] = useState("");
@@ -35,7 +36,7 @@ export default function Mac() {
     if (launching.current) return;
     launching.current = true; setLaunchBusy(true); setLaunchStatus("");
     try {
-      const result = await (window as any).webkit.messageHandlers.panel.postMessage({macStart:{project:project.trim(),prompt:prompt.trim()}});
+      const result = await (window as any).webkit.messageHandlers.panel.postMessage({macStart:{provider,project:project.trim(),prompt:prompt.trim()}});
       if (result?.ok !== true) throw new Error("Не удалось передать запрос");
       setPrompt(""); setLaunchStatus("Запрос добавлен в чат. Там появятся ответ и необходимое подтверждение.");
     } catch (error) { setLaunchStatus(formatApiError(error)); }
@@ -225,11 +226,12 @@ export default function Mac() {
       <div className="page-header">
         <h2>Сессии на Mac</h2>
         <p style={{ color: "#666", margin: 0 }}>
-          История запусков Claude Code на Mac
+          История запусков Claude Code и Codex на Mac
         </p>
       </div>
 
       {nativePanel && <form onSubmit={startSession} className="mac-launch-form">
+        <label>Исполнитель<select value={provider} onChange={e => setProvider(e.currentTarget.value as "claude" | "codex")} disabled={launchBusy}><option value="claude">Claude Code</option><option value="codex">Codex</option></select></label>
         <label>Проект на Mac<input value={project} onChange={e => setProject(e.currentTarget.value)} maxLength={500} required placeholder="Папка проекта или его название" /></label>
         <label>Задача<textarea value={prompt} onChange={e => setPrompt(e.currentTarget.value)} maxLength={4000} required rows={4} placeholder="Что нужно сделать в этой сессии?" /></label>
         <button type="submit" disabled={launchBusy || !project.trim() || !prompt.trim()}>{launchBusy ? "Передаём задачу…" : "Запустить сессию"}</button>
@@ -312,7 +314,7 @@ export default function Mac() {
                       {session.project}
                     </div>
                     <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>
-                      Mode: {session.mode} • {formatTimestamp(session.createdAt)}
+                      {session.provider === "codex" ? "Codex" : session.provider === "claude" ? "Claude Code" : "—"} • {session.mode} • {formatTimestamp(session.createdAt)}
                     </div>
                     <div style={{ fontSize: 12, color: "#888" }}>
                       {ellipsize(session.prompt, 100)}
@@ -399,7 +401,7 @@ export default function Mac() {
                       {session.project}
                     </div>
                     <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>
-                      Mode: {session.mode} • {formatTimestamp(session.createdAt)}
+                      {session.provider === "codex" ? "Codex" : session.provider === "claude" ? "Claude Code" : "—"} • {session.mode} • {formatTimestamp(session.createdAt)}
                     </div>
                     <div style={{ fontSize: 12, color: "#888" }}>
                       {ellipsize(session.prompt, 150)}

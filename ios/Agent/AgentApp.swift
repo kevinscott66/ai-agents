@@ -250,9 +250,9 @@ struct RootView: View {
                 List {
                     Section {
                         Label("Чат с лидом", systemImage: "bubble.left.and.bubble.right")
-                        NavigationLink { PanelView(server: server, onMacStart: { project, task in
+                        NavigationLink { PanelView(server: server, onMacStart: { project, task, provider in
                             guard !model.busy && !model.pending && !model.remoteBusy else { throw AgentError.message("Дождитесь завершения текущего запроса") }
-                            model.draft = "Запусти рабочую сессию на моём Mac через MAC_RUN_CLAUDE. Проект: \(project). Задача: \(task)"
+                            model.draft = "Запусти рабочую сессию на моём Mac через MAC_RUN_CLAUDE. Исполнитель: \(provider). Передай provider=\(provider) в MAC_RUN_CLAUDE; не заменяй исполнителя. Проект: \(project). Задача: \(task)"
                             guard model.send(server: server) else { throw AgentError.message(model.error ?? "Не удалось отправить запрос") }
                         }) } label: { Label("Панель команды", systemImage: "rectangle.grid.2x2") }
                         NavigationLink { ActionsView { choose($0); menu = false } } label: { Label("Все действия", systemImage: "square.grid.2x2") }

@@ -70,3 +70,7 @@ GET/POST `/api/native/conversations` and GET `/api/native/conversations/:id?befo
 The iPhone restores the selected dialog and polls history while foregrounded. Pending request recovery stores the dialog ID and original server and only polls, never re-submits the action. Server/credential changes invalidate asynchronous display writes. Connection settings are disabled during pending work. No separate cross-device account is required: pair each device to the same assistant owner.
 
 The native Mac section accepts a project and task, then submits an ordinary explicit user request through the existing lead and permission/approval pipeline. The bridge acknowledges local acceptance, not execution completion. Result and approval are shown in chat; completed execution enters the existing Mac action journal. This does not bypass `MAC_RUN_CLAUDE` permissions or guarantee that an offline Mac can run a session.
+
+### Mac executor selection (0.1.4)
+
+Mac session form offers Claude Code and Codex. The chosen provider is explicitly passed through the native chat request and MAC_RUN_CLAUDE payload, appears in the action history, and selects the actual daemon executable. Omitted provider retains Claude compatibility. Codex does not silently fall back to Claude. See `agent/mac-daemon/README.md` for CLI requirements and mode mapping; native launch still uses the existing lead/approval pipeline.

@@ -38,6 +38,7 @@ export type PermissionMode =
 
 export interface RunMsg {
   type: "run";
+  provider?: "claude" | "codex";
   id: string;
   project: string;
   prompt: string;
@@ -130,6 +131,7 @@ export function parseBridgeMsg(raw: unknown): ParsedMsg {
     case "cancel":
       // Без id отменять нечего: id — единственное, чем прогон адресуется.
       return isNonEmptyString(m.id) ? { type: "cancel", id: m.id } : null;
+    case "run_codex":
     case "run": {
       // Без id отвечать некуда: мост сопоставляет ответ по id и на кадр без него
       // всё равно ничего не ждёт. Роняем молча.
@@ -146,7 +148,9 @@ export function parseBridgeMsg(raw: unknown): ParsedMsg {
           id: m.id,
           reason: `unknown mode: ${String(m.mode)} (expected ${RUN_MODES.join("|")})`,
         };
+      if (m.type === "run_codex" && m.mode === "bypass") return {type:"bad_run",id:m.id,reason:"codex_bypass_not_supported"};
       return {
+        ...(m.type === "run_codex" ? {provider: "codex" as const} : {}),
         type: "run",
         id: m.id,
         project: m.project,

@@ -114,3 +114,11 @@ launchctl unload ~/Library/LaunchAgents/com.dobropalm.mac-daemon.plist
 - `MAC_PROJECT_ROOTS` — единственный белый список путей. Всё, что вне корней, отклоняется без спавна.
 - Одновременно демон держит один WebSocket; при разрыве — kill активных детей (SIGINT,
   затем SIGKILL) и реконнект 1→2→5→10 секунд.
+
+## Codex sessions
+
+The app's Mac form selects Claude Code or Codex. The existing `MAC_RUN_CLAUDE` action accepts `provider: "claude" | "codex"` (default Claude for compatibility). Codex travels as `run_codex`; an old daemon cannot silently run Claude for this request. Update the daemon before enabling the new server/UI.
+
+Install/sign in to Codex locally (`codex login status`). `CODEX_BIN` optionally names its executable; otherwise it must be in the daemon PATH. Prompts use stdin and the same project allowlist, stream limits and cancellation handling. Codex uses `exec`: ask/plan → read-only, accept_edits/auto → workspace-write, approval policy never (headless), network access for workspace commands disabled. User config and execpolicy overrides are ignored for this controlled invocation. Authentication still belongs to the local Codex installation, not daemon environment credentials. Codex bypass is rejected; there is no fallback to Claude on failure.
+
+CLI reference: [non-interactive mode](https://learn.chatgpt.com/docs/non-interactive-mode). Verified against the locally installed CLI help and a control response with production argv/sanitized environment.

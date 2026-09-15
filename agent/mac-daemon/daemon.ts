@@ -12,6 +12,7 @@ import { bridgeSecretTransportError } from "./bridge-url.ts";
 import { cancelRun, killAll, type KillableChild } from "./kill.ts";
 import { parseBridgeMsg, toPermissionMode, type RunMsg } from "./protocol.ts";
 import { sanitizeChildEnv, resolveClaudeBin } from "./child-env.ts";
+import { codexCommand } from "./codex-command.ts";
 import { runAssistantOperation } from "./assistant.ts";
 import { createAuthGate } from "./auth-gate.ts";
 // Порт в подсказке при старте: раньше литерал 8787 — это HTTP-порт Mini App,
@@ -171,7 +172,7 @@ async function handleRun(ws: WebSocket, msg: RunMsg): Promise<void> {
   // почему `auto` не отдельный режим, живут в protocol.ts (SEC-audit LOW-1).
   const permissionMode = toPermissionMode(mode);
   console.log(
-    `[daemon] run id=${id} project=${project} mode=${mode} (CLAUDE_PERMISSION_MODE=${permissionMode})`,
+    `[daemon] run id=${id} project=${project} provider=${msg.provider ?? "claude"} mode=${mode} (CLAUDE_PERMISSION_MODE=${permissionMode})`,
   );
   let child: ReturnType<typeof Bun.spawn>;
   try {
@@ -179,7 +180,7 @@ async function handleRun(ws: WebSocket, msg: RunMsg): Promise<void> {
       // Re-audit C1: pass the REAL `--permission-mode` flag. Previously the mode
       // was only set via the CLAUDE_PERMISSION_MODE env var, which the Claude CLI
       // ignores — so the operator-selected mode (plan/ask/…) was never enforced.
-      cmd: [CLAUDE_BIN, "--print", "--permission-mode", permissionMode],
+      cmd: msg.provider === "codex" ? codexCommand(mode, process.env) : [CLAUDE_BIN, "--print", "--permission-mode", permissionMode],
       cwd: allowedProject,
       // SEC-audit: the spawned `claude` must not inherit daemon credentials.
       // Authentication belongs to the local Claude installation/keychain; only

@@ -219,6 +219,7 @@ export interface WriteWikiPayload {
 }
 
 export interface MacRunClaudePayload {
+  provider?: "claude" | "codex";
   /** Absolute path to project on the Mac (must be under MAC_PROJECT_ROOTS). */
   project: string;
   /** Prompt to feed into the `claude` CLI on stdin. */

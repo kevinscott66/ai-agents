@@ -596,7 +596,7 @@ export const TOOLS: Anthropic.Tool[] = [
   {
     name: "MAC_RUN_CLAUDE",
     description:
-      "Stage A: запустить Claude Code CLI на личном MacBook оператора в указанном проекте. Mac-демон спавнит `claude` с заданным prompt'ом и режимом разрешений. Только orchestrator может вызывать; пользователь должен быть в whitelist MAC_USER_IDS. Начинай с plan, если не уверен: это единственный режим, который ничего не исполняет.",
+      "Запустить Claude Code или Codex CLI на личном Mac оператора. provider выбирается строго по запросу пользователя; не заменяй Codex на Claude при ошибке. Для Codex ask/plan = read-only, accept_edits/auto = workspace-write, без интерактивных запросов разрешений; bypass не поддерживается. Только orchestrator может вызывать; пользователь должен быть в whitelist MAC_USER_IDS. Начинай с plan, если не уверен: это единственный режим, который ничего не исполняет.",
     input_schema: {
       type: "object",
       properties: {
@@ -605,7 +605,8 @@ export const TOOLS: Anthropic.Tool[] = [
           description:
             "Абсолютный путь к рабочей папке на Mac. Демон пускает только пути внутри разрешённых корней оператора — это не весь диск: `/`, `/tmp` и домашний каталог целиком отклоняются, это самая частая причина отказа тула. Корень — папка с проектами оператора, обычно вида `/Users/<имя>/programs/...`. Точного списка ты не знаешь заранее: если промахнулся, ошибка `project_not_allowed` вернёт разрешённые корни — возьми путь оттуда и повтори, а не перебирай соседние каталоги наугад. Несуществующую папку под разрешённым корнем демон создаст сам.",
         },
-        prompt: { type: "string", description: "Промпт для Claude CLI." },
+        provider: {type:"string",enum:["claude","codex"],description:"Исполнитель на Mac. По умолчанию claude; для Codex обязательно codex."},
+        prompt: { type: "string", description: "Промпт для выбранного CLI." },
         mode: {
           type: "string",
           enum: ["ask", "accept_edits", "plan", "auto", "bypass"],

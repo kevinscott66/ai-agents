@@ -94,6 +94,7 @@ export interface MacRunResult {
 }
 
 export interface MacRunRequest {
+  provider?: "claude" | "codex";
   project: string;
   prompt: string;
   mode: "ask" | "accept_edits" | "plan" | "auto" | "bypass";
@@ -456,7 +457,7 @@ function sendMacRequest(req: MacRunRequest | { operation: "calendar_today" | "op
           JSON.stringify("operation" in req ? {
             type: "assistant", id, operation: req.operation,
           } : {
-            type: "run",
+            type: req.provider === "codex" ? "run_codex" : "run",
             id,
             project: req.project,
             prompt: req.prompt,
