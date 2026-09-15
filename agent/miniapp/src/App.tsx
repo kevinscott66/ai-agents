@@ -42,6 +42,7 @@ export default function App() {
   const [conn, setConn] = useState<ConnState>("closed");
   useEffect(() => {
     if (nativePanel) {
+      void (window as any).webkit?.messageHandlers?.panel?.postMessage({ ready: true }).catch(() => {});
       const key = location.hash.slice(1);
       if (TABS.some(t => t.key === key)) setTab(key as TabKey);
     }

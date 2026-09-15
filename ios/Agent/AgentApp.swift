@@ -108,7 +108,8 @@ struct AgentGlass: ViewModifier {
 @main struct AgentApp: App {
     var body: some Scene { WindowGroup {
         #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("--panel-preview") {
+        if ProcessInfo.processInfo.arguments.contains("--panel-sheet-preview") { PanelSheetPreview() }
+        else if ProcessInfo.processInfo.arguments.contains("--panel-preview") {
             NavigationStack { PanelView(server: "https://agent.invalid") }.tint(.primary)
         } else { RootView().tint(.primary) }
         #else
@@ -300,3 +301,18 @@ struct SettingsView: View {
             .interactiveDismissDisabled(pairing)
     }
 }
+
+#if DEBUG
+private struct PanelSheetPreview: View {
+    @State private var open = true
+    @State private var panel = true
+    var body: some View {
+        Color.clear.sheet(isPresented: $open) {
+            NavigationStack {
+                List { NavigationLink("Панель команды", isActive: $panel) { PanelView(server: "https://agent.invalid") } }
+                    .navigationTitle("Агент")
+            }.presentationDetents([.large]).presentationDragIndicator(.visible)
+        }
+    }
+}
+#endif

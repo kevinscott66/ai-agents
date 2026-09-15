@@ -13,3 +13,9 @@ Full backend suite: 7244 passed, 39 skipped, 0 failed, 21329 assertions across 8
 Both bounded reviewers passed after confirmed P2 fixes: preserve known mutation results after UI timeout; native resource timeout 15s below JS20s; ambiguous mutation outcomes require checking state before retry; replace fabricated SSE payloads with explicit refresh callbacks. Native AbortSignal does not immediately cancel Swift requests; resource timeout and view teardown bound them.
 
 WebKit bridge uses [Apple WKScriptMessageHandlerWithReply](https://developer.apple.com/documentation/webkit/wkscriptmessagehandlerwithreply). No production credential was issued or copied for simulator validation.
+
+## Blank-sheet report — 0.1.1 (2)
+
+Physical-device screenshot showed an empty navigation sheet, before panel HTML or API errors. Exact device cause was not reproduced. Fixes explicitly expand the representable, defer initial navigation until insertion, normalize the bundled asset root/path consistently, and add native loading/readiness, 12-second startup timeout, navigation/process errors and manual retry. Teardown suppresses stale coordinator callbacks. No credential or API authorization changes.
+
+Checked the actual sheet → NavigationLink context using a DEBUG-only harness: local HTML, lazy Dashboard and native bridge loaded in the simulator. Typecheck, 14 entry/navigation tests, existing Swift fixtures and unsigned device build passed. This is simulator verification; physical-device confirmation remains pending.

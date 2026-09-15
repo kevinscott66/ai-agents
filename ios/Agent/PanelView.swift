@@ -2,16 +2,35 @@ import SwiftUI
 import WebKit
 import UniformTypeIdentifiers
 
+@MainActor final class PanelLoadState: ObservableObject {
+    @Published var loading = true
+    @Published var error: String?
+}
 struct PanelView: View {
     let server: String
+    @StateObject private var state = PanelLoadState()
+    @State private var generation = UUID()
     var body: some View {
-        PanelWebView(server: server).navigationTitle("Панель команды")
-            .navigationBarTitleDisplayMode(.inline).background(Color(uiColor: .systemBackground))
+        ZStack {
+            PanelWebView(server: server, state: state).id(generation)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if state.loading { ProgressView("Открываем панель…").padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20)) }
+            if let error = state.error {
+                ContentUnavailableView {
+                    Label("Панель не открылась", systemImage: "exclamationmark.arrow.triangle.2.circlepath")
+                } description: { Text(error) } actions: {
+                    Button("Попробовать снова") { state.error = nil; state.loading = true; generation = UUID() }
+                }.background(Color(uiColor: .systemBackground))
+            }
+        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+            .navigationTitle("Панель команды").navigationBarTitleDisplayMode(.inline)
+            .background(Color(uiColor: .systemBackground))
     }
 }
 struct PanelWebView: UIViewRepresentable {
     let server: String
-    func makeCoordinator() -> Coordinator { Coordinator(server: server) }
+    @ObservedObject var state: PanelLoadState
+    func makeCoordinator() -> Coordinator { Coordinator(server: server, state: state) }
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
@@ -25,24 +44,52 @@ struct PanelWebView: UIViewRepresentable {
         if let tab = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--panel-tab=") })?.split(separator: "=").last,
            ["dashboard", "tasks", "approvals", "agents", "perms", "logs", "wiki", "settings", "mac"].contains(String(tab)) { entry += "#" + tab }
         #endif
-        view.load(URLRequest(url: URL(string: entry)!))
+        context.coordinator.entry = URL(string: entry)!
+        // Begin after SwiftUI has inserted the web view into its navigation sheet.
+        DispatchQueue.main.async { context.coordinator.load(view) }
         return view
     }
     func updateUIView(_ view: WKWebView, context: Context) {}
     static func dismantleUIView(_ view: WKWebView, coordinator: Coordinator) {
-        view.stopLoading(); view.configuration.userContentController.removeScriptMessageHandler(forName: "panel", contentWorld: .page)
+        coordinator.cancel(); view.stopLoading(); view.configuration.userContentController.removeScriptMessageHandler(forName: "panel", contentWorld: .page)
         coordinator.cancel()
     }
     final class Coordinator: NSObject, WKURLSchemeHandler, WKScriptMessageHandlerWithReply, WKNavigationDelegate, WKUIDelegate {
         let server: String
         private var jobs: [UUID: Task<Void, Never>] = [:]
-        init(server: String) { self.server = server }
-        func cancel() { for task in jobs.values { task.cancel() }; jobs.removeAll() }
+        let state: PanelLoadState
+        var entry = URL(string: "agent-panel://bundle/index.html")!
+        private var watchdog: Task<Void, Never>?
+        private var closed = false
+        init(server: String, state: PanelLoadState) { self.server = server; self.state = state }
+        func load(_ view: WKWebView) {
+            guard !closed else { return }
+            view.load(URLRequest(url: entry))
+            watchdog = Task { @MainActor [weak self, weak view] in
+                try? await Task.sleep(for: .seconds(12))
+                guard !Task.isCancelled, let self, !self.closed, self.state.loading else { return }
+                view?.stopLoading()
+                self.fail("Встроенная страница не запустилась. Повторите открытие панели. Если ошибка повторяется, установите последнюю сборку.")
+            }
+        }
+        private func fail(_ text: String) { guard !closed else { return }; state.loading = false; state.error = text; watchdog?.cancel() }
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { fail("Ошибка загрузки: " + error.localizedDescription) }
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { fail("Ошибка страницы: " + error.localizedDescription) }
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { fail("iOS остановила панель. Нажмите «Попробовать снова».") }
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            webView.evaluateJavaScript("document.getElementById('root')?.childElementCount > 0") { [weak self] value, error in
+                guard let self, !self.closed else { return }
+                if value as? Bool == true { self.state.loading = false; self.watchdog?.cancel() }
+                // React's lazy imports may finish later; readiness also arrives via bridge.
+            }
+        }
+        func cancel() { closed = true; watchdog?.cancel(); for task in jobs.values { task.cancel() }; jobs.removeAll() }
         func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
             guard let url = task.request.url, url.scheme == "agent-panel", url.host == "bundle",
-                  let root = Bundle.main.resourceURL?.appendingPathComponent("Panel", isDirectory: true),
+                  let bundle = Bundle.main.resourceURL,
                   !url.path.contains("..") else { task.didFailWithError(URLError(.badURL)); return }
-            let file = root.appendingPathComponent(url.path).standardizedFileURL
+            let root = bundle.appendingPathComponent("Panel", isDirectory: true).standardizedFileURL
+            let file = root.appendingPathComponent(String(url.path.dropFirst())).standardizedFileURL
             guard file.path.hasPrefix(root.path + "/"), ["html", "js", "css", "svg", "png", "woff2"].contains(file.pathExtension),
                   let data = try? Data(contentsOf: file) else { task.didFailWithError(URLError(.fileDoesNotExist)); return }
             let mime = file.pathExtension == "js" ? "text/javascript" : UTType(filenameExtension: file.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
@@ -57,6 +104,10 @@ struct PanelWebView: UIViewRepresentable {
             if action.navigationType == .linkActivated, let url, url.scheme == "https" { UIApplication.shared.open(url) }
         }
         func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage, replyHandler: @escaping (Any?, String?) -> Void) {
+            if !closed, message.frameInfo.isMainFrame, message.frameInfo.request.url?.scheme == "agent-panel", message.frameInfo.request.url?.host == "bundle",
+               let input = message.body as? [String: Any], input["ready"] as? Bool == true {
+                state.loading = false; watchdog?.cancel(); replyHandler(["ok": true], nil); return
+            }
             guard message.frameInfo.isMainFrame, message.frameInfo.request.url?.scheme == "agent-panel",
                   message.frameInfo.request.url?.host == "bundle", let input = message.body as? [String: Any],
                   let path = input["path"] as? String, let method = input["method"] as? String,
