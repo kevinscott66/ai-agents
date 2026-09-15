@@ -4,6 +4,7 @@ export interface MacSession {
   id: string;
   project: string;
   mode: string;
+  provider?: "claude" | "codex";
   status: "running" | "completed" | "failed";
   /** Мс от эпохи — ровно то, что лежит в agent_actions.created_at. */
   createdAt: number;
@@ -17,6 +18,7 @@ export interface MacSession {
 interface MacPayload {
   project?: string;
   mode?: string;
+  provider?: string;
   prompt?: string;
 }
 interface MacResult {
@@ -89,6 +91,7 @@ export function toMacSession(action: AgentAction): MacSession {
   return {
     id: action.id,
     project: redacted ? REDACTED_NOTE : payload.project || "проект не указан",
+    provider: redacted ? undefined : payload.provider === "codex" ? "codex" : "claude",
     mode: redacted ? "—" : payload.mode || "ask",
     status:
       action.status === "ok"

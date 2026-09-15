@@ -25,6 +25,7 @@ export type MacBridge = {
    */
   isMacOnline?: () => boolean;
   sendToMac: (req: {
+    provider?: "claude" | "codex";
     project: string;
     prompt: string;
     mode: "ask" | "accept_edits" | "plan" | "auto" | "bypass";
@@ -150,6 +151,7 @@ export function tailByCodePoints(s: string, limit: number): string {
 }
 
 export type MacHandlerContext = {
+  approvalId?: string;
   agentKey: string;
   chatId: number;
   telegram?: Telegram;
@@ -200,6 +202,8 @@ export async function handleMacRunClaude(
   ctx: MacHandlerContext,
 ): Promise<MacHandlerResult> {
   const p = payload;
+  if (p.provider !== undefined && p.provider !== "claude" && p.provider !== "codex") return {ok:false,error:"invalid_mac_provider"};
+  if (p.provider === "codex" && p.mode === "bypass") return {ok:false,error:"codex_bypass_not_supported"};
   const bridge = ctx.macBridge ?? {
     isMacConnected: realIsMacConnected,
     isMacOnline: realIsMacOnline,
@@ -300,6 +304,7 @@ export async function handleMacRunClaude(
       project: p.project,
       prompt: p.prompt,
       mode: p.mode,
+      ...(p.provider ? {provider: p.provider} : {}),
       onProgress: tg ? onProgress : undefined,
     });
   } catch (e) {
@@ -363,6 +368,9 @@ export async function handleMacRunClaude(
     ok: true,
     result: {
       project: p.project,
+      provider: p.provider ?? "claude",
+      ...(ctx.approvalId ? {approvalId:ctx.approvalId} : {}),
+      output: tailByCodePoints(res.stdout || "", TELEGRAM_MESSAGE_TAIL_LIMIT),
       mode: p.mode,
       code: res.code ?? 0,
       stdoutLen: res.stdoutLen ?? res.stdout.length,

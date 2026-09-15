@@ -7,7 +7,7 @@
  * handler is a pure, side-effect-free-to-extract block. Behaviour is unchanged
  * from the inline version (T-109 Whisper transcription flow).
  */
-import { Telegraf } from "telegraf";
+import { Telegraf, type Context } from "telegraf";
 import type { CharacterDef } from "../characters/index.ts";
 import type { RunningBot } from "../lib/types.ts";
 import { isAllowlisted } from "../lib/allowlist.ts";
@@ -92,6 +92,7 @@ export function registerVoiceHandler(
   def: CharacterDef,
   running: RunningBot,
   allowed: string[],
+  onTranscript?: (ctx: Context, voice: { text: string }) => Promise<void>,
 ): void {
   // T-109: Handle voice messages for transcription
   bot.on("voice", async (ctx) => {
@@ -247,17 +248,17 @@ export function registerVoiceHandler(
           transport: "bot_api",
         });
 
-        // Reply to confirm transcription (simple feedback)
-        await ctx.reply(`🎤 Распознано: "${transcribedText.slice(0, 100)}${transcribedText.length > 100 ? "..." : ""}"`);
-
-        // Расшифровка попадает в историю чата — и на следующем ходу агент её
-        // видит. Но сама по себе она ходом НЕ становится: `bot.on("message")`
-        // этого апдейта не видит вовсе — голосовой хендлер зарегистрирован
-        // раньше и терминален (`next` он не зовёт), см. замер в комментарии к
-        // дедупу выше. Голосом команду не отдать — только продиктовать текст,
-        // который учтётся следующим сообщением. Здесь стояло сначала «will be
-        // processed by the normal message handler», потом «message-handler
-        // отрабатывает тот же апдейт раньше» — неверны оба.
+        if (onTranscript) {
+          // Keep the real sender/chat/message identity; never synthesize a bot update.
+          // The continuation rechecks allowlist and stop state, without charging twice.
+          try {
+            await onTranscript(ctx, { text: transcribedText });
+          } catch {
+            await ctx.reply("Агент: речь распознана, но выполнить запрос не удалось. Проверь статус задачи перед повтором.");
+          }
+        } else {
+          await ctx.reply(`🎤 Распознано: "${transcribedText.slice(0, 100)}${transcribedText.length > 100 ? "..." : ""}"`);
+        }
       } catch (error) {
         // `log.error` вторым аргументом ждёт LogData, а не Error: голый Error
         // сериализуется в `{}` и причина теряется — ровно то, из-за чего

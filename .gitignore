@@ -70,3 +70,11 @@ agent/backups/
 # файл и оставлял грязное рабочее дерево, а страница-заглушка висела в
 # Wiki-вью Mini App у владельца.
 agent/memory/_team/projects/wiki-view-test-page.md
+
+/agent/mac-daemon/bin/
+
+/ios/build/
+/ios/**/xcuserdata/
+
+# Reproducible bundled iPhone panel
+ios/Agent/Panel/

@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react";
+import { useNativeRefresh } from "../lib/native-refresh";
+import { nativePanel } from "../lib/native";
+import { useEffect, useRef, useState } from "react";
 import { api, formatApiError } from "../lib/api";
 import type { AgentAction } from "../lib/types";
 import { subscribe as sseSubscribe } from "../lib/sse";
@@ -23,6 +25,23 @@ interface MacOutputEvent {
 }
 
 export default function Mac() {
+  const [provider, setProvider] = useState<"claude" | "codex">("claude");
+  const [project, setProject] = useState("");
+  const [prompt, setPrompt] = useState("");
+  const [launchStatus, setLaunchStatus] = useState("");
+  const [launchBusy, setLaunchBusy] = useState(false);
+  const launching = useRef(false);
+  async function startSession(event: React.FormEvent) {
+    event.preventDefault();
+    if (launching.current) return;
+    launching.current = true; setLaunchBusy(true); setLaunchStatus("");
+    try {
+      const result = await (window as any).webkit.messageHandlers.panel.postMessage({macStart:{provider,project:project.trim(),prompt:prompt.trim()}});
+      if (result?.ok !== true) throw new Error("Не удалось передать запрос");
+      setPrompt(""); setLaunchStatus("Запрос добавлен в чат. Там появятся ответ и необходимое подтверждение.");
+    } catch (error) { setLaunchStatus(formatApiError(error)); }
+    finally { launching.current = false; setLaunchBusy(false); }
+  }
   const [sessions, setSessions] = useState<MacSession[]>([]);
   const [history, setHistory] = useState<AgentAction[]>([]);
   const [loading, setLoading] = useState(true);
@@ -72,6 +91,8 @@ export default function Mac() {
 
     return unsubscribe;
   }, []);
+
+  useNativeRefresh(loadMacHistory);
 
   async function loadMacHistory() {
     setError(null);
@@ -203,12 +224,19 @@ export default function Mac() {
   return (
     <div className="page">
       <div className="page-header">
-        <h2>Mac Control Sessions</h2>
+        <h2>Сессии на Mac</h2>
         <p style={{ color: "#666", margin: 0 }}>
-          История запусков Claude Code на Mac
+          История запусков Claude Code и Codex на Mac
         </p>
       </div>
 
+      {nativePanel && <form onSubmit={startSession} className="mac-launch-form">
+        <label>Исполнитель<select value={provider} onChange={e => setProvider(e.currentTarget.value as "claude" | "codex")} disabled={launchBusy}><option value="claude">Claude Code</option><option value="codex">Codex</option></select></label>
+        <label>Проект на Mac<input value={project} onChange={e => setProject(e.currentTarget.value)} maxLength={500} required placeholder="Папка проекта или его название" /></label>
+        <label>Задача<textarea value={prompt} onChange={e => setPrompt(e.currentTarget.value)} maxLength={4000} required rows={4} placeholder="Что нужно сделать в этой сессии?" /></label>
+        <button type="submit" disabled={launchBusy || !project.trim() || !prompt.trim()}>{launchBusy ? "Передаём задачу…" : "Запустить сессию"}</button>
+        {launchStatus && <p role="status">{launchStatus}</p>}
+      </form>}
       {/*
         Аварийный стоп стоит здесь, а не в списке сессий, и не спрашивает,
         сколько их сейчас активно.
@@ -286,7 +314,7 @@ export default function Mac() {
                       {session.project}
                     </div>
                     <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>
-                      Mode: {session.mode} • {formatTimestamp(session.createdAt)}
+                      {session.provider === "codex" ? "Codex" : session.provider === "claude" ? "Claude Code" : "—"} • {session.mode} • {formatTimestamp(session.createdAt)}
                     </div>
                     <div style={{ fontSize: 12, color: "#888" }}>
                       {ellipsize(session.prompt, 100)}
@@ -373,7 +401,7 @@ export default function Mac() {
                       {session.project}
                     </div>
                     <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>
-                      Mode: {session.mode} • {formatTimestamp(session.createdAt)}
+                      {session.provider === "codex" ? "Codex" : session.provider === "claude" ? "Claude Code" : "—"} • {session.mode} • {formatTimestamp(session.createdAt)}
                     </div>
                     <div style={{ fontSize: 12, color: "#888" }}>
                       {ellipsize(session.prompt, 150)}

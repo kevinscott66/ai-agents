@@ -105,6 +105,9 @@ export function findHandoffTargets(
 }
 
 export interface HandoffDeps {
+  nativeHistory?: import("./db.ts").ChatRow[];
+  /** Per-turn native reply transport; never a global or model-controlled destination. */
+  nativeReply?: (agentKey: string, text: string) => Promise<{ message_id: number; date: number }>;
   anthropic: Anthropic | null;
   model: string;
   historyLimit: number;
@@ -356,7 +359,7 @@ export async function respondAs(
   try {
     await target.bot.telegram.sendChatAction(chatId, "typing").catch(() => {});
 
-    const recent = getRecentMessages(chatId, historyLimit);
+    const recent = deps.nativeHistory ? deps.nativeHistory.slice(-historyLimit) : getRecentMessages(chatId, historyLimit);
     const teamIdx = wikiIndex("_team");
     const teamLog = tailLines(wikiLog("_team"), 30);
     const privIdx = wikiIndex(target.def.key);
@@ -447,7 +450,7 @@ export async function respondAs(
       // T-fmt: delegated agents now also render Markdown → Telegram HTML (was raw
       // text — only the orchestrator path had formatting). Plain-text fallback on
       // a parse error keeps delivery safe.
-      (t) =>
+      (t) => deps.nativeReply ? deps.nativeReply(target.def.key, t) :
         sendWithHtml(
           (text, pm) =>
             target.bot.telegram.sendMessage(
@@ -519,7 +522,7 @@ export async function respondAs(
       for (const t of next) {
         const newVisited = new Set(visited);
         newVisited.add(t.def.key);
-        void respondAs(
+        const cascade = respondAs(
           {
             target: t,
             chatId,
@@ -546,6 +549,8 @@ export async function respondAs(
           },
           deps,
         );
+        if (deps.nativeReply) await cascade;
+        else void cascade;
       }
       if (next.length) {
         log.info(

@@ -513,10 +513,11 @@ textarea {
 }
 
 .agent-status-card {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  padding: 8px 12px;
+  gap: 6px 8px;
+  padding: 12px;
   background: var(--secondary-bg);
   border-radius: 8px;
   border: 1px solid var(--border);
@@ -525,9 +526,12 @@ textarea {
 }
 
 .agent-provider {
+  grid-column: 1;
+  grid-row: 2;
+  overflow-wrap: anywhere;
   color: var(--text-muted, #777);
   font-size: 11px;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .agent-status-card:hover {
@@ -535,6 +539,7 @@ textarea {
 }
 
 .agent-indicator {
+  grid-column: 1 / -1;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -552,12 +557,13 @@ textarea {
 .agent-name {
   font-size: 12px;
   font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .agent-status {
+  grid-column: 2;
+  grid-row: 2;
   font-size: 10px;
   padding: 2px 6px;
   border-radius: 4px;
@@ -742,3 +748,10 @@ button:focus:not(:focus-visible) { outline: none; }
     grid-row: 2;
   }
 }
+
+.mac-launch-form { display: grid; gap: 12px; padding: 16px; margin-bottom: 20px; background: var(--secondary-bg); border-radius: 16px; }
+.mac-launch-form label { display: grid; gap: 6px; font-size: 14px; }
+.mac-launch-form input, .mac-launch-form textarea { width: 100%; box-sizing: border-box; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 12px; font: inherit; }
+.mac-launch-form button { padding: 12px; border-radius: 10px; background: var(--text); color: var(--bg); border: 0; font: inherit; }
+.mac-launch-form button:disabled { opacity: .45; }
+.mac-launch-form p { font-size: 13px; margin: 0; }

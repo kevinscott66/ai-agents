@@ -1,3 +1,4 @@
+import { useNativeRefresh } from "../lib/native-refresh";
 import { useEffect, useState } from "react";
 import { api, formatApiError, type DashboardPayload } from "../lib/api";
 import type { AgentInfo, AutonomyMode, Permission, AgentAction } from "../lib/types";
@@ -164,6 +165,8 @@ export default function Agents() {
   const coalescer = useCoalescer();
   /** Права грузим по клику; выигрывает последний клик, а не последний ответ. */
   const beginPerms = useLatestRun();
+
+  useNativeRefresh(refresh);
 
   async function refresh() {
     try {

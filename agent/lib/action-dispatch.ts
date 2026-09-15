@@ -11,6 +11,7 @@
  * Task-actions идут напрямую в lib/tasks.ts, минуя lib/actions.ts::doXxx
  * (чтобы аудит писался ровно один раз — здесь).
  */
+import { nativeTurnContext, persistNativeApprovalLink } from "./native-context.ts";
 import { getErrorMessage } from "./errors.ts";
 import type { Telegram } from "telegraf";
 import {
@@ -1757,6 +1758,7 @@ export async function gateOrDispatch<T extends ActionType>(
           actionType,
           payload,
         }, database);
+        persistNativeApprovalLink(database,approvalId,ctx.chatId);
         // Аудит 2026-09-10: строка версии писалась ДО заявки и ссылки на неё
         // не получала — сопоставить их потом можно было только по содержимому
         // (докблок `closeAgentPromptProposals`). Порядок внутри одной
@@ -1830,6 +1832,11 @@ export async function gateOrDispatch<T extends ActionType>(
         actionId: txResult.action.id,
         approvalId: txResult.approvalId,
       };
+    }
+    const nativeContext = nativeTurnContext.getStore();
+    if (nativeContext && nativeContext.userId === String(approval.chat_id)) {
+      try { nativeContext.linkApproval(approval.id); }
+      catch { log.error('[native] deferred approval link repair'); }
     }
     emitApprovalCreated(approval);
     return {

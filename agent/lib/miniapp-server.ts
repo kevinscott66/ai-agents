@@ -17,6 +17,7 @@
  * После approve approval-action НЕ запускается здесь: текущий
  * action-dispatch.ts хука "выполнить после approve" не имеет (см. отчёт C13a).
  */
+import { nativeApi } from "./native-api.ts";
 import { getErrorMessage } from "./errors.ts";
 import { HOUR_MS } from "./time-constants.ts";
 import { timingSafeEqual } from "node:crypto";
@@ -707,6 +708,11 @@ export function startMiniappServer(
   ): Promise<Response> {
     const path = url.pathname;
     const method = req.method.toUpperCase();
+
+    if (path.startsWith("/api/native/")) {
+      const limited = anonLimit(req, peer);
+      return limited ?? await nativeApi(req);
+    }
 
     if (method === "OPTIONS") {
       return new Response(null, { status: 204, headers: corsHeaders() });

@@ -38,6 +38,7 @@ export type PermissionMode =
 
 export interface RunMsg {
   type: "run";
+  provider?: "claude" | "codex";
   id: string;
   project: string;
   prompt: string;
@@ -49,6 +50,12 @@ export interface PingMsg {
 }
 export interface AuthOkMsg {
   type: "auth_ok";
+  proof?: string;
+}
+export interface AuthChallengeMsg {
+  type: "auth_challenge";
+  serverNonce: string;
+  proof: string;
 }
 export interface AuthFailMsg {
   type: "auth_fail";
@@ -68,10 +75,18 @@ export interface CancelMsg {
   id: string;
 }
 
+export interface AssistantMsg {
+  type: "assistant";
+  id: string;
+  operation: "calendar_today" | "open_workspace";
+}
+
 export type BridgeMsg =
+  | AssistantMsg
   | RunMsg
   | PingMsg
   | AuthOkMsg
+  | AuthChallengeMsg
   | AuthFailMsg
   | StopMsg
   | CancelMsg;
@@ -105,10 +120,17 @@ export function parseBridgeMsg(raw: unknown): ParsedMsg {
   if (typeof obj !== "object" || obj === null) return null;
   const m = obj as Record<string, unknown>;
   switch (m.type) {
+    case "assistant":
+      if (!isNonEmptyString(m.id) || m.id.length > 100) return null;
+      if (m.operation !== "calendar_today" && m.operation !== "open_workspace") return null;
+      return { type: "assistant", id: m.id, operation: m.operation };
     case "ping":
       return { type: "ping" };
+    case "auth_challenge":
+      return typeof m.serverNonce === "string" && typeof m.proof === "string"
+        ? {type: "auth_challenge", serverNonce: m.serverNonce, proof: m.proof} : null;
     case "auth_ok":
-      return { type: "auth_ok" };
+      return { type: "auth_ok", ...(typeof m.proof === "string" ? {proof: m.proof} : {}) };
     case "auth_fail":
       return {
         type: "auth_fail",
@@ -119,6 +141,7 @@ export function parseBridgeMsg(raw: unknown): ParsedMsg {
     case "cancel":
       // Без id отменять нечего: id — единственное, чем прогон адресуется.
       return isNonEmptyString(m.id) ? { type: "cancel", id: m.id } : null;
+    case "run_codex":
     case "run": {
       // Без id отвечать некуда: мост сопоставляет ответ по id и на кадр без него
       // всё равно ничего не ждёт. Роняем молча.
@@ -135,7 +158,9 @@ export function parseBridgeMsg(raw: unknown): ParsedMsg {
           id: m.id,
           reason: `unknown mode: ${String(m.mode)} (expected ${RUN_MODES.join("|")})`,
         };
+      if (m.type === "run_codex" && m.mode === "bypass") return {type:"bad_run",id:m.id,reason:"codex_bypass_not_supported"};
       return {
+        ...(m.type === "run_codex" ? {provider: "codex" as const} : {}),
         type: "run",
         id: m.id,
         project: m.project,

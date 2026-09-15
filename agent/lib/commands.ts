@@ -1,3 +1,6 @@
+import { nativeTurnContext, nativeApprovalLinks } from "./native-context.ts";
+import { nativeAccess } from "./native-access.ts";
+import { scrubSecretString } from "./log.ts";
 /**
  * Чистые функции-обработчики команд (этап 3, C4).
  *
@@ -174,7 +177,39 @@ function failBeforeDispatch(approval: Approval, msg: string): never {
   throw new Error(msg);
 }
 
-export async function executeApproved(
+export async function executeApproved(approval: Approval, deps: ApprovalExecDeps = {}): Promise<unknown> {
+  let result: unknown;
+  const linked = process.env.NATIVE_APP_ENABLED === 'true' ? nativeApprovalLinks(db,String(approval.chat_id)).find(row => row.approval_id === approval.id) : undefined;
+  const store = linked ? nativeAccess() : undefined;
+  if (linked && store) {
+    try { store.linkApproval(approval.id,linked.turn_id,String(approval.chat_id)); }
+    catch { log.error('[native] deferred approval link repair'); }
+  }
+  try {
+    result = linked && store ? await nativeTurnContext.run({userId:String(approval.chat_id),turnId:linked.turn_id,conversationId:linked.conversation_id,linkApproval:id=>store.linkApproval(id,linked.turn_id,String(approval.chat_id))},()=>executeApprovedAction(approval,deps)) : await executeApprovedAction(approval,deps);
+  }
+  catch (error) {
+    if (process.env.NATIVE_APP_ENABLED === 'true') {
+      try {
+        if (linked) db.query("UPDATE native_approval_links SET execution='failed',output=? WHERE approval_id=? AND execution IS NULL").run('Не удалось завершить действие. Проверьте его состояние перед повтором.',approval.id);
+        nativeAccess().completeApproval(approval.id,String(approval.chat_id),false,'Не удалось завершить действие. Проверьте его состояние перед повтором.');
+      }
+      catch { log.error('[native] could not persist approval failure'); }
+    }
+    throw error;
+  }
+  if (process.env.NATIVE_APP_ENABLED === 'true') {
+    const output = result && typeof result === 'object' && 'output' in result && typeof result.output === 'string' ? result.output : 'Действие выполнено.';
+    try {
+      const safeOutput = scrubSecretString(output).slice(0,8000);
+      if (linked) db.query("UPDATE native_approval_links SET execution='completed',output=? WHERE approval_id=? AND execution IS NULL").run(safeOutput,approval.id);
+      nativeAccess().completeApproval(approval.id,String(approval.chat_id),true,safeOutput);
+    }
+    catch { log.error('[native] could not persist approval result'); }
+  }
+  return result;
+}
+async function executeApprovedAction(
   approval: Approval,
   deps: ApprovalExecDeps = {},
 ): Promise<unknown> {

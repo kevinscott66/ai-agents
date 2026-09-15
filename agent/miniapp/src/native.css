@@ -1,0 +1,36 @@
+/* Shared panel content, tailored to the native companion's monochrome surfaces. */
+html:has(.native-panel) {
+  --bg: #fff; --text: #141414; --hint: #707070; --link: #242424;
+  --button: #171717; --button-text: #fff; --secondary-bg: #f4f4f5;
+  --border: rgba(0,0,0,.09); color-scheme: light;
+}
+.native-panel { font-size: 16px; line-height: 1.5; }
+.native-panel .header { padding: 24px 22px 8px; border: 0; }
+.native-panel .header h1 { font-size: 28px; letter-spacing: -.7px; font-weight: 650; }
+.native-panel .header-right { display: none; }
+.native-panel .content { padding: 12px 18px 100px; }
+.native-panel .tabs {
+  left: 12px; right: 12px; bottom: 12px; border: 1px solid var(--border);
+  border-radius: 24px; background: color-mix(in srgb, var(--bg) 85%, transparent);
+  backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+  padding: 5px; box-shadow: 0 3px 18px #0000000a;
+}
+.native-panel button, .native-panel select, .native-panel input { min-height: 44px; font-size: 16px; }
+.native-panel button { border-radius: 14px; }
+.native-panel input, .native-panel select, .native-panel textarea { border-radius: 12px; }
+.native-panel .card { border-radius: 20px; box-shadow: none; padding: 18px; }
+.native-panel table { font-size: 14px; }
+.native-panel pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.native-panel h2 { letter-spacing: -.4px; }
+@media (prefers-color-scheme: dark) {
+  html:has(.native-panel) { --bg: #000; --text: #f5f5f5; --hint: #a0a0a0; --link: #eee;
+    --button: #f0f0f0; --button-text: #151515; --secondary-bg: #1c1c1e;
+    --border: rgba(255,255,255,.13); color-scheme: dark; }
+}
+@media (prefers-reduced-transparency: reduce) { .native-panel .tabs { background: var(--bg); backdrop-filter: none; } }
+@media (prefers-reduced-motion: reduce) { .native-panel *, .native-panel *::before { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+
+.native-panel .native-error { padding: 18px; background: var(--secondary-bg); border: 1px solid var(--border); border-radius: 20px; margin: 12px 0; }
+.native-panel .native-error p { color: var(--hint); font-size: 15px; margin: 8px 0 14px; }
+.native-panel .tabs .icon { display: flex; justify-content: center; padding: 2px 0; }
+.native-panel .tabs button { min-width: 66px; padding: 7px 9px; font-size: 11px; }

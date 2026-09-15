@@ -1,3 +1,4 @@
+import { nativePanel, panelFetch } from "./native";
 import { ellipsize } from "./text";
 import type {
   AgentInfo,
@@ -68,6 +69,12 @@ function serverErrorText(error: unknown): string {
 }
 
 export function formatApiError(error: unknown): string {
+  if (nativePanel && String((error as any)?.message ?? error).includes("Результат действия неизвестен")) {
+    return "Результат действия неизвестен. Обновите раздел и проверьте состояние перед повтором.";
+  }
+  if (nativePanel && String((error as any)?.message ?? error).includes("Подключите iPhone")) {
+    return "Подключите iPhone в настройках приложения и откройте панель снова.";
+  }
   // Аудит 2026-08-28: ветки ниже разбирают только `status` (у таймаута его
   // нет — ноль) и регексп сетевых сообщений, под который «Сервер не ответил»
   // не попадает. Поэтому собственный текст таймаута никуда не доходил: в
@@ -80,7 +87,7 @@ export function formatApiError(error: unknown): string {
   }
   const status = typeof (error as any)?.status === "number" ? (error as any).status : 0;
   if (status === 401) {
-    return "Telegram-сессия не передана. Откройте панель через Telegram Mini App.";
+    return nativePanel ? "Подключите iPhone заново в настройках приложения." : "Telegram-сессия не передана. Откройте панель через Telegram Mini App.";
   }
   if (status === 403) {
     return "У пользователя нет доступа к панели или прав администратора.";
@@ -159,7 +166,7 @@ export async function apiRequest<T>(
   let r: Response;
   let text: string;
   try {
-    r = await fetch(path, { ...init, headers, signal: ctl.signal });
+    r = await panelFetch(path, { ...init, headers, signal: ctl.signal });
     // Аудит 2026-08-28: чтение тела раньше стояло ЗА `finally`, то есть уже
     // без таймера и с отработавшим signal. А `fetch` завершается на
     // заголовках: тело, вставшее посреди потока, не обрывал никто, и промис

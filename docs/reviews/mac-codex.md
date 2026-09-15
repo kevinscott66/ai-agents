@@ -1,0 +1,6 @@
+# Mac Codex provider
+HIGH: new Mac executor. Required specialist/independent review under shared quality gates. One bounded reviewer checks changed protocol, spawn flags, provider propagation, compatibility and UI validation. Context diff + relevant tests only; local read-only, no credentials/live commands. Soft6k/max10k, stop on concrete findings or PASS. Same-family review. Existing owner allowlist/approval gates preserved; Codex bypass rejected. Old daemon ignores new run_codex frame rather than launching Claude.
+
+Review PASS: provider propagation, authenticated frame, fixed argv, sanitized environment, bypass rejection and UI validation. Reviewer ran4 tests/36assertions; no live operation. Owner ran installed Codex with production argv and sanitized env: exit0, exact MAC_CODEX_READY response, no tools requested. Backend/frontend typechecks and Release0.1.4(5) build PASS. Full suite and final wire regression recorded below on completion.
+
+Final validation: full suite7250PASS/39SKIP/0FAIL (21386 assertions); subsequent final wire/protocol suite55PASS/139assertions. Swift fixtures, simulator and unsigned Release builds PASS. Initial restricted integration run could not bind ports; permitted rerun passed. No real project edits were executed for validation.

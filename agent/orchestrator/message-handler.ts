@@ -24,7 +24,8 @@
  * client, the model id, and the shared HandoffDeps). The two pure helpers
  * (`isMentioned`/`tailLines`) come from ./helpers.ts to avoid a circular import.
  */
-import { Telegraf } from "telegraf";
+import { Telegraf, type Context } from "telegraf";
+import { handleAssistantCommand } from "../lib/assistant-commands.ts";
 import Anthropic from "@anthropic-ai/sdk";
 import type { CharacterDef } from "../characters/index.ts";
 import type { RunningBot } from "../lib/types.ts";
@@ -375,10 +376,12 @@ export function registerMessageHandler(
   def: CharacterDef,
   running: RunningBot,
   deps: MessageHandlerDeps,
-): void {
+): (ctx: Context, voice: { text: string; native?: boolean; history?: import("../lib/db.ts").ChatRow[] }) => Promise<void> {
   const { bots, allowed, historyLimit, anthropic, model, handoffDeps } = deps;
 
-  bot.on("message", async (ctx) => {
+  // Only the trusted voice handler calls this continuation after ingest/dedup.
+  const processMessage = async (ctx: Context, voice?: { text: string; native?: boolean; history?: import("../lib/db.ts").ChatRow[] }) => {
+    if (!ctx.chat || !ctx.message) return;
     try {
       const chatId = ctx.chat.id.toString();
       // C7: отметка «апдейт получен» переехала в middleware на входе бота —
@@ -408,7 +411,7 @@ export function registerMessageHandler(
         return;
       }
       const msg: any = ctx.message;
-      const rawText: string = msg.text ?? msg.caption ?? "";
+      const rawText: string = voice?.text ?? msg.text ?? msg.caption ?? "";
       // C8: детектим вложенную картинку (photo[] либо document с image/* mime).
       const photos: any[] | undefined = Array.isArray(msg.photo) ? msg.photo : undefined;
       const largestPhoto = photos && photos.length ? photos[photos.length - 1] : undefined;
@@ -444,7 +447,7 @@ export function registerMessageHandler(
 
       // Запишем входящее сообщение в короткую память один раз — от Дирижёра-роутера,
       // чтобы не дублировать. Остальные пропускают запись.
-      if (isOrchestrator && !fromOurBot) {
+      if (isOrchestrator && !fromOurBot && (!voice || voice.native)) {
         recordMessage({
           chatId,
           agentKey: null,
@@ -499,7 +502,7 @@ export function registerMessageHandler(
       // это второй платный ход LLM и повторное исполнение инструментов с
       // побочными эффектами. Тот же довод уже принят для голосового пути
       // (voice-handler.ts, аудит 2026-08-28).
-      if (!shouldProcessTrigger(chatId, ctx.message?.message_id, def.key)) {
+      if ((!voice || voice.native) && !shouldProcessTrigger(chatId, ctx.message?.message_id, def.key)) {
         log.info(`[anti-dup][${def.key}] skipping duplicate trigger chat=${chatId} msg_id=${ctx.message?.message_id}`);
         return;
       }
@@ -507,7 +510,7 @@ export function registerMessageHandler(
       // SEC-3 / T-601: throttle agent-triggering messages per (chat, user) so a
       // group member can't drive unbounded LLM spend by flooding messages.
       // Silent drop on over-limit (no reply — avoids an amplifiable bounce).
-      const ingest = checkAndConsumeIngestLimit(chatId, ctx.from?.id);
+      const ingest = voice && !voice.native ? { ok: true } : checkAndConsumeIngestLimit(chatId, ctx.from?.id);
       if (!ingest.ok) {
         log.warn(
           // Аудит 2026-08-28: здесь стоял сырой ctx.from?.id — на уровне warn,
@@ -524,7 +527,14 @@ export function registerMessageHandler(
 
       await ctx.sendChatAction("typing");
 
-      const recent = getRecentMessages(chatId, historyLimit);
+      if (isOrchestrator && !fromOurBot && await handleAssistantCommand(ctx, text, { source: voice?.native ? 'native' : 'telegram' })) return;
+
+      const turnHandoffDeps: HandoffDeps = voice?.native ? {
+        ...handoffDeps,
+        nativeHistory: voice.history,
+        nativeReply: async (agentKey, answer) => ctx.reply(`[${agentKey}]\n${answer}`),
+      } : handoffDeps;
+      const recent = voice?.native && voice.history ? voice.history.slice(-historyLimit) : getRecentMessages(chatId, historyLimit);
       // T-303: run all wiki I/O concurrently (async) to avoid blocking the
       // event loop with sequential readFileSync calls on the hot path.
       const hits = wikiSearch(text, ["_team", def.key], 4);
@@ -558,7 +568,7 @@ export function registerMessageHandler(
         // Шаг 2 автономности: только оркестратор ведёт весь пайплайн до результата
         // в одном turn (designer→frontend→qa…), а не «1-2 хопа и стоп».
         ...(def.key === "orchestrator"
-          ? [{ type: "text" as const, text: ORCHESTRATION_MANDATE, cache_control: { type: "ephemeral" as const } }]
+          ? [{ type: "text" as const, text: ORCHESTRATION_MANDATE + "\nПользователь называет тебя «Агент». Отзывайся на это имя. Ты единый собеседник, координирующий 12 ролей.", cache_control: { type: "ephemeral" as const } }]
           : []),
         {
           type: "text",
@@ -745,11 +755,11 @@ export function registerMessageHandler(
         chatId: Number(chatId),
         botId: running.id, // T-240: Add bot ID for per-bot-per-chat rate limiting
         telegram: bot.telegram,
-        triggerMessageId: ctx.message.message_id,
+        triggerMessageId: voice?.native ? undefined : ctx.message!.message_id,
         // C10: preferred handoff path via DELEGATE_TO_ROLE tool.
         // findHandoffTargets / @-mention path below stays as legacy fallback.
         resolveAgent: (key) => bots.find((b) => b.def.key === key),
-        handoffDeps,
+        handoffDeps: turnHandoffDeps,
         // C13 anti-pingpong: seed the delegation chain with this agent's key
         // so any DELEGATE_TO_ROLE inside this turn carries the full ancestry.
         delegationChain: [def.key],
@@ -778,13 +788,13 @@ export function registerMessageHandler(
        */
       const delivered: string[] = [];
       let lastSent: any;
-      const sender = (t: string) =>
+      const sender = (t: string) => voice?.native ? ctx.reply(t) :
         // T-fmt: each chunk goes out as Telegram HTML (Markdown-converted), with
         // a plain-text fallback on a parse error so delivery never breaks.
         sendWithHtml(
           (text, pm) =>
             ctx.reply(text, {
-              reply_parameters: { message_id: ctx.message.message_id },
+              reply_parameters: { message_id: ctx.message!.message_id },
               ...(pm ? { parse_mode: pm } : {}),
             }),
           t,
@@ -880,7 +890,7 @@ export function registerMessageHandler(
         // того же места, а не с нуля.
         const targets = findHandoffTargets(reply, def.key, bots);
         for (const t of targets) {
-          void (deps.respondAsImpl ?? respondAs)(
+          const cascade = (deps.respondAsImpl ?? respondAs)(
             {
               target: t,
               chatId,
@@ -888,7 +898,7 @@ export function registerMessageHandler(
               triggerAgentKey: def.key,
               depth: 1,
               visited: new Set([def.key, t.def.key]),
-              triggerMessageId: ctx.message.message_id,
+              triggerMessageId: voice?.native ? undefined : ctx.message!.message_id,
               maxDepth: handoffDepth,
               budget: handoffBudget,
               // Аудит 2026-08-12: этой строки тут не было. Ровно тот же дефект
@@ -906,8 +916,10 @@ export function registerMessageHandler(
               ...(inputImages.length ? { inputImages } : {}),
               ...(inputDocuments.length ? { inputDocuments } : {}),
             },
-            handoffDeps,
+            turnHandoffDeps,
           );
+          if (voice?.native) await cascade;
+          else void cascade;
         }
         if (targets.length) {
           log.info(
@@ -924,7 +936,7 @@ export function registerMessageHandler(
       // ответ на конкретное сообщение (а не в чат вообще) стоит дешевле.
       try {
         await ctx.reply(replyForTurnError(err), {
-          reply_parameters: { message_id: ctx.message.message_id },
+          reply_parameters: { message_id: ctx.message!.message_id },
         });
       } catch (e) {
         // Сбой мог быть и в самом Telegram — тогда извиниться тоже не выйдет.
@@ -933,5 +945,7 @@ export function registerMessageHandler(
         });
       }
     }
-  });
+  };
+  bot.on("message", (ctx) => processMessage(ctx));
+  return processMessage;
 }

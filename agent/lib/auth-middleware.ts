@@ -14,6 +14,8 @@
 import { verifyInitData, type MiniAppUser } from "./miniapp-auth.ts";
 import { json } from "./http-utils.ts";
 import { isAllowlisted, warnIfEmptyAllowlist } from "./allowlist.ts";
+import { nativeAccess, type NativeAccess } from "./native-access.ts";
+import { isAssistantOwner } from "./assistant-auth.ts";
 import { MiniAppSessionStore } from "./miniapp-session.ts";
 
 export interface AuthOpts {
@@ -21,6 +23,7 @@ export interface AuthOpts {
   allowedUserIds?: number[];
   mutation?: boolean;
   sessionStore?: MiniAppSessionStore;
+  nativeStore?: NativeAccess;
 }
 
 export type AuthResult =
@@ -49,6 +52,21 @@ export function authOr401(
   _url: URL,
   opts: AuthOpts,
 ): AuthResult {
+  // Native bridge sends the Keychain bearer directly over HTTPS; never a cookie
+  // or web-page credential. Preserve the separate Mini App allowlist/admin gates.
+  if (req.headers.has("authorization")) {
+    if (process.env.NATIVE_APP_ENABLED !== "true" || req.headers.has("origin")) {
+      return { ok: false, resp: json({ error: "native_only" }, 403) };
+    }
+    const token = /^Bearer ([a-f0-9]{64})$/.exec(req.headers.get("authorization") || "")?.[1];
+    const identity = token ? (opts.nativeStore ?? nativeAccess()).authenticate(token) : null;
+    if (!identity || !isAssistantOwner(identity.userId)) return { ok: false, resp: json({ error: "unauthorized" }, 401) };
+    const id = Number(identity.userId);
+    if (!Number.isSafeInteger(id) || id <= 0 || !isAllowlisted(id, opts.allowedUserIds)) {
+      return { ok: false, resp: json({ error: "user not allowed" }, 403) };
+    }
+    return { ok: true, user: { id } };
+  }
   const raw = req.headers.get("x-telegram-init-data");
   if (!raw) {
     return { ok: false, resp: json({ error: "missing initData" }, 401) };

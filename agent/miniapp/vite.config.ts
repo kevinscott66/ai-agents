@@ -1,9 +1,15 @@
 import { defineConfig } from "vite";
 import preact from "@preact/preset-vite";
 
-export default defineConfig({
-  plugins: [preact()],
-  base: "/",
+export default defineConfig(({ mode }) => ({
+  plugins: [preact(), ...(mode === "native" ? [{
+    name: "native-bundle",
+    transformIndexHtml(html: string) {
+      return html.replace('<script src="https://telegram.org/js/telegram-web-app.js"></script>',
+        `<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'none'; img-src 'self' data:; font-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">`);
+    },
+  }] : [])],
+  base: mode === "native" ? "./" : "/",
   resolve: {
     alias: {
       react: "preact/compat",
@@ -13,7 +19,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: "dist",
+    outDir: mode === "native" ? "../../ios/Agent/Panel" : "dist",
     emptyOutDir: true,
     target: "es2019",
   },
@@ -26,4 +32,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));
