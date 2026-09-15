@@ -74,3 +74,7 @@ The native Mac section accepts a project and task, then submits an ordinary expl
 ### Mac executor selection (0.1.4)
 
 Mac session form offers Claude Code and Codex. The chosen provider is explicitly passed through the native chat request and MAC_RUN_CLAUDE payload, appears in the action history, and selects the actual daemon executable. Omitted provider retains Claude compatibility. Codex does not silently fall back to Claude. See `agent/mac-daemon/README.md` for CLI requirements and mode mapping; native launch still uses the existing lead/approval pipeline.
+
+### Mac result delivery (0.1.7)
+
+The central tool payload builder validates/preserves `provider` before approval creation (previously it was silently dropped despite the UI/tool schema). Successful Mac action results retain bounded scrubbed stdout, actual provider and the execution context's approvalId. Existing action content redaction protects this output. Native cards correlate owner + exact approvalId to show completion/output after a POST timeout; they never infer completion from approval status alone. Legacy completed actions without stored output cannot retroactively supply it.

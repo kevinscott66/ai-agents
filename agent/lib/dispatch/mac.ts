@@ -151,6 +151,7 @@ export function tailByCodePoints(s: string, limit: number): string {
 }
 
 export type MacHandlerContext = {
+  approvalId?: string;
   agentKey: string;
   chatId: number;
   telegram?: Telegram;
@@ -367,6 +368,9 @@ export async function handleMacRunClaude(
     ok: true,
     result: {
       project: p.project,
+      provider: p.provider ?? "claude",
+      ...(ctx.approvalId ? {approvalId:ctx.approvalId} : {}),
+      output: tailByCodePoints(res.stdout || "", TELEGRAM_MESSAGE_TAIL_LIMIT),
       mode: p.mode,
       code: res.code ?? 0,
       stdoutLen: res.stdoutLen ?? res.stdout.length,

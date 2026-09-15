@@ -5,12 +5,16 @@ import Foundation
  static var posts = 0
  static var fail = false
  static var savedDecision: String?
+ static var actionOutput = false
 }
 @MainActor struct Credentials { static func read(server: String) -> String? { Fixture.token } }
 struct AgentAPI { let server: String; func ownerID(expectedToken: String? = nil) async throws -> String { "123456" } }
 enum AgentError: LocalizedError { case message(String); var errorDescription: String? { if case .message(let s) = self { s } else { nil } } }
 @MainActor enum PanelTransport {
  static func request(server: String, path: String, method: String, body: String?, expectedToken: String? = nil) async throws -> [String: Any] {
+  if method == "GET", path.hasPrefix("/api/actions") {
+   return ["status":200,"body":Fixture.actionOutput ? #"{"actions":[{"chat_id":123456,"status":"ok","result":{"approvalId":"approval-1","output":"Тест"}}]}"# : #"{"actions":[]}"#]
+  }
   if method == "GET", let saved = Fixture.savedDecision {
    let body = path.contains("status=" + saved) ? Fixture.item.replacingOccurrences(of:"pending",with:saved) : ""
    return ["status":200,"body":"{\"approvals\":[" + body + "]}"]
@@ -40,9 +44,13 @@ enum AgentError: LocalizedError { case message(String); var errorDescription: St
   Fixture.savedDecision = "approved"
   await uncertain.refresh(server:"https://test")
   precondition(uncertain.outcomes["approval-1"]!.contains("принято сервером") && Fixture.posts == 2)
+  Fixture.actionOutput = true
+  await uncertain.refresh(server:"https://test")
+  precondition(uncertain.outcomes["approval-1"] == "Выполнено.\nТест" && Fixture.posts == 2)
+  Fixture.actionOutput = false
   Fixture.savedDecision = "failed"
   await uncertain.refresh(server:"https://test")
-  precondition(uncertain.outcomes["approval-1"]!.contains("ошибкой") && Fixture.posts == 2)
+  precondition(uncertain.outcomes["approval-1"] == "Выполнено.\nТест" && Fixture.posts == 2)
   Fixture.savedDecision = nil
   let switched = ChatApprovals(); await switched.refresh(server:"https://test")
   let card = switched.items[0]; Fixture.token = "different-account"

@@ -762,7 +762,8 @@ export function buildPayload<T extends ActionType>(
       const validModes = ["ask", "accept_edits", "plan", "auto", "bypass"];
       if (!validModes.includes(mode))
         return { ok: false, error: `mode must be one of: ${validModes.join(", ")}` };
-      const payload: PayloadFor<"MAC_RUN_CLAUDE"> = { project, prompt, mode };
+      if (i.provider !== undefined && i.provider !== "claude" && i.provider !== "codex") return {ok:false,error:"provider must be claude or codex"};
+      const payload: PayloadFor<"MAC_RUN_CLAUDE"> = { project, prompt, mode, ...(i.provider !== undefined ? {provider:i.provider} : {}) };
       return { ok: true, payload: payload as PayloadFor<T> };
     }
     case "SCHEDULE_POST": {

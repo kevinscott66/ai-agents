@@ -37,3 +37,15 @@ test('server sends separate Codex frame instead of legacy Claude run',async()=>{
   _setActiveSocketForTests(null);await result;
  } finally {_setActiveSocketForTests(null);}
 });
+
+test('tool payload normalization preserves requested provider through dispatch and result',async()=>{
+ const {buildPayload}=await import('../lib/dispatch/build-payload.ts');
+ const {handleMacRunClaude}=await import('../lib/dispatch/mac.ts');
+ const built=buildPayload('MAC_RUN_CLAUDE',{project:'/x',prompt:'test',mode:'ask',provider:'codex'},{} as any);
+ expect(built.ok).toBe(true);if(!built.ok)return;
+ expect(built.payload.provider).toBe('codex');
+ expect(buildPayload('MAC_RUN_CLAUDE',{project:'/x',prompt:'test',mode:'ask',provider:'other'},{} as any).ok).toBe(false);
+ let provider:string|undefined;
+ const result=await handleMacRunClaude({...built.payload,_userId:'1'},{agentKey:"orchestrator",chatId:1,approvalId:'approval-1',macBridge:{isUserAllowed:()=>true,isMacConnected:()=>true,isMacOnline:()=>true,stopMac:async()=>({ok:true}),sendToMac:async request=>{provider=request.provider;return {ok:true,code:0,stdout:'Тест',stderr:''};}}});
+ expect(provider).toBe('codex');expect(result).toMatchObject({ok:true,result:{approvalId:'approval-1',provider:'codex',output:'Тест',code:0}});
+});

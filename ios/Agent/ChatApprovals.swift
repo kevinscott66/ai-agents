@@ -21,6 +21,9 @@ indirect enum ApprovalValue: Decodable {
         else if let flag = try? value.decode(Bool.self) { self = .other(flag ? "Да" : "Нет") }
         else { self = .other(String(try value.decode(Double.self))) }
     }
+    subscript(key: String) -> String? {
+        if case .object(let fields) = self, case .text(let text) = fields[key] { return text }; return nil
+    }
     var description: String {
         switch self {
         case .text(let text), .other(let text): return text
@@ -79,6 +82,19 @@ indirect enum ApprovalValue: Decodable {
                     }
                 }
             }
+            if !awaitingDecision.isEmpty {
+                let response = try await PanelTransport.request(server: server, path: "/api/actions?type=MAC_RUN_CLAUDE&status=ok&chat_id=\(owner)&limit=200", method: "GET", body: nil, expectedToken: token)
+                guard matches(server, token) else { return }
+                if response["status"] as? Int == 200, let body = response["body"] as? String {
+                    struct Action: Decodable { let chat_id: Int64; let status: String; let result: ApprovalValue? }
+                    struct Actions: Decodable { let actions: [Action] }
+                    for action in try JSONDecoder().decode(Actions.self, from: Data(body.utf8)).actions {
+                        guard String(action.chat_id) == owner, action.status == "ok", let id = action.result?["approvalId"], awaitingDecision.contains(id) else { continue }
+                        outcomes[id] = "Выполнено.\n" + (action.result?["output"] ?? "Команда завершилась успешно.")
+                        awaitingDecision.remove(id)
+                    }
+                }
+            }
             error = nil
         } catch { if matches(server, token) { self.error = "Не удалось обновить подтверждения. \(error.localizedDescription)" } }
     }
@@ -97,13 +113,13 @@ indirect enum ApprovalValue: Decodable {
             let response = try await PanelTransport.request(server: server, path: "/api/approvals/\(item.id)/decide", method: "POST", body: body, expectedToken: token)
             guard matches(server, token) else { return }
             let status = response["status"] as? Int ?? 0
-            struct Decision: Decodable { let approval: ChatApproval; let executed: Bool }
+            struct Decision: Decodable { let approval: ChatApproval; let executed: Bool; let result: ApprovalValue? }
             if status == 200, let text = response["body"] as? String,
                let result = try? JSONDecoder().decode(Decision.self, from: Data(text.utf8)),
                result.approval.id == item.id, result.approval.chat_id == item.chat_id,
                result.approval.status == (approve ? "approved" : "rejected"), result.executed == approve {
                 awaitingDecision.remove(item.id)
-                outcomes[item.id] = approve ? "Подтверждено. Сервер завершил выполнение действия." : "Отклонено. Действие не выполнено."
+                outcomes[item.id] = approve ? "Подтверждено. Сервер завершил выполнение действия." + (result.result?["output"].map { "\n" + $0 } ?? "") : "Отклонено. Действие не выполнено."
             } else {
                 outcomes[item.id] = "Сервер не подтвердил выполнение (\(status)). Проверьте результат у Агента перед повтором."
             }
@@ -123,7 +139,7 @@ struct ChatApprovalCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Label("Нужно подтверждение", systemImage: "hand.raised").font(.headline)
-            Text(item.action_type.replacingOccurrences(of: "_", with: " ")).font(.subheadline.weight(.semibold))
+            Text(item.action_type == "MAC_RUN_CLAUDE" ? "Сессия \(item.payload?["provider"] == "codex" ? "Codex" : "Claude Code") на Mac" : item.action_type.replacingOccurrences(of: "_", with: " ")).font(.subheadline.weight(.semibold))
             Text("Запрос от \(item.requested_by)").font(.caption).foregroundStyle(.secondary)
             DisclosureGroup("Параметры действия", isExpanded: $expanded) {
                 ScrollView { Text(item.details).font(.system(.footnote, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }.frame(maxHeight: 260)
