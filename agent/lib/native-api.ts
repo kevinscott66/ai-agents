@@ -38,7 +38,7 @@ export async function nativeApi(req: Request, injectedStore?: NativeAccess): Pro
     return json(paired);
   }
   if (!identity || !permitted(identity.userId)) return json({ error: 'unauthorized' }, 401);
-  if (path === '/api/native/status' && req.method === 'GET') return json({ name: 'Агент', available: !!lead && !agentStopReason('orchestrator') });
+  if (path === '/api/native/status' && req.method === 'GET') return json({ name: 'Агент', userId: identity.userId, available: !!lead && !agentStopReason('orchestrator') });
   if (path === '/api/native/turns' && req.method === 'POST') {
     if (!lead || agentStopReason('orchestrator')) return json({ error: 'lead_unavailable' }, 503);
     if (typeof body?.text !== 'string' || !body.text.trim() || body.text.length > 8000 || typeof body.id !== 'string' || !/^[a-zA-Z0-9-]{16,64}$/.test(body.id)) return json({ error: 'invalid_turn' }, 400);

@@ -150,9 +150,10 @@ enum PanelTransport {
         target.path = route.path; target.percentEncodedQuery = route.percentEncodedQuery
         guard let url = target.url else { throw AgentError.message("Недопустимый адрес панели") }; return url
     }
-    static func request(server: String, path: String, method: String, body: String?) async throws -> [String: Any] {
+    static func request(server: String, path: String, method: String, body: String?, expectedToken: String? = nil) async throws -> [String: Any] {
         let url = try url(server: server, path: path)
         guard let token = Credentials.read(server: server) else { throw AgentError.message("Подключите iPhone в настройках приложения") }
+        if let expectedToken, token != expectedToken { throw AgentError.message("Подключение изменилось. Обновите подтверждения.") }
         guard (body?.utf8.count ?? 0) <= 65536 else { throw AgentError.message("Запрос слишком большой") }
         var request = URLRequest(url: url); request.httpMethod = method
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")

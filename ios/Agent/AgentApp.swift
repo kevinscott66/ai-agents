@@ -108,7 +108,8 @@ struct AgentGlass: ViewModifier {
 @main struct AgentApp: App {
     var body: some Scene { WindowGroup {
         #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("--panel-sheet-preview") { PanelSheetPreview() }
+        if ProcessInfo.processInfo.arguments.contains("--approval-preview") { ChatApprovalPreview() }
+        else if ProcessInfo.processInfo.arguments.contains("--panel-sheet-preview") { PanelSheetPreview() }
         else if ProcessInfo.processInfo.arguments.contains("--panel-preview") {
             NavigationStack { PanelView(server: "https://agent.invalid") }.tint(.primary)
         } else { RootView().tint(.primary) }
@@ -120,6 +121,7 @@ struct AgentGlass: ViewModifier {
 struct RootView: View {
     @StateObject private var model = ChatModel()
     @StateObject private var voice = VoiceInput()
+    @StateObject private var approvals = ChatApprovals()
     @AppStorage("server") private var server = "https://agents.dobropalm.tech:8443"
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.colorScheme) private var scheme
@@ -147,6 +149,12 @@ struct RootView: View {
                 }
                 .safeAreaInset(edge: .bottom, spacing: 0) { composer }
                 .background(canvas)
+        }
+        .task(id: server) {
+            while !Task.isCancelled {
+                if scenePhase == .active { await approvals.refresh(server: server) }
+                do { try await Task.sleep(for: .seconds(5)) } catch { break }
+            }
         }
         .onChange(of: voice.text) { _, value in model.draft = value }
         .onChange(of: voice.error) { _, value in if let value { model.error = value } }
@@ -189,7 +197,7 @@ struct RootView: View {
     private var chat: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                if model.lines.isEmpty {
+                if model.lines.isEmpty && approvals.items.isEmpty {
                     VStack(spacing: 14) {
                         Spacer(minLength: 140)
                         Text("Чем помочь?").font(.system(size: 30, weight: .semibold)).tracking(-0.7)
@@ -218,10 +226,18 @@ struct RootView: View {
                                 }.id(line.id)
                             }
                         }
+                        ForEach(approvals.items) { item in
+                            ChatApprovalCard(item: item, outcome: approvals.outcomes[item.id], working: approvals.working.contains(item.id)) { approve in
+                                Task { await approvals.decide(item, approve: approve, server: server) }
+                            }.id("approval-" + item.id)
+                        }
                         if model.busy { HStack(spacing: 10) { ProgressView(); Text("Агент работает").font(.subheadline).foregroundStyle(.secondary) } }
                     }.padding(.horizontal, 22).padding(.vertical, 24)
                 }
             }.scrollDismissesKeyboard(.interactively)
+                .onChange(of: approvals.items.count) { _, _ in
+                    if let item = approvals.items.last { proxy.scrollTo("approval-" + item.id, anchor: .bottom) }
+                }
                 .onChange(of: model.lines.count) { _, _ in
                     if let id = model.lines.last?.id {
                         if reducedMotion { proxy.scrollTo(id, anchor: .bottom) }
@@ -236,6 +252,7 @@ struct RootView: View {
     }
     private var composer: some View {
         VStack(spacing: 10) {
+            if let error = approvals.error { Text(error).font(.caption).foregroundStyle(.secondary) }
             if let error = model.error { Text(error).font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 8) }
             if model.pending {
                 HStack {

@@ -18,6 +18,7 @@ test('native API binds device to owner; rejects browser, revoked ACL and repeat 
     const { token } = await pair.json() as {token:string};
     expect((await nativeApi(req('pair', undefined, {code}), store)).status).toBe(401);
     expect((await nativeApi(req('status', token, undefined, {origin:'https://evil.test'}), store)).status).toBe(403);
+    expect((await (await nativeApi(req('status', token), store)).json() as any).userId).toBe(uid);
     const id = 'native-turn-00000001';
     expect((await nativeApi(req('turns', token, {id,text:'hello'}), store)).status).toBe(202);
     await Promise.resolve(); await Promise.resolve();

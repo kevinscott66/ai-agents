@@ -65,7 +65,7 @@ struct AgentAPI {
         }
         return data
     }
-    private func request<T: Decodable>(_ path: String, body: [String: String]? = nil, authenticated: Bool = true) async throws -> T {
+    private func request<T: Decodable>(_ path: String, body: [String: String]? = nil, authenticated: Bool = true, expectedToken: String? = nil) async throws -> T {
         guard var parts = URLComponents(string: server), parts.scheme == "https", parts.host != nil,
               parts.user == nil, parts.password == nil, parts.query == nil, parts.fragment == nil,
               parts.path.isEmpty || parts.path == "/" else { throw AgentError.message("Укажите HTTPS-адрес сервера без пути") }
@@ -75,6 +75,7 @@ struct AgentAPI {
         request.timeoutInterval = 25
         if authenticated {
             guard let token = Credentials.read(server: server) else { throw AgentError.message("Подключите устройство в настройках") }
+            if let expectedToken, token != expectedToken { throw AgentError.message("Подключение изменилось. Обновите подтверждения.") }
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         if let body {
@@ -97,6 +98,12 @@ struct AgentAPI {
         }
         let data = try await Self.readBody(bytes)
         return try JSONDecoder().decode(T.self, from: data)
+    }
+    func ownerID(expectedToken: String? = nil) async throws -> String {
+        struct Status: Decodable { let userId: String }
+        let status: Status = try await request("/api/native/status", expectedToken: expectedToken)
+        guard !status.userId.isEmpty, status.userId.allSatisfy({ $0.isNumber }), Int64(status.userId) != nil else { throw AgentError.message("Некорректный ответ сервера") }
+        return status.userId
     }
     func pair(code: String) async throws {
         let result: Pairing = try await request("/api/native/pair", body: ["code": code.trimmingCharacters(in: .whitespacesAndNewlines)], authenticated: false)

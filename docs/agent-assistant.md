@@ -56,3 +56,7 @@ GitHub/серверы/домены/Cloudflare: iPhone передаёт запр�
 The companion bundles all Mini App sections (dashboard, tasks, approvals, agents, permissions, logs, wiki, settings, Mac). `ios/build-unsigned.sh` builds the native web bundle before Xcode packaging. The normal Telegram web build is unchanged.
 
 Panel API requests may authenticate using an enabled native device bearer, subject to both the live assistant-owner ACL and `MINIAPP_ALLOWED_USER_IDS`. Existing `MINIAPP_ADMIN_USER_IDS`, chat scoping and action-specific owner gates still apply. Origin-bearing native authentication is rejected. No bearer enters HTML, JavaScript, cookies or URLs; a bounded Swift bridge injects it into HTTPS requests to an explicit data-route allowlist. The bundled WebKit page has no remote script/network/frame capability. Bearer revocation also revokes panel access.
+
+## Confirmations in native chat
+
+Pending approvals for the authenticated owner's direct-chat ID appear as inline cards in the conversation, refreshed every5 seconds while active. The user can inspect parameters and explicitly approve/reject via the existing admin-gated decision endpoint. Status is shown in the same card. The client freezes a decision before POST and never automatically retries an ambiguous outcome. Card/request identity is bound to the current Keychain credential; re-pairing invalidates prior cards. `GET /api/native/status` now includes the authenticated `userId` for scoping.

@@ -36,3 +36,12 @@ with tempfile.TemporaryDirectory(prefix='agent-panel-tests-') as scratch:
     (temp / 'PanelTransport.swift').write_text('import Foundation\n' + panel)
     subprocess.run(['xcrun', 'swiftc', '-module-cache-path', str(temp / 'cache'), str(root / 'Agent/API.swift'), str(temp / 'PanelTransport.swift'), str(root / 'tests/PanelTransportFixture.swift'), '-o', str(temp / 'panel')], check=True, timeout=90)
     subprocess.run([str(temp / 'panel')], check=True, timeout=15)
+
+with tempfile.TemporaryDirectory(prefix='agent-approvals-tests-') as scratch:
+    temp = Path(scratch)
+    source = (root / 'Agent/ChatApprovals.swift').read_text().split('struct ChatApprovalCard: View')[0]
+    source = source.replace('import SwiftUI', '').replace(': ObservableObject', '').replace('@Published ', '')
+    fixture = (root / 'tests/ChatApprovalFixture.swift').read_text().replace('// MODEL', source)
+    (temp / 'Approvals.swift').write_text(fixture)
+    subprocess.run(['xcrun', 'swiftc', '-parse-as-library', '-module-cache-path', str(temp / 'cache'), str(temp / 'Approvals.swift'), '-o', str(temp / 'test')], check=True, timeout=90)
+    subprocess.run([str(temp / 'test')], check=True, timeout=15)
