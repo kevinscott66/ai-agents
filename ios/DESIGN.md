@@ -76,3 +76,8 @@ The polling task is keyed by server and active ScenePhase so an initial inactive
 ### Ambiguous decision recovery (0.1.6)
 
 A decision POST may time out while the server awaits a long Mac action. The client freezes submission and reconciles unresolved IDs using owner-scoped approved/failed/rejected lists. Approved means decision accepted, not execution complete; later failure remains visible. Identity checks still apply and no POST is retried. Regression covers timeout → approved → failed with an unchanged POST count.
+
+
+## Confirmation result placement
+
+An approval card contains action parameters and decision/execution status. The result is a separate assistant message immediately below the card, with normal text selection, copy and speech controls. Its server archive identity links it to the correct conversation across devices. Completed cards use “Подтверждение действия”; output never appears as secondary text inside the card. Conversation menus load older pages on demand.

@@ -2,7 +2,11 @@ import { nativeAccess, type NativeAccess } from './native-access.ts';
 import { isAssistantOwner as permitted } from './assistant-auth.ts';
 import { agentStopReason } from './permissions.ts';
 import { readNativeJson } from './native-request.ts';
-import { log } from './log.ts';
+import { db } from "./db.ts";
+import { nativeTurnContext, nativeApprovalLinks } from './native-context.ts';
+import { parseUserIdList } from './allowlist.ts';
+import { getApproval } from './approvals.ts';
+import { log, scrubSecretString } from './log.ts';
 
 export type NativeLead = (userId: string, text: string, reply: (text: string) => void, history?: {role:string;text:string}[]) => Promise<void>;
 let lead: NativeLead | undefined;
@@ -39,11 +43,50 @@ export async function nativeApi(req: Request, injectedStore?: NativeAccess): Pro
   }
   if (!identity || !permitted(identity.userId)) return json({ error: 'unauthorized' }, 401);
   if (path === '/api/native/status' && req.method === 'GET') return json({ name: 'Агент', userId: identity.userId, available: !!lead && !agentStopReason('orchestrator') });
-  if (path === '/api/native/conversations' && req.method === 'GET') return json({conversations:store.conversations(identity.userId),running:store.running(identity.userId)});
+  if (path === '/api/native/conversations' && req.method === 'GET') {
+    const cursor = new URL(req.url).searchParams.get('cursor');
+    const match = cursor?.match(/^(\d{1,16}):([a-zA-Z0-9-]{16,64})$/);
+    if (cursor !== null && (!match || !Number.isSafeInteger(Number(match[1])))) return json({error:'invalid_cursor'},400);
+    const before = match ? {updated:Number(match[1]),id:match[2]} : undefined;
+    const rows = store.conversations(identity.userId,before,201);
+    const more = rows.length > 200;
+    const conversations = rows.slice(0,200);
+    const last = conversations.at(-1);
+    return json({conversations,more,nextCursor:more && last ? `${last.updated}:${last.id}` : null,running:store.running(identity.userId)});
+  }
   if (path === '/api/native/conversations' && req.method === 'POST') {
     if (typeof body.id !== 'string' || (body.id.startsWith('legacy-') && !store.conversation(body.id,identity.userId)) || !/^[a-zA-Z0-9-]{16,64}$/.test(body.id) || typeof body.title !== 'string' || !body.title.trim() || body.title.length > 100) return json({error:'invalid_conversation'},400);
     const conversation = store.createConversation(body.id,identity.userId,body.title);
     return conversation ? json({conversation}) : json({error:'not_found'},404);
+  }
+  const approvalsMatch = path.match(/^\/api\/native\/conversations\/([a-zA-Z0-9-]{16,64})\/approvals$/);
+  if (approvalsMatch && req.method === 'GET') {
+    if (!parseUserIdList(process.env.MINIAPP_ADMIN_USER_IDS).includes(Number(identity.userId))) return json({error:'forbidden'},403);
+    for (const link of nativeApprovalLinks(db,identity.userId,approvalsMatch[1])) {
+      store.linkApproval(link.approval_id,link.turn_id,identity.userId);
+      if (link.execution) store.completeApproval(link.approval_id,identity.userId,link.execution === 'completed',scrubSecretString(link.output ?? 'Действие завершено.'));
+    }
+    const links = store.conversationApprovals(approvalsMatch[1],identity.userId);
+    if (!links) return json({error:'not_found'},404);
+    const approvals = links.flatMap(link => {
+      const approval = getApproval(link.approval_id);
+      if (approval && String(approval.chat_id) === identity.userId && !link.execution) {
+        if (approval.status === 'failed') {
+          store.completeApproval(approval.id,identity.userId,false,'Не удалось завершить действие. Проверьте его состояние перед повтором.');
+          link.execution = 'failed';
+        } else if (approval.status === 'approved' && approval.action_type === 'MAC_RUN_CLAUDE') {
+          // Recover a result if the process stopped after auditing but before archiving.
+          const action = db.query("SELECT result FROM agent_actions WHERE chat_id=? AND action_type='MAC_RUN_CLAUDE' AND status='ok' AND json_valid(result) AND json_extract(result,'$.approvalId')=? ORDER BY created_at DESC,rowid DESC LIMIT 1").get(approval.chat_id,approval.id) as {result:string}|null;
+          if (action) {
+            const result = JSON.parse(action.result);
+            store.completeApproval(approval.id,identity.userId,true,scrubSecretString(typeof result.output === 'string' ? result.output : 'Действие выполнено.'));
+            link.execution = 'completed';
+          }
+        }
+      }
+      return approval && String(approval.chat_id) === identity.userId ? [{...approval,execution:link.execution}] : [];
+    });
+    return json({approvals});
   }
   const conversationMatch = path.match(/^\/api\/native\/conversations\/([a-zA-Z0-9-]{16,64})$/);
   if (conversationMatch && req.method === 'GET') {
@@ -64,7 +107,7 @@ export async function nativeApi(req: Request, injectedStore?: NativeAccess): Pro
       const run = lead;
       // Detached job is persisted before invoking the lead; client polls, never replays on reconnect.
       const text = body.text;
-      void Promise.resolve().then(() => run(identity.userId, text, answer => store.append(id, answer), typeof conversationId === 'string' ? store.history(conversationId,identity.userId)!.messages.slice(-40) : undefined)).then(() => {
+      void Promise.resolve().then(() => nativeTurnContext.run({userId:identity.userId,turnId:id,conversationId:store.turnConversation(id)!,linkApproval: approvalId => store.linkApproval(approvalId,id,identity.userId)}, () => run(identity.userId, text, answer => store.append(id, answer), typeof conversationId === 'string' ? store.history(conversationId,identity.userId)!.messages.slice(-40) : undefined))).then(() => {
         if (!store.get(id, identity.device)?.replies.length) store.append(id, 'Агент не вернул ответ. Проверь состояние роли и лимиты.');
         store.finish(id, 'done');
       }).catch(() => {

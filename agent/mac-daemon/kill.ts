@@ -20,6 +20,8 @@
 export interface KillableChild {
   kill(signal?: number | NodeJS.Signals): void;
   readonly exited: Promise<unknown>;
+  /** Only set for a child spawned with detached:true (its own process group). */
+  readonly processGroupId?: number;
 }
 
 /** Сколько ждать после SIGINT, прежде чем перейти к SIGKILL. */
@@ -37,6 +39,28 @@ export async function killChild(
   child: KillableChild,
   graceMs: number = KILL_GRACE_MS,
 ): Promise<KillOutcome> {
+  if (child.processGroupId !== undefined) {
+    const pgid = child.processGroupId;
+    if (!Number.isSafeInteger(pgid) || pgid <= 1 || pgid === process.pid) throw new Error('invalid child process group');
+    const exists = () => {
+      try { process.kill(-pgid,0); return true; }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false; throw error; }
+    };
+    try { process.kill(-pgid,'SIGINT'); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return 'gone'; throw error; }
+    // The leader exiting is insufficient: a shell/tool may ignore SIGINT and
+    // keep running in its group after the CLI has exited.
+    const deadline = Date.now()+Math.max(0,graceMs);
+    while (exists()) {
+      if (Date.now() >= deadline) {
+        try { process.kill(-pgid,'SIGKILL'); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+        return 'killed';
+      }
+      await Bun.sleep(Math.min(20,Math.max(1,deadline-Date.now())));
+    }
+    return 'exited';
+  }
   try {
     child.kill("SIGINT");
   } catch {

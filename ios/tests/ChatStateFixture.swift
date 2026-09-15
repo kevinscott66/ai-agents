@@ -4,7 +4,7 @@ struct Turn { let id: String; let status: String; let replies: [String] }
 @MainActor var polledServers: [String] = []
 struct ConversationRecord: Codable, Identifiable { let id: String; let title: String; let updated: Double }
 struct ConversationMessage: Codable, Identifiable { let seq: Int; let id: String; let role: String; let text: String }
-struct ConversationIndex { let conversations: [ConversationRecord]; let running: Bool }
+struct ConversationIndex { let conversations: [ConversationRecord]; let running: Bool; let nextCursor: String?; let more: Bool }
 struct ConversationHistory { let messages: [ConversationMessage]; let more: Bool; let running: Bool }
 enum AgentError: Error { case message(String) }
 @MainActor enum Credentials { static var token = "fixture"; static func read(server: String) -> String? { token } }
@@ -13,7 +13,12 @@ enum AgentError: Error { case message(String) }
 @MainActor var conversationList: [ConversationRecord] = []
 struct AgentAPI {
  let server: String
- @MainActor func conversations(expectedToken: String? = nil) async throws -> ConversationIndex { ConversationIndex(conversations:conversationList,running:remoteRunning) }
+ @MainActor func conversations(cursor: String? = nil, expectedToken: String? = nil) async throws -> ConversationIndex {
+  let offset = Int(cursor ?? "0") ?? 0
+  let page = Array(conversationList.dropFirst(offset).prefix(200))
+  let more = conversationList.count > offset + page.count
+  return ConversationIndex(conversations:page,running:remoteRunning,nextCursor:more ? String(offset + page.count) : nil,more:more)
+ }
  @MainActor func createConversation(_ id: String, title: String, expectedToken: String? = nil) async throws { }
  @MainActor func history(_ id: String, before: Int? = nil, expectedToken: String? = nil) async throws -> ConversationHistory {
   let rows = archive.filter { $0.seq < (before ?? Int.max) }
@@ -34,7 +39,13 @@ struct AgentAPI {
   UserDefaults.standard.removeObject(forKey: "pendingTurn")
   UserDefaults.standard.removeObject(forKey: "pendingServer")
   let model = ChatModel()
-  model.draft = "first"; model.send(server: "https://one.example")
+  for oversized in [String(repeating: "a", count: 8_001), String(repeating: "😀", count: 4_001)] {
+   model.draft = oversized
+   precondition(!model.send(server: "https://one.example"))
+   precondition(!model.pending && !model.busy && model.lines.isEmpty && model.draft == oversized)
+   precondition(UserDefaults.standard.string(forKey: "pendingTurn") == nil && continuations.isEmpty)
+  }
+  model.draft = String(repeating: "😀", count: 4_000); precondition(model.send(server: "https://one.example"))
   while continuations.count < 1 { await Task.yield() }
   model.abandonWaiting()
   model.draft = "second"; model.send(server: "https://two.example")
@@ -74,6 +85,18 @@ struct AgentAPI {
   precondition(!model.lines.contains(where: { $0.text == "must not appear" }), "Old server response leaked")
   precondition(model.pending && !model.busy, "Pending recovery lost on server switch")
   model.abandonWaiting()
+  conversationList = (1...450).map { ConversationRecord(id:String(format:"dialog-%016d",$0),title:String($0),updated:Double(451-$0)) }
+  let catalog = ChatModel()
+  await catalog.synchronize(server:"https://catalog.example")
+  precondition(catalog.conversations.count == 200 && catalog.moreConversations)
+  await catalog.selectConversation(conversationList[449].id,server:"https://catalog.example")
+  precondition(catalog.conversationId == conversationList[449].id, "Selected old dialog replaced by latest page")
+  await catalog.loadMoreConversations(server:"https://catalog.example")
+  precondition(catalog.conversations.count == 400 && catalog.moreConversations)
+  await catalog.synchronize(server:"https://catalog.example")
+  await catalog.loadMoreConversations(server:"https://catalog.example")
+  precondition(catalog.conversations.count == 450 && !catalog.moreConversations)
+  precondition(Set(catalog.conversations.map(\.id)).count == 450)
   print("PASS: synchronized history, pagination, restoration and cross-server isolation")
   print("PASS: stale cancellation isolation and pending-server recovery")
  }

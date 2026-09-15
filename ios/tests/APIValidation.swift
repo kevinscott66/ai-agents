@@ -27,6 +27,9 @@ struct ByteFixture: AsyncSequence, AsyncIteratorProtocol {
         for invalid in [String(repeating: "a", count: 63), String(repeating: "G", count: 64), String(repeating: "a", count: 63) + "\n"] {
             rejects { _ = try Pairing(token: invalid, userId: "1").validatedToken() }
         }
+        precondition(AgentAPI.conversationTitle(String(repeating: "😀", count: 60)) == String(repeating: "😀", count: 50))
+        precondition(AgentAPI.conversationTitle(String(repeating: "a", count: 99) + "😀").utf16.count == 99)
+        precondition(AgentAPI.conversationTitle(String(repeating: "a", count: 101)).utf16.count == 100)
         let exact = try await AgentAPI.readBody(ByteFixture(remaining: AgentAPI.maximumResponseBytes))
         precondition(exact.count == AgentAPI.maximumResponseBytes)
         do {

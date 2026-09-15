@@ -13,6 +13,7 @@ export class NativeAccess {
     if (path !== ':memory:') chmodSync(path, 0o600);
     this.db.run(`CREATE TABLE IF NOT EXISTS conversations(id TEXT PRIMARY KEY,user_id TEXT NOT NULL,title TEXT NOT NULL,created INTEGER NOT NULL,updated INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS conversation_turns(turn_id TEXT PRIMARY KEY,conversation_id TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS conversation_approvals(approval_id TEXT PRIMARY KEY,turn_id TEXT NOT NULL,execution TEXT);
       CREATE TABLE IF NOT EXISTS conversation_messages(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT UNIQUE NOT NULL,conversation_id TEXT NOT NULL,role TEXT NOT NULL,text TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS conversation_owner ON conversations(user_id,updated);
       CREATE INDEX IF NOT EXISTS conversation_history ON conversation_messages(conversation_id,seq);
@@ -100,6 +101,11 @@ export class NativeAccess {
       if (this.db.query('SELECT 1 FROM conversation_turns WHERE turn_id=?').get(id)) return 'conflict';
       if (conversationId && !this.conversation(conversationId,userId)) return 'conflict';
       if (this.db.query("SELECT 1 FROM turns WHERE user_id=? AND status='running'").get(userId)) return 'busy';
+      if (!conversationId) {
+        const owned = this.db.query("SELECT id FROM conversations WHERE user_id=? AND id LIKE 'legacy-%' ORDER BY created LIMIT 1").get(userId) as {id:string}|null;
+        conversationId = owned?.id ?? 'legacy-' + randomBytes(16).toString('hex');
+        this.db.query('INSERT OR IGNORE INTO conversations VALUES(?,?,?,?,?)').run(conversationId,userId,'Ранее в приложении',Date.now(),Date.now());
+      }
       this.db.query("INSERT INTO turns(id,device,user_id,text,status,created) VALUES(?,?,?,?,'running',?)").run(id, device, userId, text, Date.now());
       if (conversationId) {
         this.db.query('INSERT INTO conversation_turns VALUES(?,?)').run(id,conversationId);
@@ -123,6 +129,26 @@ export class NativeAccess {
     this.db.query('UPDATE turns SET replies=? WHERE id=?').run(JSON.stringify(replies), id);
     })();
   }
+  turnConversation(turnId:string): string | undefined {
+    return (this.db.query('SELECT conversation_id FROM conversation_turns WHERE turn_id=?').get(turnId) as {conversation_id:string}|null)?.conversation_id;
+  }
+  linkApproval(approvalId: string, turnId: string, userId: string) {
+    const link = this.db.query('SELECT 1 FROM conversation_turns t JOIN conversations c ON c.id=t.conversation_id WHERE t.turn_id=? AND c.user_id=?').get(turnId,userId);
+    if (link) this.db.query('INSERT OR IGNORE INTO conversation_approvals(approval_id,turn_id) VALUES(?,?)').run(approvalId,turnId);
+  }
+  conversationApprovals(id: string, userId: string) {
+    if (!this.conversation(id,userId)) return null;
+    return this.db.query('SELECT a.approval_id,a.execution FROM conversation_approvals a JOIN conversation_turns t ON t.turn_id=a.turn_id WHERE t.conversation_id=?').all(id) as {approval_id:string;execution:string|null}[];
+  }
+  completeApproval(approvalId: string, userId: string, ok: boolean, text: string) {
+    this.db.transaction(() => {
+      const link = this.db.query('SELECT t.conversation_id FROM conversation_approvals a JOIN conversation_turns t ON t.turn_id=a.turn_id JOIN conversations c ON c.id=t.conversation_id WHERE a.approval_id=? AND c.user_id=? AND a.execution IS NULL').get(approvalId,userId) as {conversation_id:string}|null;
+      if (!link) return;
+      this.db.query('INSERT OR IGNORE INTO conversation_messages(id,conversation_id,role,text) VALUES(?,?,?,?)').run('approval:'+approvalId+':result',link.conversation_id,'assistant',text.slice(0,8000));
+      this.db.query('UPDATE conversation_approvals SET execution=? WHERE approval_id=?').run(ok ? 'completed' : 'failed',approvalId);
+      this.db.query('UPDATE conversations SET updated=? WHERE id=?').run(Date.now(),link.conversation_id);
+    })();
+  }
   conversation(id: string, userId: string) {
     return this.db.query('SELECT id,title,created,updated FROM conversations WHERE id=? AND user_id=?').get(id,userId);
   }
@@ -131,7 +157,13 @@ export class NativeAccess {
     return this.conversation(id,userId);
   }
   running(userId:string) { return !!this.db.query("SELECT 1 FROM turns WHERE user_id=? AND status='running'").get(userId); }
-  conversations(userId:string) { return this.db.query('SELECT id,title,created,updated FROM conversations WHERE user_id=? ORDER BY updated DESC LIMIT 200').all(userId); }
+  conversations(userId:string, before?: {updated:number;id:string}, limit = 200) {
+    const fields = 'SELECT id,title,created,updated FROM conversations WHERE user_id=?';
+    const order = ' ORDER BY updated DESC,id DESC LIMIT ?';
+    return (before
+      ? this.db.query(fields + ' AND (updated < ? OR (updated = ? AND id < ?))' + order).all(userId,before.updated,before.updated,before.id,limit)
+      : this.db.query(fields + order).all(userId,limit)) as {id:string;title:string;created:number;updated:number}[];
+  }
   history(id:string,userId:string,before = Number.MAX_SAFE_INTEGER) {
     if (!this.conversation(id,userId)) return null;
     const rows = this.db.query('SELECT seq,id,role,text FROM conversation_messages WHERE conversation_id=? AND seq<? ORDER BY seq DESC LIMIT 101').all(id,before) as {seq:number;id:string;role:string;text:string}[];

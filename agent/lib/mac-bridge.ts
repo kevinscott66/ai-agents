@@ -105,6 +105,9 @@ interface ClientState {
   authed: boolean;
   peerKey: string;
   authTimer?: ReturnType<typeof setTimeout>;
+  challenge?: { clientNonce: string; serverNonce: string };
+  sendSequence?: number;
+  receiveSequence?: number;
 }
 
 const DEFAULT_AUTH_TIMEOUT_MS = 10_000;
@@ -287,6 +290,7 @@ interface ServerHandle {
   port: number;
 }
 
+import { authNonce, authProof, signedServerFrame, verifySignedFrame, validAuthNonce, verifyAuthProof } from "../mac-daemon/auth-handshake.ts";
 import { getErrorMessage } from "./errors.ts";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { SECOND_MS, MINUTE_MS } from "./time-constants.ts";
@@ -353,10 +357,20 @@ export function _readMaxConcurrentRuns(): number {
  * Демон старой версии просто не знает такого типа и молча его игнорирует, так
  * что обновлять оба конца одновременно не обязательно.
  */
+function sendBridgeFrame(ws: any, body: string): unknown {
+  const state = ws.data as ClientState | undefined;
+  if (state?.authed && state.challenge) {
+    state.sendSequence = (state.sendSequence ?? 0) + 1;
+    const {clientNonce, serverNonce} = state.challenge;
+    return ws.send(JSON.stringify(signedServerFrame(process.env.MAC_BRIDGE_SECRET ?? "", clientNonce, serverNonce, state.sendSequence, body)));
+  }
+  return ws.send(body);
+}
+
 function cancelOnMac(id: string): void {
   if (!activeSocket) return;
   try {
-    activeSocket.send(JSON.stringify({ type: "cancel", id }));
+    sendBridgeFrame(activeSocket, JSON.stringify({ type: "cancel", id }));
   } catch (e) {
     log.debug("mac-bridge: cancel send failed", { e: String(e), id });
   }
@@ -453,7 +467,7 @@ function sendMacRequest(req: MacRunRequest | { operation: "calendar_today" | "op
     };
     try {
       const accepted = frameAccepted(
-        activeSocket.send(
+        sendBridgeFrame(activeSocket,
           JSON.stringify("operation" in req ? {
             type: "assistant", id, operation: req.operation,
           } : {
@@ -488,7 +502,7 @@ export function stopMac(): Promise<{ ok: boolean; error?: string }> {
       return;
     }
     try {
-      if (!frameAccepted(activeSocket.send(JSON.stringify({ type: "stop" })))) {
+      if (!frameAccepted(sendBridgeFrame(activeSocket, JSON.stringify({ type: "stop" })))) {
         // Кадр не ушёл — на маке ничего не остановилось. Записи о прогонах
         // здесь трогать нельзя: в них лежат id, по которым прогон ещё можно
         // отменить, и это единственный способ до него достучаться.
@@ -557,10 +571,35 @@ function handleClientMessage(ws: any, raw: string): void {
   }
   const state = (ws.data as ClientState) ?? { authed: false, peerKey: "unknown" };
 
-  if (msg?.type === "auth") {
+  if (state.authed && state.challenge) {
+    const {clientNonce, serverNonce} = state.challenge;
+    const body = verifySignedFrame(process.env.MAC_BRIDGE_SECRET ?? "", "client", clientNonce, serverNonce, (state.receiveSequence ?? 0) + 1, msg);
+    if (body === null) { ws.close(); return; }
+    state.receiveSequence = (state.receiveSequence ?? 0) + 1;
+    try { msg = JSON.parse(body); } catch { ws.close(); return; }
+  }
+
+  if (msg?.type === "auth_hello") {
+    if (state.authed || state.challenge || !validAuthNonce(msg.clientNonce)) { ws.close(); return; }
+    const expected = process.env.MAC_BRIDGE_SECRET ?? "";
+    if (expected.length < 32) { ws.close(); return; }
+    state.challenge = {clientNonce: msg.clientNonce, serverNonce: authNonce()};
+    ws.data = state;
+    ws.send(JSON.stringify({type: "auth_challenge", serverNonce: state.challenge.serverNonce,
+      proof: authProof(expected, "server", state.challenge.clientNonce, state.challenge.serverNonce)}));
+    return;
+  }
+
+  // Keep legacy client support for server-first rollout. New daemons never use it.
+  if (msg?.type === "auth" || msg?.type === "auth_proof") {
+    if (state.authed) { ws.close(); return; }
     const expected = process.env.MAC_BRIDGE_SECRET ?? "";
     const provided = typeof msg.secret === "string" ? msg.secret : "";
-    if (!expected || !secretsEqual(provided, expected)) {
+    const challenge = state.challenge;
+    const valid = msg.type === "auth_proof"
+      ? !!challenge && verifyAuthProof(expected, "client", challenge.clientNonce, challenge.serverNonce, msg.proof)
+      : process.env.MAC_BRIDGE_ALLOW_LEGACY_AUTH !== "false" && !challenge && secretsEqual(provided, expected);
+    if (!expected || !valid) {
       const tokenSummary = redactSecret(msg?.secret);
       log.warn(`[mac-bridge] auth_fail token=${tokenSummary} peer=${peerTag(ws)}`);
       try {
@@ -589,7 +628,9 @@ function handleClientMessage(ws: any, raw: string): void {
     lastPongTime = Date.now();
     failAllPending("mac_replaced");
     try {
-      ws.send(JSON.stringify({ type: "auth_ok" }));
+      ws.send(JSON.stringify({ type: "auth_ok", ...(challenge ? {
+        proof: authProof(expected, "accepted", challenge.clientNonce, challenge.serverNonce),
+      } : {}) }));
     } catch (e) {
       log.debug("mac-bridge: ws.send(auth_ok) failed", { e: String(e) });
     }
@@ -709,7 +750,7 @@ function startPinging(): void {
       return;
     }
     try {
-      activeSocket.send(JSON.stringify({ type: "ping" }));
+      sendBridgeFrame(activeSocket, JSON.stringify({ type: "ping" }));
     } catch (e) {
       log.warn("[mac-bridge] ping failed", { error: (e as Error)?.message });
     }

@@ -21,8 +21,7 @@ Bun-скрипт, который подключается по WebSocket к бэ
 
 ### Требования к `MAC_BRIDGE_URL`
 
-Демон отдаёт `MAC_BRIDGE_SECRET` первым же фреймом при открытии сокета — до
-любого обмена. Поэтому адрес проверяется на старте (`bridge-url.ts`):
+Демон проверяет мост взаимным HMAC-рукопожатием со случайными nonce и не передаёт секрет. Команды и результаты подписаны отдельно для каждого направления, соединения и порядкового номера. Адрес дополнительно проверяется на старте (`bridge-url.ts`):
 
 - `wss://` — куда угодно;
 - `ws://` — только на петлю (`localhost`, `127.0.0.0/8`, `::1`);
@@ -32,9 +31,13 @@ Bun-скрипт, который подключается по WebSocket к бэ
 не-петлевой адрес, Tailscale), запрет снимается явным
 `MAC_BRIDGE_INSECURE_PLAINTEXT=1`.
 
-Оговорка: на петле это не защищает от локального процесса, успевшего занять
-порт раньше бриджа. Такой процесс идёт от имени того же пользователя и может
-прочитать окружение демона напрямую — эта дыра здесь не закрывается.
+Подмена локального порта не позволяет выдать команды или результаты без ключа. HMAC не шифрует содержимое; для конфиденциальности требуется TLS или SSH-туннель.
+
+### Обновление протокола
+
+Сначала обновить backend (включая `mac-daemon/auth-handshake.ts`), затем Mac-демон. Новый демон не откатывается к старому рукопожатию. После обновления демона установить на backend `MAC_BRIDGE_ALLOW_LEGACY_AUTH=false` и перезапустить сервис, чтобы отключить совместимость со старыми клиентами. Откат требует согласованных версий обеих сторон.
+
+CLI запускается отдельной группой процессов; отмена и тайм-аут посылают SIGINT группе, затем SIGKILL после grace period, включая оставшиеся shell/tool-процессы.
 
 ## Запуск вручную
 
@@ -117,7 +120,7 @@ launchctl unload ~/Library/LaunchAgents/com.dobropalm.mac-daemon.plist
 
 ## Codex sessions
 
-The app's Mac form selects Claude Code or Codex. The existing `MAC_RUN_CLAUDE` action accepts `provider: "claude" | "codex"` (default Claude for compatibility). Codex travels as `run_codex`; an old daemon cannot silently run Claude for this request. Update the daemon before enabling the new server/UI.
+The app's Mac form selects Claude Code or Codex. The existing `MAC_RUN_CLAUDE` action accepts `provider: "claude" | "codex"` (default Claude for compatibility). Codex travels as `run_codex`; an old daemon cannot silently run Claude for this request. Deploy the backend first, then the daemon, then disable legacy authentication as described above.
 
 Install/sign in to Codex locally (`codex login status`). `CODEX_BIN` optionally names its executable; otherwise it must be in the daemon PATH. Prompts use stdin and the same project allowlist, stream limits and cancellation handling. Codex uses `exec`: ask/plan → read-only, accept_edits/auto → workspace-write, approval policy never (headless), network access for workspace commands disabled. User config and execpolicy overrides are ignored for this controlled invocation. Authentication still belongs to the local Codex installation, not daemon environment credentials. Codex bypass is rejected; there is no fallback to Claude on failure.
 

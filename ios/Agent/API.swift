@@ -1,6 +1,6 @@
 struct ConversationRecord: Codable, Identifiable { let id: String; let title: String; let updated: Double }
 struct ConversationMessage: Codable, Identifiable { let seq: Int; let id: String; let role: String; let text: String }
-struct ConversationIndex: Decodable { let conversations: [ConversationRecord]; let running: Bool }
+struct ConversationIndex: Decodable { let conversations: [ConversationRecord]; let running: Bool; let nextCursor: String?; let more: Bool }
 struct ConversationHistory: Decodable { let messages: [ConversationMessage]; let more: Bool; let running: Bool }
 import Foundation
 import Security
@@ -104,12 +104,22 @@ struct AgentAPI {
         let data = try await Self.readBody(bytes)
         return try JSONDecoder().decode(T.self, from: data)
     }
-    func conversations(expectedToken: String? = nil) async throws -> ConversationIndex {
-        return try await request("/api/native/conversations", expectedToken: expectedToken)
+    func conversations(cursor: String? = nil, expectedToken: String? = nil) async throws -> ConversationIndex {
+        var route = URLComponents(); route.path = "/api/native/conversations"
+        if let cursor { route.queryItems = [URLQueryItem(name: "cursor", value: cursor)] }
+        return try await request(route.string!, expectedToken: expectedToken)
+    }
+    static func conversationTitle(_ text: String) -> String {
+        var result = ""
+        for scalar in text.unicodeScalars {
+            guard result.utf16.count + scalar.utf16.count <= 100 else { break }
+            result.unicodeScalars.append(scalar)
+        }
+        return result
     }
     func createConversation(_ id: String, title: String, expectedToken: String? = nil) async throws {
         struct Result: Decodable { let conversation: ConversationRecord }
-        let _: Result = try await request("/api/native/conversations", body: ["id":id,"title":String(title.prefix(80))], expectedToken: expectedToken)
+        let _: Result = try await request("/api/native/conversations", body: ["id":id,"title":Self.conversationTitle(title)], expectedToken: expectedToken)
     }
     func history(_ id: String, before: Int? = nil, expectedToken: String? = nil) async throws -> ConversationHistory {
         guard id.range(of: #"^[a-zA-Z0-9-]{16,64}$"#, options: .regularExpression) != nil else { throw AgentError.message("Некорректный диалог") }

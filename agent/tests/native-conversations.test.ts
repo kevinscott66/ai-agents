@@ -42,7 +42,9 @@ test('restart migrates legacy turns once without replay', () => {
   const first=new NativeAccess(path);
   const collision='legacy-'+createHash('sha256').update('1').digest('hex').slice(0,32);
   first.createConversation(collision,'attacker','Claimed');
-  first.start('legacy-turn-00001','d','1','legacy'); first.append('legacy-turn-00001','answer'); first.db.close();
+  // Simulate a pre-archive database; current start() already creates its archive.
+  first.db.query("INSERT INTO turns(id,device,user_id,text,status,replies,created) VALUES(?,?,?,?,'running',?,?)").run('legacy-turn-00001','d','1','legacy',JSON.stringify(['answer']),Date.now());
+  first.db.close();
   const second=new NativeAccess(path); const conversation=second.conversations('1')[0] as {id:string};
   expect(second.history(conversation.id,'1')!.messages).toHaveLength(2);
   expect(second.history(collision,'attacker')!.messages).toHaveLength(0);

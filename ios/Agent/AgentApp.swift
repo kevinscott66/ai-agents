@@ -9,6 +9,9 @@ struct ChatLine: Identifiable, Codable { var id = UUID().uuidString; let role: S
     @Published var error: String?
     @Published var draft = ""
     @Published var conversations: [ConversationRecord] = []
+    @Published var moreConversations = false
+    private var conversationCursor: String?
+    private var loadedMoreConversations = false
     @Published var conversationId: String?
     @Published var moreHistory = false
     @Published var remoteBusy = false
@@ -24,6 +27,7 @@ struct ChatLine: Identifiable, Codable { var id = UUID().uuidString; let role: S
         if boundServer != server || boundToken != token {
             operation = UUID(); polling?.cancel(); polling = nil; busy = false
             syncGeneration = UUID(); boundServer = server; boundToken = token
+            conversationCursor = nil; moreConversations = false; loadedMoreConversations = false
             lines = []; conversations = []; fresh = false; firstSequence = nil; moreHistory = false; remoteBusy = false
             conversationId = UserDefaults.standard.string(forKey: "conversation:" + server)
         }
@@ -50,8 +54,9 @@ struct ChatLine: Identifiable, Codable { var id = UUID().uuidString; let role: S
             let index = try await AgentAPI(server: server).conversations(expectedToken: token)
             guard generation == syncGeneration, Credentials.read(server: server) == token, !busy, !pending else { return }
             let list = index.conversations
-            conversations = list; remoteBusy = index.running
-            if let id = conversationId, !list.contains(where: { $0.id == id }) { conversationId = nil; lines = []; firstSequence = nil }
+            mergeConversations(list); remoteBusy = index.running
+            if !loadedMoreConversations { conversationCursor = index.nextCursor; moreConversations = index.more }
+            if let id = conversationId, !index.more, !conversations.contains(where: { $0.id == id }) { conversationId = nil; lines = []; firstSequence = nil }
             if conversationId == nil && !fresh { conversationId = list.first?.id }
             if let id = conversationId {
                 let history = try await AgentAPI(server: server).history(id, before: older ? firstSequence : nil, expectedToken: token)
@@ -72,6 +77,25 @@ struct ChatLine: Identifiable, Codable { var id = UUID().uuidString; let role: S
             historyError = nil
         } catch { if generation == syncGeneration { historyError = "Не удалось синхронизировать диалоги: " + error.localizedDescription } }
     }
+    private func mergeConversations(_ incoming: [ConversationRecord]) {
+        let incomingIDs = Set(incoming.map(\.id))
+        conversations = (incoming + conversations.filter { !incomingIDs.contains($0.id) }).sorted {
+            $0.updated == $1.updated ? $0.id > $1.id : $0.updated > $1.updated
+        }
+    }
+    func loadMoreConversations(server: String) async {
+        bind(server: server)
+        guard !busy, !pending, !syncing, moreConversations, let cursor = conversationCursor, let token = boundToken else { return }
+        let generation = syncGeneration
+        syncing = true; defer { syncing = false }
+        do {
+            let index = try await AgentAPI(server: server).conversations(cursor: cursor, expectedToken: token)
+            guard generation == syncGeneration, Credentials.read(server: server) == token else { return }
+            mergeConversations(index.conversations)
+            conversationCursor = index.nextCursor; moreConversations = index.more; loadedMoreConversations = true
+            remoteBusy = index.running; historyError = nil
+        } catch { if generation == syncGeneration { historyError = "Не удалось загрузить диалоги: " + error.localizedDescription } }
+    }
     private let speaker = AVSpeechSynthesizer()
     private var polling: Task<Void, Never>?
     private var currentReplies = 0
@@ -80,6 +104,7 @@ struct ChatLine: Identifiable, Codable { var id = UUID().uuidString; let role: S
     @discardableResult func send(server: String) -> Bool {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !busy, !remoteBusy else { return false }
+        guard text.utf16.count <= 8_000 else { error = "Сообщение слишком длинное. Сократите его до 8000 символов."; return false }
         guard !pending else { error = "Сначала проверьте ответ на предыдущий запрос."; return false }
         bind(server: server)
         guard let token = boundToken else { error = "Подключите устройство в настройках"; return false }
@@ -237,12 +262,15 @@ struct RootView: View {
         // the initial inactive ScenePhase and never starts fetching confirmations.
         .task(id: server + (scenePhase == .active ? "|active" : "|inactive")) {
             while !Task.isCancelled {
-                if scenePhase == .active { await approvals.refresh(server: server); await model.synchronize(server: server) }
+                if scenePhase == .active { await approvals.refresh(server: server, conversation: model.conversationId); await model.synchronize(server: server) }
                 do { try await Task.sleep(for: .seconds(5)) } catch { break }
             }
         }
+        .onChange(of: model.conversationId) { _, conversation in
+            Task { await approvals.refresh(server: server, conversation: conversation) }
+        }
         .onChange(of: model.busy) { _, busy in
-            if !busy && scenePhase == .active { Task { await approvals.refresh(server: server) } }
+            if !busy && scenePhase == .active { Task { await approvals.refresh(server: server, conversation: model.conversationId) } }
         }
         .onChange(of: voice.text) { _, value in model.draft = value }
         .onChange(of: voice.error) { _, value in if let value { model.error = value } }
@@ -274,6 +302,7 @@ struct RootView: View {
                                 }
                             }.disabled(model.busy || model.pending)
                         }
+                        if model.moreConversations { Button("Предыдущие диалоги") { Task { await model.loadMoreConversations(server: server) } } }
                         Button("Обновить историю") { Task { await model.synchronize(server: server) } }
                     }
                     Section("Быстрый старт") {
@@ -320,6 +349,9 @@ struct RootView: View {
                     LazyVStack(alignment: .leading, spacing: 26) {
                         if model.moreHistory { Button("Предыдущие сообщения") { Task { await model.synchronize(server: server, older: true) } } }
                         ForEach(model.lines) { line in
+                            if let item = approvals.items.first(where: { line.id == "approval:" + $0.id + ":result" }) {
+                                approvalCard(item)
+                            }
                             if line.role == "Вы" {
                                 HStack { Spacer(minLength: 44); Text(line.text).font(.body).textSelection(.enabled).padding(.horizontal, 18).padding(.vertical, 12).background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 24)) }.id(line.id)
                             } else {
@@ -333,10 +365,8 @@ struct RootView: View {
                                 }.id(line.id)
                             }
                         }
-                        ForEach(approvals.items) { item in
-                            ChatApprovalCard(item: item, outcome: approvals.outcomes[item.id], working: approvals.working.contains(item.id)) { approve in
-                                Task { await approvals.decide(item, approve: approve, server: server) }
-                            }.id("approval-" + item.id)
+                        ForEach(approvals.items.filter { item in !model.lines.contains(where: { $0.id == "approval:" + item.id + ":result" }) }) { item in
+                            approvalCard(item)
                         }
                         if model.busy { HStack(spacing: 10) { ProgressView(); Text("Агент работает").font(.subheadline).foregroundStyle(.secondary) } }
                     }.padding(.horizontal, 22).padding(.vertical, 24)
@@ -353,6 +383,14 @@ struct RootView: View {
                 }
         }
     }
+    private func approvalCard(_ item: ChatApproval) -> some View {
+        ChatApprovalCard(item: item, outcome: approvals.outcomes[item.id], working: approvals.working.contains(item.id)) { approve in
+            Task {
+                await approvals.decide(item, approve: approve, server: server)
+                await model.synchronize(server: server)
+            }
+        }.id("approval-" + item.id)
+    }
     private func suggestion(_ title: String, icon: String, prompt: String) -> some View {
         Button { choose(prompt) } label: { Label(title, systemImage: icon).font(.subheadline).padding(.horizontal, 16).padding(.vertical, 12) }
             .buttonStyle(.plain).overlay(Capsule().stroke(ink.opacity(0.10), lineWidth: 0.7))
@@ -360,7 +398,7 @@ struct RootView: View {
     private var composer: some View {
         VStack(spacing: 10) {
             if let error = approvals.error {
-                HStack { Text(error).font(.caption).foregroundStyle(.secondary); Button("Повторить") { Task { await approvals.refresh(server: server) } } }.padding(.horizontal, 12)
+                HStack { Text(error).font(.caption).foregroundStyle(.secondary); Button("Повторить") { Task { await approvals.refresh(server: server, conversation: model.conversationId) } } }.padding(.horizontal, 12)
             }
             if let error = model.error { Text(error).font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 8) }
             if model.pending {

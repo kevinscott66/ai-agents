@@ -50,6 +50,12 @@ export interface PingMsg {
 }
 export interface AuthOkMsg {
   type: "auth_ok";
+  proof?: string;
+}
+export interface AuthChallengeMsg {
+  type: "auth_challenge";
+  serverNonce: string;
+  proof: string;
 }
 export interface AuthFailMsg {
   type: "auth_fail";
@@ -80,6 +86,7 @@ export type BridgeMsg =
   | RunMsg
   | PingMsg
   | AuthOkMsg
+  | AuthChallengeMsg
   | AuthFailMsg
   | StopMsg
   | CancelMsg;
@@ -119,8 +126,11 @@ export function parseBridgeMsg(raw: unknown): ParsedMsg {
       return { type: "assistant", id: m.id, operation: m.operation };
     case "ping":
       return { type: "ping" };
+    case "auth_challenge":
+      return typeof m.serverNonce === "string" && typeof m.proof === "string"
+        ? {type: "auth_challenge", serverNonce: m.serverNonce, proof: m.proof} : null;
     case "auth_ok":
-      return { type: "auth_ok" };
+      return { type: "auth_ok", ...(typeof m.proof === "string" ? {proof: m.proof} : {}) };
     case "auth_fail":
       return {
         type: "auth_fail",

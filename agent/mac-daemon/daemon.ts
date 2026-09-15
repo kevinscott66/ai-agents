@@ -14,6 +14,7 @@ import { parseBridgeMsg, toPermissionMode, type RunMsg } from "./protocol.ts";
 import { sanitizeChildEnv, resolveClaudeBin } from "./child-env.ts";
 import { codexCommand } from "./codex-command.ts";
 import { runAssistantOperation } from "./assistant.ts";
+import { createDaemonHandshake } from "./auth-handshake.ts";
 import { createAuthGate } from "./auth-gate.ts";
 // Порт в подсказке при старте: раньше литерал 8787 — это HTTP-порт Mini App,
 // а не мост. Оператор по такой подсказке открывал WS к серверу панели, где
@@ -109,7 +110,14 @@ function resolveAllowedProject(project: string): string | null {
 }
 
 const assistantControllers = new Map<string, AbortController>();
-const activeChildren = new Map<string, ReturnType<typeof Bun.spawn>>();
+const activeChildren = new Map<string, KillableChild>();
+
+const handshakes = new WeakMap<WebSocket, ReturnType<typeof createDaemonHandshake>>();
+function sendDaemonFrame(ws: WebSocket, body: string): void {
+  const frame = handshakes.get(ws)?.wrap(body);
+  if (!frame) throw new Error("bridge_not_authenticated");
+  ws.send(JSON.stringify(frame));
+}
 
 function sendChunk(
   ws: WebSocket,
@@ -118,7 +126,7 @@ function sendChunk(
   data: string,
 ): void {
   try {
-    ws.send(JSON.stringify({ type: "chunk", id, stream, data }));
+    sendDaemonFrame(ws, JSON.stringify({ type: "chunk", id, stream, data }));
   } catch {}
 }
 
@@ -130,7 +138,7 @@ function sendResult(
   error?: string,
 ): void {
   try {
-    ws.send(JSON.stringify({ type: "result", id, ok, code, error }));
+    sendDaemonFrame(ws, JSON.stringify({ type: "result", id, ok, code, error }));
   } catch {}
 }
 
@@ -182,6 +190,8 @@ async function handleRun(ws: WebSocket, msg: RunMsg): Promise<void> {
       // ignores — so the operator-selected mode (plan/ask/…) was never enforced.
       cmd: msg.provider === "codex" ? codexCommand(mode, process.env) : [CLAUDE_BIN, "--print", "--permission-mode", permissionMode],
       cwd: allowedProject,
+      // Give each run its own group so cancellation includes shell/tool children.
+      detached: true,
       // SEC-audit: the spawned `claude` must not inherit daemon credentials.
       // Authentication belongs to the local Claude installation/keychain; only
       // the explicit non-secret runtime environment crosses this boundary.
@@ -200,7 +210,7 @@ async function handleRun(ws: WebSocket, msg: RunMsg): Promise<void> {
     );
     return;
   }
-  activeChildren.set(id, child);
+  activeChildren.set(id, {kill:signal=>child.kill(signal),exited:child.exited,processGroupId:child.pid});
   // Feed prompt on stdin and close.
   try {
     const w = child.stdin as unknown as WritableStreamDefaultWriter<Uint8Array>;
@@ -316,6 +326,7 @@ function connect(): void {
   // Гейт на соединение: реконнект начинает с нуля. Модульный флаг здесь был бы
   // дырой — коннект после падения туннеля унаследовал бы доверие от предыдущего.
   const gate = createAuthGate();
+  const handshake = createDaemonHandshake(SECRET);
   console.log(`[daemon] connecting → ${url}`);
   let ws: WebSocket;
   try {
@@ -325,21 +336,22 @@ function connect(): void {
     scheduleReconnect();
     return;
   }
+  handshakes.set(ws, handshake);
   ws.addEventListener("open", () => {
     console.log("[daemon] socket open, sending auth");
     lastBridgeMsg = Date.now();
     startWatchdog(ws);
-    ws.send(JSON.stringify({ type: "auth", secret: SECRET }));
+    ws.send(JSON.stringify(handshake.hello));
   });
   ws.addEventListener("message", (ev) => {
     // Любое сообщение от моста = признак живого соединения (для watchdog).
     // Считаем ДО разбора: кривой кадр — тоже признак живого моста.
     lastBridgeMsg = Date.now();
-    const msg = parseBridgeMsg(ev.data);
+    const raw = gate.authenticated ? handshake.unwrap(ev.data) : ev.data;
+    if (raw === null) { ws.close(); return; }
+    const msg = parseBridgeMsg(raw);
     if (msg === null) return;
-    // Мост доказывает себя `auth_ok` ровно так же, как демон доказывает себя
-    // секретом. До этого исполняемые кадры не принимаются — иначе `run`
-    // приходит от того, кто просто занял адрес моста. Подробности — auth-gate.ts.
+    // Executable frames require a verified, connection-bound mutual HMAC handshake.
     if (!gate.accepts(msg)) {
       console.warn(`[daemon] dropping '${msg.type}' received before auth_ok`);
       return;
@@ -350,10 +362,17 @@ function connect(): void {
         // Раньше daemon его игнорировал → lastPongTime на мосту всегда null →
         // mac_online залипал в «assume online» даже у зомби-сокета. Отвечаем.
         try {
-          ws.send(JSON.stringify({ type: "pong" }));
+          sendDaemonFrame(ws, JSON.stringify({ type: "pong" }));
         } catch {}
         return;
+      case "auth_challenge": {
+        const proof = handshake.challenge(msg);
+        if (!proof) { ws.close(); return; }
+        ws.send(JSON.stringify(proof));
+        return;
+      }
       case "auth_ok":
+        if (!handshake.accept(msg.proof)) { ws.close(); return; }
         console.log("[daemon] authenticated");
         gate.markAuthenticated();
         backoffIdx = 0;
