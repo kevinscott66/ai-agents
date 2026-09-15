@@ -233,11 +233,16 @@ struct RootView: View {
                 .safeAreaInset(edge: .bottom, spacing: 0) { composer }
                 .background(canvas)
         }
-        .task(id: server) {
+        // Restart when foreground state changes; a long-lived task otherwise captures
+        // the initial inactive ScenePhase and never starts fetching confirmations.
+        .task(id: server + (scenePhase == .active ? "|active" : "|inactive")) {
             while !Task.isCancelled {
                 if scenePhase == .active { await approvals.refresh(server: server); await model.synchronize(server: server) }
                 do { try await Task.sleep(for: .seconds(5)) } catch { break }
             }
+        }
+        .onChange(of: model.busy) { _, busy in
+            if !busy && scenePhase == .active { Task { await approvals.refresh(server: server) } }
         }
         .onChange(of: voice.text) { _, value in model.draft = value }
         .onChange(of: voice.error) { _, value in if let value { model.error = value } }
@@ -354,7 +359,9 @@ struct RootView: View {
     }
     private var composer: some View {
         VStack(spacing: 10) {
-            if let error = approvals.error { Text(error).font(.caption).foregroundStyle(.secondary) }
+            if let error = approvals.error {
+                HStack { Text(error).font(.caption).foregroundStyle(.secondary); Button("Повторить") { Task { await approvals.refresh(server: server) } } }.padding(.horizontal, 12)
+            }
             if let error = model.error { Text(error).font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 8) }
             if model.pending {
                 HStack {

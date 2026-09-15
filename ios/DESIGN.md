@@ -68,3 +68,7 @@ The bridge uses the paired Keychain credential without exposing it to scripts. S
 Compose starts a separate dialog. Menu lists synchronized titles/dates; «Предыдущие сообщения» loads older messages while retaining loaded pages during refresh. Another device's active turn is explained with a text status. Connection switching is disabled during pending work.
 
 Mac adds a project/task form with a single submission button. It preserves input on rejected local submission and directs accepted requests to chat for results and confirmations. Status cards use a full-width wrapping name row, with metadata and the status badge below; this removes one-letter truncation at iPhone widths.
+
+### Confirmation refresh lifecycle (0.1.5)
+
+The polling task is keyed by server and active ScenePhase so an initial inactive capture cannot keep refresh disabled. Completing a lead turn triggers an immediate confirmation refresh. Refresh failures expose a Retry action. A reported missing Mac confirmation was verified pending on the server for the paired owner; no approval was executed during diagnosis.
