@@ -99,6 +99,7 @@ struct ChatApprovalCard: View {
     let working: Bool
     let decide: (Bool) -> Void
     @State private var expanded = true
+    @Environment(\.colorScheme) private var scheme
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Label("Нужно подтверждение", systemImage: "hand.raised").font(.headline)
@@ -112,7 +113,7 @@ struct ChatApprovalCard: View {
             else {
                 HStack(spacing: 12) {
                     Button("Отклонить", role: .destructive) { decide(false) }.buttonStyle(.bordered)
-                    Button("Подтвердить") { decide(true) }.buttonStyle(.borderedProminent)
+                    Button { decide(true) } label: { Text("Подтвердить").foregroundStyle(scheme == .dark ? Color.black : Color.white) }.buttonStyle(.borderedProminent).tint(scheme == .dark ? Color.white : Color.black)
                 }.controlSize(.large).disabled(working)
             }
             if working { ProgressView("Применяем решение…").font(.caption) }
