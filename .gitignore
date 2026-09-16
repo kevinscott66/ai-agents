@@ -78,3 +78,6 @@ agent/memory/_team/projects/wiki-view-test-page.md
 
 # Reproducible bundled iPhone panel
 ios/Agent/Panel/
+
+/ios/Agent/OpenFlux.xcframework/
+/ios/OpenFluxCore/build/

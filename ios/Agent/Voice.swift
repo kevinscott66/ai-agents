@@ -12,6 +12,7 @@ import SwiftUI
     private var task: SFSpeechRecognitionTask?
     private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "ru-RU"))
     private var hasTap = false
+    private var ownsSession = false
     private var generation = UUID()
     func start() async {
         guard !recording, !starting else { return }
@@ -33,8 +34,10 @@ import SwiftUI
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.record, mode: .measurement, options: .duckOthers)
             try session.setActive(true)
+            ownsSession = true
             let request = SFSpeechAudioBufferRecognitionRequest()
             request.shouldReportPartialResults = true
+            request.addsPunctuation = true
             self.request = request
             let input = engine.inputNode
             let format = input.outputFormat(forBus: 0)
@@ -54,11 +57,14 @@ import SwiftUI
         } catch { stop(); self.error = error.localizedDescription }
     }
     func stop() {
+        let ownedSession = ownsSession
+        ownsSession = false
         generation = UUID()
         engine.stop()
         if hasTap { engine.inputNode.removeTap(onBus: 0); hasTap = false }
         request?.endAudio(); task?.cancel(); task = nil; request = nil
         recording = false; starting = false
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        let session = AVAudioSession.sharedInstance()
+        if ownedSession && session.category == .record && session.mode == .measurement { try? session.setActive(false, options: .notifyOthersOnDeactivation) }
     }
 }

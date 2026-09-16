@@ -8,7 +8,7 @@ import UniformTypeIdentifiers
 }
 struct PanelView: View {
     let server: String
-    var onMacStart: ((String, String, String) throws -> Void)? = nil
+    var onMacStart: ((String, String, String, Bool) throws -> Void)? = nil
     @StateObject private var state = PanelLoadState()
     @State private var generation = UUID()
     var body: some View {
@@ -31,7 +31,7 @@ struct PanelView: View {
 struct PanelWebView: UIViewRepresentable {
     let server: String
     @ObservedObject var state: PanelLoadState
-    var onMacStart: ((String, String, String) throws -> Void)? = nil
+    var onMacStart: ((String, String, String, Bool) throws -> Void)? = nil
     func makeCoordinator() -> Coordinator { Coordinator(server: server, state: state, onMacStart: onMacStart) }
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -63,8 +63,8 @@ struct PanelWebView: UIViewRepresentable {
         var entry = URL(string: "agent-panel://bundle/index.html")!
         private var watchdog: Task<Void, Never>?
         private var closed = false
-        let onMacStart: ((String, String, String) throws -> Void)?
-        init(server: String, state: PanelLoadState, onMacStart: ((String, String, String) throws -> Void)?) { self.server = server; self.state = state; self.onMacStart = onMacStart }
+        let onMacStart: ((String, String, String, Bool) throws -> Void)?
+        init(server: String, state: PanelLoadState, onMacStart: ((String, String, String, Bool) throws -> Void)?) { self.server = server; self.state = state; self.onMacStart = onMacStart }
         func load(_ view: WKWebView) {
             guard !closed else { return }
             view.load(URLRequest(url: entry))
@@ -113,13 +113,13 @@ struct PanelWebView: UIViewRepresentable {
             }
             if !closed, message.frameInfo.isMainFrame, message.frameInfo.request.url?.scheme == "agent-panel",
                message.frameInfo.request.url?.host == "bundle", let input = message.body as? [String: Any],
-               let launch = input["macStart"] as? [String: String] {
-                let provider = launch["provider"] ?? "claude"
-                guard ["claude", "codex"].contains(provider), let project = launch["project"], let prompt = launch["prompt"],
-                      !project.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, project.count <= 500,
-                      !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, prompt.count <= 4000,
-                      let onMacStart else { replyHandler(nil, "Не удалось передать задачу в чат"); return }
-                do { try onMacStart(project, prompt, provider); replyHandler(["ok": true], nil) }
+               let launch = input["macStart"] as? [String: Any] {
+                do {
+                    let request = try PanelMacLaunch(launch)
+                    guard let onMacStart else { throw AgentError.message("Не удалось передать задачу в чат") }
+                    try onMacStart(request.project, request.prompt, request.provider, request.allowFallback)
+                    replyHandler(["ok": true], nil)
+                }
                 catch { replyHandler(nil, error.localizedDescription) }
                 return
             }
@@ -184,11 +184,40 @@ enum PanelTransport {
         if method == "POST" { request.httpBody = body?.data(using: .utf8); request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         let config = URLSessionConfiguration.ephemeral; config.httpShouldSetCookies = false
         config.timeoutIntervalForRequest = 12; config.timeoutIntervalForResource = 15
+        #if os(iOS)
+        try await FluxNetwork.configure(config)
+        #endif
         let session = URLSession(configuration: config, delegate: NoRedirect(), delegateQueue: nil)
         defer { session.invalidateAndCancel() }
         let (bytes, response) = try await session.bytes(for: request)
         guard let response = response as? HTTPURLResponse, response.expectedContentLength <= Int64(AgentAPI.maximumResponseBytes) else { throw AgentError.message("Ответ панели слишком большой") }
         let data = try await AgentAPI.readBody(bytes)
         return ["status": response.statusCode, "body": String(data: data, encoding: .utf8) ?? ""]
+    }
+}
+
+struct PanelMacLaunch {
+    let project: String
+    let prompt: String
+    let provider: String
+    let allowFallback: Bool
+    init(_ fields: [String: Any]) throws {
+        let provider = fields["provider"] as? String ?? "claude"
+        guard fields["provider"] == nil || fields["provider"] is String,
+              ["claude", "codex"].contains(provider),
+              let project = fields["project"] as? String,
+              let prompt = fields["prompt"] as? String,
+              !project.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, project.count <= 500,
+              !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, prompt.count <= 4000,
+              fields["allowFallback"] == nil || (fields["allowFallback"] as? NSNumber).map({ String(cString: $0.objCType) == "c" }) == true
+        else { throw AgentError.message("Недопустимые параметры сессии") }
+        self.project = project; self.prompt = prompt; self.provider = provider
+        self.allowFallback = provider == "claude" && (fields["allowFallback"] as? Bool ?? false)
+    }
+    static func draft(project: String, prompt: String, provider: String, allowFallback: Bool) -> String {
+        let policy = allowFallback
+            ? "Другой исполнитель разрешён только если выбранный недоступен до начала выполнения; после начала выполнения не повторяй задачу другим исполнителем."
+            : "Не заменяй исполнителя."
+        return "Запусти рабочую сессию на моём Mac через MAC_RUN_CLAUDE. Первый исполнитель: \(provider). Передай provider=\(provider), allowFallback=\(allowFallback ? "true" : "false") в MAC_RUN_CLAUDE. \(policy) Проект: \(project). Задача: \(prompt)"
     }
 }

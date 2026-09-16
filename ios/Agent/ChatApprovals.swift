@@ -11,9 +11,10 @@ struct ChatApproval: Identifiable, Decodable {
     let execution: String?
     var details: String {
         guard case .object(let fields) = payload else { return payload?.description ?? "Описание отсутствует" }
-        let labels = ["project":"Проект", "prompt":"Задача", "provider":"Исполнитель", "mode":"Режим"]
-        let keys = fields.keys.filter { !$0.hasPrefix("_") }.sorted()
-        return keys.map { "\(labels[$0] ?? $0): \(fields[$0]!.description)" }.joined(separator: "\n")
+        let labels = ["project":"Проект", "prompt":"Задача", "provider":"Первый исполнитель", "mode":"Режим"]
+        let keys = fields.keys.filter { !$0.hasPrefix("_") && !(action_type == "MAC_RUN_CLAUDE" && $0 == "allowFallback") }.sorted()
+        let fallback = action_type == "MAC_RUN_CLAUDE" && redacted != true ? "\nДругой исполнитель: " + (fields["provider"]?.description != "codex" && fields["allowFallback"]?.description == "Да" ? "разрешён только при недоступности первого до запуска" : "не разрешён") : ""
+        return keys.map { "\(labels[$0] ?? $0): \(fields[$0]!.description)" }.joined(separator: "\n") + fallback
     }
 }
 indirect enum ApprovalValue: Decodable {
@@ -48,6 +49,13 @@ indirect enum ApprovalValue: Decodable {
     private var currentOwner = ""
     private var credential: String?
     private var generation = UUID()
+    private var accepted: Set<String> = []
+    var visibleItems: [ChatApproval] {
+        items.filter { item in
+            if item.execution == "failed" || item.execution == "interrupted" || item.status == "failed" { return true }
+            return !accepted.contains(item.id) && item.status != "approved" && item.execution != "completed"
+        }
+    }
     private var terminal: Set<String> = []
     private var awaitingDecision: Set<String> = []
     private func matches(_ server: String, _ token: String) -> Bool { currentServer == server && credential == token && Credentials.read(server: server) == token }
@@ -55,7 +63,7 @@ indirect enum ApprovalValue: Decodable {
         let token = Credentials.read(server: server)
         if currentServer != server || credential != token || currentConversation != conversation {
             currentServer = server; credential = token; currentConversation = conversation
-            currentOwner = ""; items = []; outcomes = [:]; working = []; awaitingDecision = []; terminal = []; error = nil
+            currentOwner = ""; items = []; outcomes = [:]; working = []; awaitingDecision = []; terminal = []; accepted = []; error = nil
             generation = UUID()
         }
         guard let token, let conversation else { return }
@@ -113,6 +121,7 @@ indirect enum ApprovalValue: Decodable {
                result.approval.status == (approve ? "approved" : "rejected"), result.executed == approve {
                 awaitingDecision.remove(item.id)
                 terminal.insert(item.id)
+                if approve { accepted.insert(item.id) }
                 outcomes[item.id] = approve ? "Выполнено. Результат — в сообщении ниже." : "Отклонено. Действие не выполнено."
             } else {
                 outcomes[item.id] = "Сервер не подтвердил выполнение (\(status)). Проверьте результат у Агента перед повтором."

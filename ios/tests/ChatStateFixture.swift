@@ -1,14 +1,23 @@
 import Foundation
-struct Turn { let id: String; let status: String; let replies: [String] }
+struct NativeReplyDetail { let messageId: String; let agentKey: String }
+struct Turn { let id: String; let status: String; let replies: [String]; var replyDetails: [NativeReplyDetail]? = nil; var outputMedia: [NativeOutputMedia]? = nil; var generations: [NativeGeneration]? = nil }
 @MainActor var continuations: [CheckedContinuation<Turn, Error>] = []
 @MainActor var polledServers: [String] = []
 struct ConversationRecord: Codable, Identifiable { let id: String; let title: String; let updated: Double }
-struct ConversationMessage: Codable, Identifiable { let seq: Int; let id: String; let role: String; let text: String }
+struct SharedLocation: Codable, Equatable { let latitude: Double; let longitude: Double; var accuracy: Double? = nil }
+struct NativeAttachment: Codable, Identifiable, Equatable { let id: String; let name: String; let mimeType: String; let size: Int }
+struct AttachmentDraft: Identifiable { let id: String; let name: String; let mimeType: String; let data: Data; var metadata: NativeAttachment {NativeAttachment(id:id,name:name,mimeType:mimeType,size:data.count)} }
+struct ConversationMessage: Codable, Identifiable { let seq: Int; let id: String; let role: String; let text: String; var agentKey: String? = nil; var attachments: [NativeAttachment]? = nil; var location: SharedLocation? = nil }
+
 struct ConversationIndex { let conversations: [ConversationRecord]; let running: Bool; let nextCursor: String?; let more: Bool }
-struct ConversationHistory { let messages: [ConversationMessage]; let more: Bool; let running: Bool }
+struct ConversationHistory { let messages: [ConversationMessage]; let more: Bool; let running: Bool; var generations: [NativeGeneration]? = nil }
 struct TurnRejected: Error { let message: String }
 enum AgentError: Error { case message(String) }
 @MainActor enum Credentials { static var token = "fixture"; static func read(server: String) -> String? { token } }
+@MainActor var uploadFails = false
+@MainActor var sentMedia: [String] = []
+@MainActor var sentLocation: SharedLocation?
+@MainActor var pollResult: Turn?
 @MainActor var remoteRunning = false
 @MainActor var archive: [ConversationMessage] = []
 @MainActor var conversationList: [ConversationRecord] = []
@@ -25,13 +34,26 @@ struct AgentAPI {
   let rows = archive.filter { $0.seq < (before ?? Int.max) }
   return ConversationHistory(messages: Array(rows.suffix(100)), more: rows.count > 100, running: remoteRunning)
  }
- @MainActor func send(_ text: String, id: String, conversationId: String? = nil, expectedToken: String? = nil) async throws -> Turn {
-  try await withCheckedThrowingContinuation { continuations.append($0) }
+ @MainActor func send(_ text: String, id: String, conversationId: String? = nil, expectedToken: String? = nil, attachmentIds: [String] = [], location: SharedLocation? = nil) async throws -> Turn {
+  sentMedia = attachmentIds; sentLocation = location
+  return try await withCheckedThrowingContinuation { continuations.append($0) }
  }
+ @MainActor func upload(_ item: AttachmentDraft, expectedToken: String) async throws -> NativeAttachment { if uploadFails { throw URLError(.cannotConnectToHost) }; return item.metadata }
  @MainActor func poll(_ id: String, expectedToken: String? = nil) async throws -> Turn {
   polledServers.append(server)
-  return Turn(id: id, status: "done", replies: [])
+  return pollResult ?? Turn(id: id, status: "done", replies: [])
  }
+}
+
+struct NativeGeneration: Codable, Identifiable, Equatable {
+    let id: String
+    let state: String
+    let started: Double
+    var ended: Double? = nil
+}
+struct NativeOutputMedia: Codable {
+    let messageId: String
+    let attachments: [NativeAttachment]
 }
 
 // MODEL_UNDER_TEST
@@ -111,6 +133,54 @@ struct AgentAPI {
    precondition(!rejected.pending && rejected.draft == "restore this" && rejected.lines.isEmpty)
    precondition(UserDefaults.standard.string(forKey:"pendingTurn") == nil)
   }
+  let mediaModel = ChatModel()
+  let file = AttachmentDraft(id:"fixture-attachment",name:"photo.jpg",mimeType:"image/jpeg",data:Data([1,2,3]))
+  mediaModel.attachments = [file]
+  mediaModel.location = SharedLocation(latitude:55.7,longitude:37.6)
+  let position = continuations.count
+  precondition(mediaModel.send(server:"https://media.example"))
+  while continuations.count <= position { await Task.yield() }
+  precondition(sentMedia == [file.id] && sentLocation?.latitude == 55.7)
+  precondition(mediaModel.lines.first?.attachments?.first?.id == file.id && mediaModel.attachments.isEmpty)
+  continuations[position].resume(returning: Turn(id:"media-turn",status:"done",replies:["Первая часть","Вторая часть"]))
+  while mediaModel.busy { await Task.yield() }
+  precondition(mediaModel.newReplyForSpeech?.text == "Первая часть\n\nВторая часть")
+  let failed = ChatModel(); failed.attachments = [file]; failed.location = SharedLocation(latitude:0,longitude:0)
+  uploadFails = true
+  precondition(failed.send(server:"https://upload-failure.example"))
+  while failed.busy { await Task.yield() }
+  precondition(!failed.pending && failed.attachments.count == 1 && failed.location?.latitude == 0 && failed.lines.isEmpty)
+  uploadFails = false
+  let output = NativeOutputMedia(messageId: "recover:reply:1", attachments: [file.metadata])
+  let job = NativeGeneration(id: UUID().uuidString, state: "completed", started: 1, ended: 2)
+  UserDefaults.standard.set("recover", forKey: "pendingTurn")
+  UserDefaults.standard.set("https://recover.example", forKey: "pendingServer")
+  pollResult = Turn(id: "recover", status: "done", replies: [""], outputMedia: [output], generations: [job])
+  let recovery = ChatModel(); recovery.resume()
+  while recovery.busy { await Task.yield() }
+  precondition(recovery.lines.count == 1 && recovery.lines.first?.attachments?.first?.id == file.id)
+  precondition(recovery.generations == [job] && recovery.newReplyForSpeech == nil)
+  UserDefaults.standard.set("recover", forKey: "pendingTurn")
+  UserDefaults.standard.set("https://recover.example", forKey: "pendingServer")
+  pollResult = Turn(id: "recover", status: "done", replies: ["Сохранённый результат"], outputMedia: [output], generations: [job])
+  recovery.resume()
+  while recovery.busy { await Task.yield() }
+  precondition(recovery.lines.count == 1 && recovery.generations.count == 1, "Repeated poll duplicated media")
+  precondition(recovery.newReplyForSpeech == nil, "Recovered caption replayed speech")
+  pollResult = nil
+  archive = [ConversationMessage(seq:1,id:"discussion:reply:1",role:"assistant",text:"QA review",agentKey:"qa")]
+  await model.selectConversation(conversationList[0].id, server:"https://catalog.example")
+  precondition(model.lines.first?.agentKey == "qa", "History lost role attribution")
+  UserDefaults.standard.set("recover", forKey: "pendingTurn")
+  UserDefaults.standard.set("https://recover.example", forKey: "pendingServer")
+  pollResult = Turn(id: "recover", status: "done", replies: ["Reviewed"], replyDetails: [NativeReplyDetail(messageId:"recover:reply:1",agentKey:"qa")], outputMedia: [output])
+  recovery.resume()
+  while recovery.busy { await Task.yield() }
+  precondition(recovery.lines.count == 1 && recovery.lines.first?.agentKey == "qa", "Poll lost role or duplicated reply")
+  let saved = try! JSONEncoder().encode(recovery.lines)
+  precondition(try! JSONDecoder().decode([ChatLine].self, from: saved).first?.attachments == [file.metadata])
+  print("PASS: media-only recovered output, stable poll IDs, generation reconciliation and no recovery speech")
+  print("PASS: media-only send, upload-failure restoration, location and complete speech batch")
   print("PASS: synchronized history, pagination, restoration and cross-server isolation")
   print("PASS: stale cancellation isolation and pending-server recovery")
  }
