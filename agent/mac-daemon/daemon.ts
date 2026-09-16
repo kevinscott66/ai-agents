@@ -7,11 +7,16 @@
  * on socket close. Project allowlist enforced via MAC_PROJECT_ROOTS (CSV).
  */
 import { resolve as pathResolve, dirname } from "node:path";
-import { realpathSync, existsSync, lstatSync, mkdirSync } from "node:fs";
+import { realpathSync, existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { bridgeSecretTransportError } from "./bridge-url.ts";
 import { cancelRun, killAll, type KillableChild } from "./kill.ts";
 import { parseBridgeMsg, toPermissionMode, type RunMsg } from "./protocol.ts";
 import { sanitizeChildEnv, resolveClaudeBin } from "./child-env.ts";
+import { isolatedClaudeProbeEnv } from "./probe-config.ts";
+import { tmpdir } from "node:os";
+import { claudeReadinessCommand, probeClaudeReadiness } from "./readiness-preflight.ts";
+import { probeClaudeAuth } from "./auth-preflight.ts";
+import { spawnWithFallback, type ProviderMetadata } from "./provider-fallback.ts";
 import { codexCommand } from "./codex-command.ts";
 import { runAssistantOperation, assistantErrorCode } from "./assistant.ts";
 import { createDaemonHandshake } from "./auth-handshake.ts";
@@ -110,6 +115,7 @@ function resolveAllowedProject(project: string): string | null {
 }
 
 const assistantControllers = new Map<string, AbortController>();
+const runControllers = new Map<string, AbortController>();
 const activeChildren = new Map<string, KillableChild>();
 
 const handshakes = new WeakMap<WebSocket, ReturnType<typeof createDaemonHandshake>>();
@@ -136,9 +142,10 @@ function sendResult(
   ok: boolean,
   code: number | undefined,
   error?: string,
+  metadata?: ProviderMetadata,
 ): void {
   try {
-    sendDaemonFrame(ws, JSON.stringify({ type: "result", id, ok, code, error }));
+    sendDaemonFrame(ws, JSON.stringify({ type: "result", id, ok, code, error, ...metadata }));
   } catch {}
 }
 
@@ -182,34 +189,81 @@ async function handleRun(ws: WebSocket, msg: RunMsg): Promise<void> {
   console.log(
     `[daemon] run id=${id} project=${project} provider=${msg.provider ?? "claude"} mode=${mode} (CLAUDE_PERMISSION_MODE=${permissionMode})`,
   );
-  let child: ReturnType<typeof Bun.spawn>;
-  try {
-    child = Bun.spawn({
+  const childEnv = sanitizeChildEnv(process.env);
+  const commandFor = (provider: "claude" | "codex") => provider === "codex"
+    ? codexCommand(mode, process.env)
+    : [CLAUDE_BIN, "--print", "--permission-mode", permissionMode];
+  let selectedProvider = msg.provider ?? "claude";
+  const probeEnvOverrides = msg.allowFallback === true && selectedProvider === "claude" && mode !== "bypass"
+    ? isolatedClaudeProbeEnv(allowedProject, childEnv) : null;
+  let preflightReason: ProviderMetadata["fallbackReason"];
+  if (msg.allowFallback === true && selectedProvider === "claude" && mode !== "bypass"
+      && probeEnvOverrides !== null) {
+    const controller = new AbortController();
+    runControllers.set(id, controller);
+    let auth: Awaited<ReturnType<typeof probeClaudeAuth>> = "unknown";
+    try {
+    auth = await probeClaudeAuth(() => {
+      const probe = Bun.spawn({cmd:[CLAUDE_BIN,"auth","status","--json"],
+        cwd:allowedProject!,env:childEnv,detached:true,stdin:"ignore",stdout:"pipe",stderr:"ignore"});
+      return {stdout:probe.stdout,exited:probe.exited,kill:signal=>probe.kill(signal),processGroupId:probe.pid};
+    }, controller.signal, child => activeChildren.set(id, child));
+    if (auth === "unavailable") preflightReason = "authentication_unavailable";
+    if (auth === "available" && !controller.signal.aborted) {
+      // No project instructions, tools, hooks, MCP or user prompt enter this
+      // disposable readiness request. OAuth/keychain identity remains unchanged.
+      const probeCwd = mkdtempSync(pathResolve(tmpdir(), "agent-readiness-"));
+      try {
+        const readiness = await probeClaudeReadiness(() => {
+          const probe = Bun.spawn({cmd:claudeReadinessCommand(CLAUDE_BIN),
+            cwd:probeCwd,env:{...childEnv,...probeEnvOverrides},detached:true,stdin:"ignore",stdout:"pipe",stderr:"ignore"});
+          return {stdout:probe.stdout,exited:probe.exited,kill:signal=>probe.kill(signal),processGroupId:probe.pid};
+        }, controller.signal, child => activeChildren.set(id, child));
+        if (readiness === "quota_exhausted" || readiness === "billing_unavailable"
+            || readiness === "authentication_unavailable") preflightReason = readiness;
+      } finally { rmSync(probeCwd,{recursive:true,force:true}); }
+    }
+    } finally {
+      activeChildren.delete(id);
+      runControllers.delete(id);
+    }
+    if (controller.signal.aborted || auth === "cancelled") {
+      sendResult(ws,id,false,undefined,"cancelled",{provider:selectedProvider,requestedProvider:selectedProvider});
+      return;
+    }
+    // Awaiting a probe opens a filesystem race: revalidate the canonical cwd.
+    allowedProject = resolveAllowedProject(project);
+    if (!allowedProject) {
+      sendResult(ws,id,false,undefined,"project_not_allowed_after_preflight");
+      return;
+    }
+    if (preflightReason) selectedProvider = "codex";
+  }
+  const spawned = spawnWithFallback(selectedProvider, mode, preflightReason ? false : msg.allowFallback, provider => Bun.spawn({
       // Re-audit C1: pass the REAL `--permission-mode` flag. Previously the mode
       // was only set via the CLAUDE_PERMISSION_MODE env var, which the Claude CLI
       // ignores — so the operator-selected mode (plan/ask/…) was never enforced.
-      cmd: msg.provider === "codex" ? codexCommand(mode, process.env) : [CLAUDE_BIN, "--print", "--permission-mode", permissionMode],
+      cmd: commandFor(provider),
       cwd: allowedProject,
       // Give each run its own group so cancellation includes shell/tool children.
       detached: true,
       // SEC-audit: the spawned `claude` must not inherit daemon credentials.
       // Authentication belongs to the local Claude installation/keychain; only
       // the explicit non-secret runtime environment crosses this boundary.
-      env: sanitizeChildEnv(process.env),
+      env: childEnv,
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
-    });
-  } catch (e) {
-    sendResult(
-      ws,
-      id,
-      false,
-      undefined,
-      `spawn_failed: ${e instanceof Error ? e.message : String(e)}`,
-    );
+    }), provider => Bun.which(commandFor(provider)[0], { PATH: childEnv.PATH, cwd: allowedProject! }) === null);
+  const metadata: ProviderMetadata = preflightReason
+    ? {...spawned.metadata, requestedProvider:"claude", fallbackReason:preflightReason}
+    : spawned.metadata;
+  if ("error" in spawned) {
+    const e = spawned.error;
+    sendResult(ws, id, false, undefined, `spawn_failed: ${e instanceof Error ? e.message : String(e)}`, metadata);
     return;
   }
+  const child = spawned.child;
   activeChildren.set(id, {kill:signal=>child.kill(signal),exited:child.exited,processGroupId:child.pid});
   // Feed prompt on stdin and close.
   try {
@@ -259,6 +313,7 @@ async function handleRun(ws: WebSocket, msg: RunMsg): Promise<void> {
       code === 0,
       code,
       code === 0 ? undefined : `exit ${code}: ${stderrTail.trim().slice(-300) || "(no stderr)"}`,
+      metadata,
     );
   } catch (e) {
     activeChildren.delete(id);
@@ -268,11 +323,13 @@ async function handleRun(ws: WebSocket, msg: RunMsg): Promise<void> {
       false,
       undefined,
       e instanceof Error ? e.message : String(e),
+      metadata,
     );
   }
 }
 
 function killAllChildren(): void {
+  for (const controller of runControllers.values()) controller.abort();
   for (const controller of assistantControllers.values()) controller.abort();
   // SIGINT с переходом на SIGKILL — см. mac-daemon/kill.ts. Раньше здесь был
   // только SIGINT, а следом clear(): процесс, проигнорировавший сигнал,
@@ -416,6 +473,7 @@ function connect(): void {
         return;
       case "cancel": {
         assistantControllers.get(msg.id)?.abort();
+        runControllers.get(msg.id)?.abort();
         // Точечная отмена одного прогона. Мост шлёт её по своему таймауту —
         // до аудита 2026-08-11 брошенный `claude` продолжал работать в проекте
         // владельца, хотя ответа от него уже никто не ждал.

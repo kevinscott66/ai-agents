@@ -39,6 +39,7 @@ export type PermissionMode =
 export interface RunMsg {
   type: "run";
   provider?: "claude" | "codex";
+  allowFallback?: boolean;
   id: string;
   project: string;
   prompt: string;
@@ -158,9 +159,12 @@ export function parseBridgeMsg(raw: unknown): ParsedMsg {
           id: m.id,
           reason: `unknown mode: ${String(m.mode)} (expected ${RUN_MODES.join("|")})`,
         };
+      if (m.allowFallback !== undefined && typeof m.allowFallback !== "boolean")
+        return { type: "bad_run", id: m.id, reason: "allowFallback must be a boolean" };
       if (m.type === "run_codex" && m.mode === "bypass") return {type:"bad_run",id:m.id,reason:"codex_bypass_not_supported"};
       return {
         ...(m.type === "run_codex" ? {provider: "codex" as const} : {}),
+        ...(m.allowFallback !== undefined ? {allowFallback: m.allowFallback as boolean} : {}),
         type: "run",
         id: m.id,
         project: m.project,

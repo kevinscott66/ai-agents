@@ -113,4 +113,4 @@ export type HandlerResult =
    * rate-limit при таком провале не возвращается, иначе потолок «N сообщений
    * в минуту» не считает как раз те ходы, которые в чат что-то положили.
    */
-  | { ok: false; error: string; sideEffect?: boolean };
+  | { ok: false; error: string; result?: Record<string, unknown>; sideEffect?: boolean };

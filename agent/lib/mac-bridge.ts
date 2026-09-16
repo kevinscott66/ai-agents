@@ -81,6 +81,10 @@ interface PendingRun {
 }
 
 export interface MacRunResult {
+  provider?: "claude" | "codex";
+  requestedProvider?: "claude" | "codex";
+  fallbackReason?: string;
+  fallbackBlocked?: string;
   ok: boolean;
   code?: number;
   /** Хвост потока; полную длину смотри в stdoutLen/stderrLen. */
@@ -94,6 +98,7 @@ export interface MacRunResult {
 }
 
 export interface MacRunRequest {
+  allowFallback?: boolean;
   provider?: "claude" | "codex";
   project: string;
   prompt: string;
@@ -476,6 +481,7 @@ function sendMacRequest(req: MacRunRequest | { operation: "calendar_today" | "op
             project: req.project,
             prompt: req.prompt,
             mode: req.mode,
+            ...(req.allowFallback !== undefined ? {allowFallback:req.allowFallback} : {}),
           }),
         ),
       );
@@ -698,6 +704,10 @@ function handleClientMessage(ws: any, raw: string): void {
     pending.delete(id);
     p.resolve({
       ok: !!msg.ok,
+      ...(msg.provider === "claude" || msg.provider === "codex" ? {provider:msg.provider} : {}),
+      ...(msg.requestedProvider === "claude" || msg.requestedProvider === "codex" ? {requestedProvider:msg.requestedProvider} : {}),
+      ...(typeof msg.fallbackReason === "string" ? {fallbackReason:scrubSecretString(msg.fallbackReason).slice(0,100)} : {}),
+      ...(typeof msg.fallbackBlocked === "string" ? {fallbackBlocked:scrubSecretString(msg.fallbackBlocked).slice(0,100)} : {}),
       code: typeof msg.code === "number" ? msg.code : undefined,
       ...snapshotOf(p),
       truncated:

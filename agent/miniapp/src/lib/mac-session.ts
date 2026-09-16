@@ -22,6 +22,7 @@ interface MacPayload {
   prompt?: string;
 }
 interface MacResult {
+  provider?: string;
   output?: string;
 }
 
@@ -91,7 +92,7 @@ export function toMacSession(action: AgentAction): MacSession {
   return {
     id: action.id,
     project: redacted ? REDACTED_NOTE : payload.project || "проект не указан",
-    provider: redacted ? undefined : payload.provider === "codex" ? "codex" : "claude",
+    provider: redacted ? undefined : result.provider === "codex" || result.provider === "claude" ? result.provider : payload.provider === "codex" ? "codex" : "claude",
     mode: redacted ? "—" : payload.mode || "ask",
     status:
       action.status === "ok"

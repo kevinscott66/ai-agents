@@ -275,7 +275,7 @@ export type DispatchResult =
   // может ни сослаться на неё, ни показать человеку, что именно закрылось.
   // sideEffect — см. HandlerResult в dispatch/helpers.ts: провал, у которого
   // часть работы уже видна снаружи. Пробрасывается наверх нетронутым.
-  | { ok: false; error: string; taskId?: string; sideEffect?: boolean };
+  | { ok: false; error: string; result?: Record<string, unknown>; taskId?: string; sideEffect?: boolean };
 
 
 /**
@@ -1338,6 +1338,7 @@ export async function dispatchAndAudit<T extends ActionType>(
       actionType,
       payload,
       status: "error",
+      ...(res.result ? {result: res.result} : {}),
       error: res.error,
       requestId,
     }));

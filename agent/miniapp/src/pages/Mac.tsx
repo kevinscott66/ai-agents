@@ -20,6 +20,7 @@ import { ellipsize } from "../lib/text";
 
 export default function Mac() {
   const [provider, setProvider] = useState<"claude" | "codex">("claude");
+  const [allowFallback, setAllowFallback] = useState(true);
   const [project, setProject] = useState("");
   const [prompt, setPrompt] = useState("");
   const [launchStatus, setLaunchStatus] = useState("");
@@ -30,7 +31,7 @@ export default function Mac() {
     if (launching.current) return;
     launching.current = true; setLaunchBusy(true); setLaunchStatus("");
     try {
-      const result = await (window as any).webkit.messageHandlers.panel.postMessage({macStart:{provider,project:project.trim(),prompt:prompt.trim()}});
+      const result = await (window as any).webkit.messageHandlers.panel.postMessage({macStart:{provider,allowFallback:provider === "claude" && allowFallback,project:project.trim(),prompt:prompt.trim()}});
       if (result?.ok !== true) throw new Error("Не удалось передать запрос");
       setPrompt(""); setLaunchStatus("Запрос добавлен в чат. Там появятся ответ и необходимое подтверждение.");
     } catch (error) { setLaunchStatus(formatApiError(error)); }
@@ -195,6 +196,8 @@ export default function Mac() {
 
       {nativePanel && <form onSubmit={startSession} className="mac-launch-form">
         <label>Исполнитель<select value={provider} onChange={e => setProvider(e.currentTarget.value as "claude" | "codex")} disabled={launchBusy}><option value="claude">Claude Code</option><option value="codex">Codex</option></select></label>
+        <label style={{display:"flex", flexDirection:"row", alignItems:"center", gap:10}}><input type="checkbox" checked={provider === "claude" && allowFallback} onChange={e => setAllowFallback(e.currentTarget.checked)} disabled={launchBusy || provider === "codex"} style={{width:22, minHeight:44, flexShrink:0}} />Разрешить Codex, если Claude Code недоступен до запуска</label>
+        {provider === "codex" && <p>Переход с Codex на Claude Code требует отдельного выбора и подтверждения.</p>}
         <label>Проект на Mac<input value={project} onChange={e => setProject(e.currentTarget.value)} maxLength={500} required placeholder="Папка проекта или его название" /></label>
         <label>Задача<textarea value={prompt} onChange={e => setPrompt(e.currentTarget.value)} maxLength={4000} required rows={4} placeholder="Что нужно сделать в этой сессии?" /></label>
         <button type="submit" disabled={launchBusy || !project.trim() || !prompt.trim()}>{launchBusy ? "Передаём задачу…" : "Запустить сессию"}</button>

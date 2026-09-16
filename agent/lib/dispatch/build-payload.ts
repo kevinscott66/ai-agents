@@ -763,7 +763,8 @@ export function buildPayload<T extends ActionType>(
       if (!validModes.includes(mode))
         return { ok: false, error: `mode must be one of: ${validModes.join(", ")}` };
       if (i.provider !== undefined && i.provider !== "claude" && i.provider !== "codex") return {ok:false,error:"provider must be claude or codex"};
-      const payload: PayloadFor<"MAC_RUN_CLAUDE"> = { project, prompt, mode, ...(i.provider !== undefined ? {provider:i.provider} : {}) };
+      if (i.allowFallback !== undefined && typeof i.allowFallback !== "boolean") return {ok:false,error:"allowFallback must be boolean"};
+      const payload: PayloadFor<"MAC_RUN_CLAUDE"> = { project, prompt, mode, allowFallback: i.allowFallback === undefined ? true : i.allowFallback, ...(i.provider !== undefined ? {provider:i.provider} : {}) };
       return { ok: true, payload: payload as PayloadFor<T> };
     }
     case "SCHEDULE_POST": {

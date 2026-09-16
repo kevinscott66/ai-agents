@@ -26,6 +26,7 @@ export type MacBridge = {
   isMacOnline?: () => boolean;
   sendToMac: (req: {
     provider?: "claude" | "codex";
+    allowFallback?: boolean;
     project: string;
     prompt: string;
     mode: "ask" | "accept_edits" | "plan" | "auto" | "bypass";
@@ -37,6 +38,10 @@ export type MacBridge = {
     }) => void;
   }) => Promise<{
     ok: boolean;
+    provider?: "claude" | "codex";
+    requestedProvider?: "claude" | "codex";
+    fallbackReason?: string;
+    fallbackBlocked?: string;
     code?: number;
     stdout: string;
     stderr: string;
@@ -202,6 +207,7 @@ export async function handleMacRunClaude(
   ctx: MacHandlerContext,
 ): Promise<MacHandlerResult> {
   const p = payload;
+  if (p.allowFallback !== undefined && typeof p.allowFallback !== "boolean") return {ok:false,error:"invalid_mac_fallback"};
   if (p.provider !== undefined && p.provider !== "claude" && p.provider !== "codex") return {ok:false,error:"invalid_mac_provider"};
   if (p.provider === "codex" && p.mode === "bypass") return {ok:false,error:"codex_bypass_not_supported"};
   const bridge = ctx.macBridge ?? {
@@ -305,6 +311,7 @@ export async function handleMacRunClaude(
       prompt: p.prompt,
       mode: p.mode,
       ...(p.provider ? {provider: p.provider} : {}),
+      ...(p.allowFallback !== undefined ? {allowFallback:p.allowFallback} : {}),
       onProgress: tg ? onProgress : undefined,
     });
   } catch (e) {
@@ -360,7 +367,8 @@ export async function handleMacRunClaude(
   if (!res.ok) {
     return {
       ok: false,
-      error: res.error ?? `mac run failed (code=${res.code ?? "?"})`,
+      error: res.fallbackBlocked === "bypass_mode" ? "Автоматическое переключение недоступно в режиме обхода разрешений. Выберите исполнителя отдельно и подтвердите новый запрос." : res.fallbackBlocked ? "Резервный Claude требует более широких прав, чем Codex. Автоматическое переключение остановлено; выберите исполнителя отдельно и подтвердите новый запрос." : res.error ?? `mac run failed (code=${res.code ?? "?"})`,
+      result: {provider: res.provider ?? p.provider ?? "claude", ...(res.fallbackReason ? {requestedProvider: res.requestedProvider ?? p.provider ?? "claude", fallbackReason: res.fallbackReason} : {}), ...(res.fallbackBlocked ? {fallbackBlocked: res.fallbackBlocked} : {})},
       ...(notified ? { sideEffect: true } : {}),
     };
   }
@@ -368,9 +376,10 @@ export async function handleMacRunClaude(
     ok: true,
     result: {
       project: p.project,
-      provider: p.provider ?? "claude",
+      provider: res.provider ?? p.provider ?? "claude",
+      ...(res.fallbackReason ? {requestedProvider:res.requestedProvider ?? p.provider ?? "claude",fallbackReason:res.fallbackReason} : {}),
       ...(ctx.approvalId ? {approvalId:ctx.approvalId} : {}),
-      output: tailByCodePoints(res.stdout || "", TELEGRAM_MESSAGE_TAIL_LIMIT),
+      output: tailByCodePoints((res.fallbackReason ? `Исполнитель: ${res.provider === "codex" ? "Codex" : "Claude Code"} (резервный запуск: первый исполнитель недоступен до начала задачи).\n\n` : "") + (res.stdout || ""), TELEGRAM_MESSAGE_TAIL_LIMIT),
       mode: p.mode,
       code: res.code ?? 0,
       stdoutLen: res.stdoutLen ?? res.stdout.length,

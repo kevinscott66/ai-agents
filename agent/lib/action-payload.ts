@@ -221,6 +221,7 @@ export interface WriteWikiPayload {
 }
 
 export interface MacRunClaudePayload {
+  allowFallback?: boolean;
   provider?: "claude" | "codex";
   /** Absolute path to project on the Mac (must be under MAC_PROJECT_ROOTS). */
   project: string;
