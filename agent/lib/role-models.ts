@@ -18,7 +18,8 @@
  *
  * Переменные роли (суффикс — ключ роли в верхнем регистре):
  *   ANTHROPIC_LARGE_MODEL_<ROLE>      — API-идентификатор, например claude-opus-5;
- *   ANTHROPIC_LARGE_MODEL_SDK_<ROLE>  — алиас CLI для подписки: opus, sonnet, haiku;
+ *   ANTHROPIC_LARGE_MODEL_SDK_<ROLE>  — модель для подписки: полный id (claude-opus-5)
+ *                                       или алиас CLI (opus, sonnet, haiku);
  *   CODEX_MODEL_<ROLE>                — slug из каталога Codex CLI;
  *   AGENT_EFFORT_<ROLE>               — low | medium | high | xhigh | max.
  */
@@ -38,9 +39,9 @@ interface Tier {
   effort: Effort;
 }
 
-const LEAD: Tier = { api: "claude-opus-5", sdk: "opus", codex: "gpt-5.6-sol", effort: "high" };
-const ENGINEERING: Tier = { api: "claude-sonnet-5", sdk: "sonnet", codex: "gpt-5.6-terra", effort: "high" };
-const WRITING: Tier = { api: "claude-sonnet-5", sdk: "sonnet", codex: "gpt-5.6-terra", effort: "medium" };
+const LEAD: Tier = { api: "claude-opus-5", sdk: "claude-opus-5", codex: "gpt-5.6-sol", effort: "high" };
+const ENGINEERING: Tier = { api: "claude-sonnet-5", sdk: "claude-sonnet-5", codex: "gpt-5.6-terra", effort: "high" };
+const WRITING: Tier = { api: "claude-sonnet-5", sdk: "claude-sonnet-5", codex: "gpt-5.6-terra", effort: "medium" };
 
 export const ROLE_TIERS: Readonly<Record<string, Tier>> = {
   orchestrator: LEAD,
