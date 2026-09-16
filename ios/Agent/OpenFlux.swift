@@ -230,7 +230,9 @@ struct OpenFluxProbeView: View {
     var body: some View {
         Text(result).padding().task {
             do {
-                try await AgentAPI(server: "https://agents.dobropalm.tech:8443").checkConnection()
+                let server = UserDefaults.standard.string(forKey: "server") ?? ""
+                guard !server.isEmpty else { throw AgentError.message("Сначала подключите устройство к серверу") }
+                try await AgentAPI(server: server).checkConnection()
                 result = "PASS: HTTPS health through OpenFlux"
             } catch { result = "FAIL: " + error.localizedDescription }
             let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("openflux-probe.txt")

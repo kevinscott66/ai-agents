@@ -281,7 +281,8 @@ struct RootView: View {
     @State private var activeMediaJob: UUID?
 
     @StateObject private var approvals = ChatApprovals()
-    @AppStorage("server") private var server = "https://agents.dobropalm.tech:8443"
+    // Адреса сервера по умолчанию нет: репозиторий публичный, адрес задаётся при подключении.
+    @AppStorage("server") private var server = ""
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reducedMotion
@@ -333,7 +334,7 @@ struct RootView: View {
             if !conversationVoice, VoiceOutput.autoSpeak, scenePhase == .active, let reply = model.newReplyForSpeech { voice.stop(); speech.enqueue(reply.text) }
         }
         .onChange(of: model.attachmentGeneration) { _, _ in cancelMediaPreparation(); locator.cancel() }
-        .onAppear { speech.server = server }
+        .onAppear { speech.server = server; if server.isEmpty { settings = true } }
         .onChange(of: server) { _, value in speech.server = value; conversationVoice = false; cancelMediaPreparation(); locator.cancel(); voice.stop(); model.stopSpeech() }
         .onChange(of: menu) { _, opened in if opened { voice.stop(); model.stopSpeech() } }
         .onChange(of: actions) { _, opened in if opened { voice.stop(); model.stopSpeech() } }
@@ -616,7 +617,7 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section("Подключиться к лиду") {
-                TextField("HTTPS-адрес сервера", text: $serverDraft).disabled(pairing || connectionLocked).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                TextField("HTTPS-адрес, например https://agent.example.com", text: $serverDraft).disabled(pairing || connectionLocked).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
                 SecureField("Одноразовый код", text: $code).disabled(pairing || connectionLocked).textInputAutocapitalization(.never).autocorrectionDisabled()
                 Button(pairing ? "Подключаем…" : "Подключить iPhone") {
                     pairing = true
