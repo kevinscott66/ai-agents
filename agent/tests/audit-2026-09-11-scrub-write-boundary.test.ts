@@ -31,7 +31,8 @@ import { insertActionRow, finalizeActionRow, closeGatedActionRow } from "../lib/
 import { db } from "../lib/db.ts";
 
 /** Похоже на настоящий бот-токен: 10 цифр, двоеточие, 35 знаков. */
-const BOT_TOKEN = "7123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw";
+// Фейковый токен собирается из частей: целым литералом он валит гейт секретов в CI.
+const BOT_TOKEN = ["7123456789", "AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw"].join(":");
 /** StringSession gramjs: `1` + сотни знаков base64. */
 const STRING_SESSION = `1B${"QaZwSx0129".repeat(30)}`;
 

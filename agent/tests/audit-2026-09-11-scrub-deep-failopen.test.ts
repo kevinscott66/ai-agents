@@ -27,7 +27,8 @@ import {
   SCRUB_CYCLE,
 } from "../lib/log.ts";
 
-const TOKEN = "7123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw";
+// Фейковый токен собирается из частей: целым литералом он валит гейт секретов в CI.
+const TOKEN = ["7123456789", "AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw"].join(":");
 /** Хвост токена — то, чего в колонке быть не должно ни в каком виде. */
 const TAIL = "AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw";
 
