@@ -85,6 +85,9 @@ const BLOCKED_TABLES = [
   "role_runtime_queue",
   "role_runtime_queue_archive",
   "content_calendar",
+  // Тексты напоминаний — переписка конкретного чата; читаются только через
+  // LIST_REMINDERS, суженный до своего чата.
+  "reminders",
 ];
 
 const ALLOWED_PREFIX =

@@ -101,6 +101,7 @@ describe("набор безопасных тулзов", () => {
         "READ_WIKI",
         "SEARCH_WIKI",
         "LIST_SCHEDULED_POSTS",
+        "LIST_REMINDERS",
       ].sort(),
     );
   });

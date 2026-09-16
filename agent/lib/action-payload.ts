@@ -284,6 +284,23 @@ export interface SchedulePostPayload {
 }
 
 /**
+ * Напоминание в чат-источник. `chatId` — только то, что назвала модель: хендлер
+ * пиннит адресат к ctx.chatId и лишь пишет в лог, если они разошлись.
+ */
+export interface CreateReminderPayload {
+  chatId?: number;
+  /** Текст напоминания. */
+  text: string;
+  /** Когда отправить, Unix-время в мс (разобрано из `at` в buildPayload). */
+  remindAt: number;
+}
+
+export interface CancelReminderPayload {
+  chatId?: number;
+  id: string;
+}
+
+/**
  * T-702: aieng proposes a new system-prompt for any agent. Mandatory
  * approval; on approval the agent_prompts row's applied_at is set. Actual
  * hot-swap of the running agent prompt is wired by T-705.
@@ -375,6 +392,8 @@ export type PayloadByType = {
    */
   MAC_STOP: { _userId?: string; _delegated?: boolean };
   SCHEDULE_POST: SchedulePostPayload;
+  CREATE_REMINDER: CreateReminderPayload;
+  CANCEL_REMINDER: CancelReminderPayload;
   GRANT_PERMISSION: GrantPermissionPayload;
   UPDATE_AGENT_PROMPT: UpdateAgentPromptPayload;
   CHANGE_AGENT_STATUS: ChangeAgentStatusPayload;

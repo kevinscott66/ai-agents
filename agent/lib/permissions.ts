@@ -41,6 +41,9 @@ export const ACTION_TYPES = [
   "MAC_RUN_CLAUDE",
   "MAC_STOP",
   "SCHEDULE_POST",
+  // Напоминания в чат-источник (lib/reminders.ts). LIST_REMINDERS — инлайновый.
+  "CREATE_REMINDER",
+  "CANCEL_REMINDER",
   // T-701/T-702/T-703: inter-agent mutation actions. ALWAYS approval-gated.
   "GRANT_PERMISSION",
   "UPDATE_AGENT_PROMPT",

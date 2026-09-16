@@ -55,6 +55,7 @@ import { parseFigmaKey, fetchFigmaSummary, figmaConfigured } from "./figma.ts";
 import { parseChannelId, fetchChannelStats, tgstatConfigured } from "./tgstat.ts";
 import { fetchGithubStatus, githubConfigured } from "./github.ts";
 import { log } from "./log.ts";
+import { formatMsk, isoMsk, listReminders } from "./reminders.ts";
 
 const ROLE_KEYS = CHARACTERS.map((c) => c.key);
 
@@ -667,6 +668,40 @@ export const TOOLS: Anthropic.Tool[] = [
       required: ["channel", "content", "scheduledAt"],
     },
   },
+  {
+    name: "CREATE_REMINDER",
+    description:
+      "Напомнить в ЭТОТ ЖЕ чат в указанное время: в момент at команда пришлёт сообщение «Напоминание: <text>». Другой чат указать нельзя. Время — ISO со смещением (2026-03-05T09:30:00+03:00) или без смещения (2026-03-05 09:30) — тогда это московское время (UTC+3). Не в прошлом и не дальше года вперёд. Переживает рестарт; пропущенное за простой приходит один раз с пометкой об опоздании.",
+    input_schema: {
+      type: "object",
+      properties: {
+        text: { type: "string", description: "Текст напоминания — что именно напомнить." },
+        at: {
+          type: "string",
+          description: "Когда: YYYY-MM-DDTHH:MM[:SS][±HH:MM|Z]. Без смещения — время по Москве.",
+        },
+      },
+      required: ["text", "at"],
+    },
+  },
+  {
+    name: "LIST_REMINDERS",
+    description:
+      "Read-only: напоминания этого чата — ожидающие и неудавшиеся за неделю: id, at (МСК), status, overdue, text.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "CANCEL_REMINDER",
+    description:
+      "Снять ожидающее напоминание этого чата по id (id — из LIST_REMINDERS или ответа CREATE_REMINDER).",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "id напоминания." },
+      },
+      required: ["id"],
+    },
+  },
 ];
 
 export interface ExecCtx {
@@ -762,6 +797,8 @@ export const TOOL_NAMES = new Set<string>([
   // `unknown tool` ДО gateOrDispatch: ни строки в agent_actions, ни ошибки в
   // дайджесте. Модель видела инструмент, вызывала его и получала отказ.
   "SCHEDULE_POST",
+  "CREATE_REMINDER",
+  "CANCEL_REMINDER",
 ]);
 
 /**
@@ -1382,6 +1419,35 @@ export async function executeTool(
               note: "записи с overdue=true не были отправлены: автопубликации в проекте нет, время прошло. Не выдавай их за опубликованные — либо публикуй заново через PUBLISH_TO_CHANNEL (текст поста лежит в поле content), либо снимай через CANCEL_SCHEDULED_POST",
             }
           : {}),
+      });
+    } catch (e) {
+      return fmt({ ok: false, error: getErrorMessage(e) });
+    }
+  }
+  if (name === "LIST_REMINDERS") {
+    // Нативный клиент — не Telegram-чат, напоминаний у него нет.
+    if (nativeTurnContext.getStore()) {
+      return fmt({ ok: false, error: "reminders are available only in Telegram chats" });
+    }
+    try {
+      const now = Date.now();
+      // Только чат вызова: чужие напоминания не перечисляются.
+      const { total, rows } = listReminders(ctx.chatId, now);
+      const reminders = rows.map((r) => ({
+        id: r.id,
+        at: isoMsk(r.remind_at),
+        at_msk: formatMsk(r.remind_at),
+        status: r.status,
+        overdue: r.status === "scheduled" && r.remind_at < now,
+        ...(r.error ? { error: r.error } : {}),
+        text: r.text,
+      }));
+      return fmt({
+        ok: true,
+        count: reminders.length,
+        total,
+        truncated: total > rows.length,
+        reminders,
       });
     } catch (e) {
       return fmt({ ok: false, error: getErrorMessage(e) });
