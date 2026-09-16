@@ -1,3 +1,5 @@
+import { generateHiggsfieldImage } from '../higgsfield-mcp.ts';
+import { withNativeImageGeneration, nativeTurnContext } from '../native-context.ts';
 /**
  * Media handlers for GENERATE_IMAGE and GENERATE_SVG_IMAGE actions.
  * Extracted from action-dispatch.ts for T-112 modularization.
@@ -23,16 +25,16 @@ export type MediaHandlerContext = {
 export type MediaHandlerResult = HandlerResult;
 
 
-export async function handleGenerateSvgImage(
+async function generateSvgImageImpl(
   payload: PayloadByType["GENERATE_SVG_IMAGE"],
   ctx: MediaHandlerContext
 ): Promise<MediaHandlerResult> {
-  if (!ctx.telegram) return { ok: false, error: "no telegram context" };
+  if (!ctx.telegram && !nativeTurnContext.getStore()) return { ok: false, error: "no telegram context" };
   const chatId = pinnedChatId(payload.chatId, ctx.chatId, "GENERATE_SVG_IMAGE");
   log.info(`[svg][${ctx.agentKey}] rendering ${payload.svg.length}B svg…`);
   const buffer = await renderSvgToPng(payload.svg);
   log.info(`[svg][${ctx.agentKey}] rendered → ${buffer.length}B png, sending…`);
-  const result = await tgSendPhoto(ctx.telegram, {
+  const result = await tgSendPhoto(ctx.telegram!, {
     chatId,
     photo: { buffer, filename: "image.png" },
     caption: payload.caption,
@@ -179,14 +181,14 @@ export interface ImageDeps {
   send?: (buffer: Buffer) => Promise<Record<string, unknown>>;
 }
 
-export async function handleGenerateImage(
+async function generateImageImpl(
   payload: PayloadByType["GENERATE_IMAGE"],
   ctx: MediaHandlerContext,
   deps: ImageDeps = {},
 ): Promise<MediaHandlerResult> {
-  if (!ctx.telegram) return { ok: false, error: "no telegram context" };
+  if (!ctx.telegram && !nativeTurnContext.getStore()) return { ok: false, error: "no telegram context" };
   const chatId = pinnedChatId(payload.chatId, ctx.chatId, "GENERATE_IMAGE");
-  const generate = deps.generate ?? generateImage;
+  const generate = deps.generate ?? (payload.provider === 'higgsfield' ? ((prompt:string,opts:Record<string,unknown>)=>generateHiggsfieldImage(prompt,opts,chatId)) : generateImage);
   const fallbackSvg = deps.fallbackSvg ?? generateSvgFromPrompt;
   const send =
     deps.send ??
@@ -216,6 +218,7 @@ export async function handleGenerateImage(
       size: payload.size,
       quality: payload.quality,
       background: payload.background,
+      higgsfieldBilling: payload.higgsfieldBilling,
     });
   } catch (e) {
     const error = getErrorMessage(e);
@@ -223,7 +226,7 @@ export async function handleGenerateImage(
     // Иначе картинка пропадает молча (designer падал тихо после
     // billing_hard_limit_reached). Тут просим Claude нарисовать SVG
     // на тот же prompt и переиспользуем GENERATE_SVG_IMAGE pipeline.
-    if (isOpenAIQuotaError(e)) {
+    if (payload.provider !== 'higgsfield' && isOpenAIQuotaError(e)) {
       log.warn(
         `[img][${ctx.agentKey}] OpenAI quota/billing error — falling back to SVG: ${error}`,
       );
@@ -311,6 +314,10 @@ export function buildGenerateImagePayload(input: any, chatId: number | undefined
   const qualityAllowed = ["low", "medium", "high", "auto"] as const;
   const backgroundAllowed = ["transparent", "opaque", "auto"] as const;
 
+  const provider=enumField(input,"provider",["openai","higgsfield"] as const);
+  if("error" in provider) return {ok:false,error:provider.error};
+  const billing=enumField(input,"higgsfieldBilling",["credits","unlimited"] as const);
+  if("error" in billing) return {ok:false,error:billing.error};
   const size = enumField(input, "size", sizeAllowed);
   if ("error" in size) return { ok: false, error: size.error };
   const quality = enumField(input, "quality", qualityAllowed);
@@ -325,6 +332,8 @@ export function buildGenerateImagePayload(input: any, chatId: number | undefined
     // Настоящая попытка увести файл в чужой чат тонула в этом фоне.
     chatId,
     prompt,
+    provider:provider.value,
+    higgsfieldBilling:billing.value,
     caption: input.caption == null ? undefined : String(input.caption),
     replyToMessageId:
       typeof input.replyToMessageId === "number"
@@ -354,4 +363,10 @@ export function buildGenerateSvgImagePayload(input: any, chatId: number | undefi
         : undefined,
   };
   return { ok: true, payload };
+}
+export function handleGenerateSvgImage(payload:PayloadByType['GENERATE_SVG_IMAGE'],ctx:MediaHandlerContext) {
+  return withNativeImageGeneration(ctx.chatId,()=>generateSvgImageImpl(payload,ctx));
+}
+export function handleGenerateImage(payload:PayloadByType['GENERATE_IMAGE'],ctx:MediaHandlerContext,deps:ImageDeps={}) {
+  return withNativeImageGeneration(ctx.chatId,()=>generateImageImpl(payload,ctx,deps));
 }

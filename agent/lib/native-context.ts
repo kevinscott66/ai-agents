@@ -11,7 +11,7 @@ export function recordNativeExecutionOutcome(database: Database, approvalId:stri
   return database.query("UPDATE native_approval_links SET execution=?,output=? WHERE approval_id=? AND (execution IS NULL OR execution LIKE 'running:%')").run(outcome,output,approvalId).changes > 0;
 }
 // Trusted ingress context, never model-supplied payload fields.
-export const nativeTurnContext = new AsyncLocalStorage<{ userId: string; turnId:string; conversationId:string; linkApproval: (id:string) => void }>();
+export const nativeTurnContext = new AsyncLocalStorage<{ userId: string; turnId:string; conversationId:string; linkApproval: (id:string) => void; mediaSink?: NativeArtifactSink }>();
 export function persistNativeApprovalLink(database: Database, approvalId:string, chatId:number) {
   const context = nativeTurnContext.getStore();
   if (!context || context.userId !== String(chatId)) return;
@@ -22,4 +22,34 @@ export function persistNativeApprovalLink(database: Database, approvalId:string,
 export function nativeApprovalLinks(database: Database, userId:string, conversationId?:string) {
   if (!database.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='native_approval_links'").get()) return [];
   return database.query('SELECT approval_id,turn_id,conversation_id,execution,output FROM native_approval_links WHERE user_id=?' + (conversationId ? ' AND conversation_id=?' : '')).all(...(conversationId ? [userId,conversationId] : [userId])) as {approval_id:string;turn_id:string;conversation_id:string;execution:string|null;output:string|null}[];
+}
+
+export type NativeArtifact = {data:Buffer;name:string;mimeType:string;caption?:string};
+export type NativeGeneration = {id:string;state:'running'|NativeExecutionOutcome;started:number;ended?:number};
+export interface NativeArtifactSink {
+  assertActive():void;
+  deliver(media:NativeArtifact): {ok:true;messageId:number;nativeMessageId:string};
+  startGeneration():string;
+  endGeneration(id:string,state:NativeExecutionOutcome):void;
+}
+export function nativeMediaSink(chatId:number): NativeArtifactSink | undefined {
+  const context=nativeTurnContext.getStore();
+  if(!context) return;
+  if(context.userId!==String(chatId) || !context.mediaSink) throw new Error('native_media_owner_mismatch');
+  context.mediaSink.assertActive();
+  return context.mediaSink;
+}
+export function deliverNativeMedia(chatId:number,media:NativeArtifact) {
+  return nativeMediaSink(chatId)?.deliver(media) ?? null;
+}
+export async function withNativeImageGeneration<T>(chatId:number,work:()=>Promise<T>):Promise<T> {
+  const sink=nativeMediaSink(chatId);
+  if(!sink) return work();
+  const id=sink.startGeneration();
+  try {
+    const result=await work();
+    sink.assertActive();
+    sink.endGeneration(id,result && typeof result==='object' && 'ok' in result && result.ok===false ? 'failed':'completed');
+    return result;
+  } catch(error) { sink.endGeneration(id,'failed'); throw error; }
 }

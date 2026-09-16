@@ -1,3 +1,4 @@
+import { nativeTurnContext } from '../native-context.ts';
 /**
  * Telegram handlers for message actions.
  * Extracted from action-dispatch.ts for T-112 modularization.
@@ -478,14 +479,14 @@ export async function handleSendPhoto(
   payload: PayloadByType["SEND_PHOTO"],
   ctx: TelegramHandlerContext
 ): Promise<TelegramHandlerResult> {
-  if (!ctx.telegram) return { ok: false, error: "no telegram context" };
+  if (!ctx.telegram && !nativeTurnContext.getStore()) return { ok: false, error: "no telegram context" };
   // S4: media exfil-guard — целевой чат запинен к исходному.
   const chatId = pinnedChatId(payload.chatId, ctx.chatId, "SEND_PHOTO");
   const photo =
     "url" in payload.source
       ? { url: payload.source.url }
       : { buffer: Buffer.from(payload.source.base64, "base64"), filename: "image" };
-  const result = await tgSendPhoto(ctx.telegram, {
+  const result = await tgSendPhoto(ctx.telegram!, {
     chatId,
     photo,
     caption: payload.caption,
@@ -498,10 +499,10 @@ export async function handleSendDocument(
   payload: PayloadByType["SEND_DOCUMENT"],
   ctx: TelegramHandlerContext
 ): Promise<TelegramHandlerResult> {
-  if (!ctx.telegram) return { ok: false, error: "no telegram context" };
+  if (!ctx.telegram && !nativeTurnContext.getStore()) return { ok: false, error: "no telegram context" };
   // S4: media exfil-guard — целевой чат запинен к исходному.
   const chatId = pinnedChatId(payload.chatId, ctx.chatId, "SEND_DOCUMENT");
-  const result = await tgSendDocument(ctx.telegram, {
+  const result = await tgSendDocument(ctx.telegram!, {
     chatId,
     content: payload.content,
     filename: payload.filename,

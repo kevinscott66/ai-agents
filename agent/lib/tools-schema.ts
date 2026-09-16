@@ -352,11 +352,13 @@ export const TOOLS: Anthropic.Tool[] = [
   {
     name: "GENERATE_IMAGE",
     description:
-      "Сгенерировать растровое изображение (фотореализм, иллюстрация, портрет, мокап) по текстовому промпту через OpenAI gpt-image-1, и отправить в чат. Для постеров/баннеров/схем/инфографики используй GENERATE_SVG_IMAGE — он бесплатнее и векторнее. Промпт — на английском, ≤4000 символов.",
+      "Сгенерировать растровое изображение (фотореализм, иллюстрация, портрет, мокап) по текстовому промпту через OpenAI (по умолчанию) или Higgsfield MCP (provider=higgsfield, GPT Image2.5), и отправить в текущий чат, включая iPhone. Higgsfield — дополнительный инструмент: используй, если пользователь выбрал его. Ошибки или неизвестный результат отправки не повод повторять платную генерацию. Для постеров/баннеров/схем/инфографики используй GENERATE_SVG_IMAGE — он бесплатнее и векторнее. Промпт — на английском, ≤4000 символов.",
     input_schema: {
       type: "object",
       properties: {
         prompt: { type: "string", description: "Английский промпт для модели." },
+        provider: { type: "string", enum: ["openai", "higgsfield"], description: "Дополнительный провайдер Higgsfield MCP; по умолчанию OpenAI." },
+        higgsfieldBilling: { type: "string", enum: ["credits", "unlimited"], description: "Только после явного выбора пользователем способа оплаты Higgsfield. Иначе опусти." },
         caption: { type: "string", description: "Подпись к фото в Telegram." },
         size: { type: "string", enum: ["1024x1024", "1024x1536", "1536x1024", "auto"] },
         quality: { type: "string", enum: ["low", "medium", "high", "auto"] },

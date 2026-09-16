@@ -134,6 +134,8 @@ export interface GenerateSvgImagePayload {
   replyToMessageId?: number;
 }
 export interface GenerateImagePayload {
+  provider?: "openai" | "higgsfield";
+  higgsfieldBilling?: "credits" | "unlimited";
   chatId?: number;
   prompt: string;
   caption?: string;

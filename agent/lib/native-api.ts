@@ -141,7 +141,7 @@ export async function nativeApi(req: Request, injectedStore?: NativeAccess): Pro
       const run = lead;
       // Detached job is persisted before invoking the lead; client polls, never replays on reconnect.
       const text = body.text;
-      void Promise.resolve().then(() => nativeTurnContext.run({userId:identity.userId,turnId:id,conversationId:store.turnConversation(id)!,linkApproval: approvalId => store.linkApproval(approvalId,id,identity.userId)}, () => run(identity.userId, text, answer => store.append(id, answer), typeof conversationId === 'string' ? store.history(conversationId,identity.userId)!.messages.slice(-40) : undefined,store.media.input(ids,identity.userId,location)))).then(() => {
+      void Promise.resolve().then(() => nativeTurnContext.run({userId:identity.userId,turnId:id,conversationId:store.turnConversation(id)!,mediaSink:store.artifactSink(id,identity.userId,identity.device,store.turnConversation(id)!),linkApproval: approvalId => store.linkApproval(approvalId,id,identity.userId)}, () => run(identity.userId, text, answer => store.append(id, answer), typeof conversationId === 'string' ? store.history(conversationId,identity.userId)!.messages.slice(-40) : undefined,store.media.input(ids,identity.userId,location)))).then(() => {
         if (!store.get(id, identity.device)?.replies.length) store.append(id, 'Агент не вернул ответ. Проверь состояние роли и лимиты.');
         store.finish(id, 'done');
       }).catch(() => {

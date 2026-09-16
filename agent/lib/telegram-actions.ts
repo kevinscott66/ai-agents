@@ -1,3 +1,5 @@
+import { deliverNativePhoto } from './native-output.ts';
+import { deliverNativeMedia } from './native-context.ts';
 /**
  * C6A: тонкие обёртки над telegraf Telegram API.
  *
@@ -566,6 +568,8 @@ export async function tgSendPhoto(
   captionTailExpected?: number;
   captionTailIncomplete?: true;
 }> {
+  const native=await deliverNativePhoto(args.chatId,args.photo,args.caption);
+  if(native) return native;
   const extra: Record<string, unknown> = {};
   if (args.replyToMessageId !== undefined) {
     // URL уходит JSON-телом, буфер — multipart: у одной и той же функции два
@@ -638,6 +642,8 @@ export async function tgSendDocument(
   captionTailExpected?: number;
   captionTailIncomplete?: true;
 }> {
+  const native=deliverNativeMedia(args.chatId,{data:Buffer.from(args.content,'utf8'),name:args.filename,mimeType:'text/plain',caption:args.caption});
+  if(native) return native;
   const extra: Record<string, unknown> = {};
   // Тот же лимит 1024, что у фото: слишком длинная подпись роняет весь вызов,
   // и документ до чата не доезжает.

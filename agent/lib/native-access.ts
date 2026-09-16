@@ -1,11 +1,11 @@
 /** Separate device credentials/job state; never stores Telegram or service credentials. */
-import { NativeMedia, type NativeLocation } from './native-media.ts';
+import { NativeMedia, parseUpload, type NativeLocation } from './native-media.ts';
 import { DAY_MS } from './time-constants.ts';
 import { Database } from 'bun:sqlite';
-import { randomBytes, createHash } from 'node:crypto';
+import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { mkdirSync, chmodSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import type { NativeExecutionOutcome } from './native-context.ts';
+import type { NativeArtifactSink, NativeGeneration, NativeExecutionOutcome } from './native-context.ts';
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
 export class NativeAccess {
   readonly db: Database;
@@ -25,6 +25,8 @@ export class NativeAccess {
       CREATE TABLE IF NOT EXISTS devices(hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS turns(id TEXT PRIMARY KEY, device TEXT NOT NULL, user_id TEXT NOT NULL,
         text TEXT NOT NULL, status TEXT NOT NULL, replies TEXT NOT NULL DEFAULT '[]', created INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS native_output_media(message_id TEXT PRIMARY KEY,turn_id TEXT NOT NULL,media TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS native_generations(id TEXT PRIMARY KEY,turn_id TEXT NOT NULL,state TEXT NOT NULL,started INTEGER NOT NULL,ended INTEGER);
       CREATE TABLE IF NOT EXISTS alert_settings(user_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS alert_state(user_id TEXT NOT NULL, agent TEXT NOT NULL, unhealthy INTEGER NOT NULL, PRIMARY KEY(user_id,agent));`);
     // Archive retained legacy messages before short-lived polling rows expire.
@@ -43,6 +45,7 @@ export class NativeAccess {
     })();
     // Never replay side effects after a process restart.
     this.db.run("UPDATE turns SET status='interrupted' WHERE status='running'");
+    this.db.query("UPDATE native_generations SET state='interrupted',ended=? WHERE state='running'").run(Date.now());
     this.prune();
   }
   prune(now = Date.now()) {
@@ -93,7 +96,8 @@ export class NativeAccess {
   }
   get(id: string, device: string) {
     const row = this.db.query('SELECT id,status,replies FROM turns WHERE id=? AND device=?').get(id, device) as { id: string; status: string; replies: string } | null;
-    return row ? { ...row, replies: JSON.parse(row.replies) as string[] } : null;
+    const outputMedia=this.outputMedia(id),generations=this.generations(id);
+    return row ? { ...row, replies: JSON.parse(row.replies) as string[], ...(outputMedia.length?{outputMedia}:{}), ...(generations.length?{generations}:{}) } : null;
   }
   start(id: string, device: string, userId: string, text: string, conversationId?: string, attachmentIds: string[] = [], location?: NativeLocation): 'created' | 'duplicate' | 'busy' | 'conflict' {
     this.prune();
@@ -123,7 +127,8 @@ export class NativeAccess {
   }
   append(id: string, text: string) {
     this.db.transaction(() => {
-    const row = this.db.query('SELECT replies FROM turns WHERE id=?').get(id) as { replies: string };
+    const row = this.db.query("SELECT replies FROM turns WHERE id=? AND status='running'").get(id) as { replies: string } | null;
+    if(!row) return;
     const replies = JSON.parse(row.replies) as string[];
     if (replies.length >= 80) return;
     replies.push(text.slice(0, 8000));
@@ -176,11 +181,52 @@ export class NativeAccess {
   history(id:string,userId:string,before = Number.MAX_SAFE_INTEGER) {
     if (!this.conversation(id,userId)) return null;
     const rows = this.db.query('SELECT seq,id,role,text FROM conversation_messages WHERE conversation_id=? AND seq<? ORDER BY seq DESC LIMIT 101').all(id,before) as {seq:number;id:string;role:string;text:string}[];
-    const more = rows.length > 100; const messages = rows.slice(0,100).reverse().map(row => ({...row,...(row.role === 'user' ? this.media.history(row.id.replace(/:user$/,''),userId) : {})}));
+    const more = rows.length > 100; const messages = rows.slice(0,100).reverse().map(row => ({...row,...(row.role === 'user' ? this.media.history(row.id.replace(/:user$/,''),userId) : this.outputAttachments(row.id))}));
     const running = this.running(userId);
-    return {messages,more,running};
+    const generations=(this.db.query('SELECT g.id,g.state,g.started,g.ended FROM native_generations g JOIN conversation_turns t ON t.turn_id=g.turn_id WHERE t.conversation_id=? ORDER BY g.started DESC LIMIT 100').all(id) as NativeGeneration[]).map(g=>({...g,ended:g.ended ?? undefined}));
+    return {messages,more,running,generations};
   }
-  finish(id: string, status: 'done' | 'error') { this.db.query('UPDATE turns SET status=? WHERE id=?').run(status, id); }
+  private outputAttachments(messageId:string):{attachments?:import('./native-media.ts').Attachment[];location?:NativeLocation} {
+    const row=this.db.query('SELECT media FROM native_output_media WHERE message_id=?').get(messageId) as {media:string}|null;
+    return row ? {attachments:JSON.parse(row.media) as import('./native-media.ts').Attachment[]} : {};
+  }
+  private outputMedia(turnId:string) {
+    return (this.db.query('SELECT message_id,media FROM native_output_media WHERE turn_id=? ORDER BY rowid').all(turnId) as {message_id:string;media:string}[]).map(r=>({messageId:r.message_id,attachments:JSON.parse(r.media) as import('./native-media.ts').Attachment[]}));
+  }
+  private generations(turnId:string) {
+    return (this.db.query('SELECT id,state,started,ended FROM native_generations WHERE turn_id=? ORDER BY started,rowid').all(turnId) as NativeGeneration[]).map(g=>({...g,ended:g.ended ?? undefined}));
+  }
+  artifactSink(turnId:string,userId:string,device:string,conversationId:string):NativeArtifactSink {
+    const assertActive=()=> {
+      if(!this.db.query("SELECT 1 FROM turns t JOIN conversation_turns ct ON ct.turn_id=t.id JOIN conversations c ON c.id=ct.conversation_id JOIN devices d ON d.hash=t.device WHERE t.id=? AND t.user_id=? AND t.device=? AND c.user_id=? AND c.id=? AND t.status='running' AND d.user_id=? AND d.expires>=?").get(turnId,userId,device,userId,conversationId,userId,Date.now())) throw new Error('native_turn_inactive');
+    };
+    return {
+      assertActive,
+      deliver:media=>this.db.transaction(()=> {
+        assertActive();
+        const replies=JSON.parse((this.db.query('SELECT replies FROM turns WHERE id=?').get(turnId) as {replies:string}).replies) as string[];
+        if(replies.length>=80) throw new Error('native_output_limit');
+        const item=this.media.put(userId,parseUpload({id:randomUUID(),name:media.name,mimeType:media.mimeType,data:media.data.toString('base64')}));
+        this.db.query('UPDATE native_attachments SET turn_id=?,linked=? WHERE id=? AND user_id=?').run(turnId,Date.now(),item.id,userId);
+        this.append(turnId,media.caption ?? '');
+        const messageId=turnId+':reply:'+(replies.length+1);
+        this.db.query('INSERT INTO native_output_media VALUES(?,?,?)').run(messageId,turnId,JSON.stringify([item]));
+        return {ok:true as const,messageId:replies.length+1,nativeMessageId:messageId};
+      })(),
+      startGeneration:()=>this.db.transaction(()=> {
+        assertActive();
+        if(this.generations(turnId).length>=40) throw new Error('native_generation_limit');
+        const id=randomUUID();this.db.query("INSERT INTO native_generations VALUES(?,?,'running',?,NULL)").run(id,turnId,Date.now());return id;
+      })(),
+      endGeneration:(id,state)=> {this.db.query("UPDATE native_generations SET state=?,ended=? WHERE id=? AND turn_id=? AND state='running'").run(state,Date.now(),id,turnId);},
+    };
+  }
+  finish(id: string, status: 'done' | 'error') {
+    this.db.transaction(()=> {
+      this.db.query("UPDATE native_generations SET state='interrupted',ended=? WHERE turn_id=? AND state='running'").run(Date.now(),id);
+      this.db.query("UPDATE turns SET status=? WHERE id=? AND status='running'").run(status,id);
+    })();
+  }
 }
 let store: NativeAccess | undefined;
 export function nativeAccess(): NativeAccess {
