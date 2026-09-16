@@ -4,7 +4,7 @@ import { codexEffort } from "../lib/codex-runtime.ts";
 
 test("lead gets the strongest model on every path", () => {
   expect(roleModel("orchestrator", "api", {})).toEqual({ model: "claude-opus-5", effort: "high" });
-  expect(roleModel("orchestrator", "sdk", {})).toEqual({ model: "opus", effort: "high" });
+  expect(roleModel("orchestrator", "sdk", {})).toEqual({ model: "claude-opus-5", effort: "high" });
   expect(roleModel("orchestrator", "codex", {})).toEqual({ model: "gpt-5.6-sol", effort: "high" });
 });
 
@@ -12,7 +12,7 @@ test("every team role has a tier; writing roles think less", () => {
   for (const key of ["orchestrator", "pm", "product", "backend", "frontend", "tgdev", "aieng", "qa", "smm", "copy", "design", "perm"]) {
     expect(ROLE_TIERS[key]).toBeDefined();
   }
-  expect(roleModel("backend", "sdk", {})).toEqual({ model: "sonnet", effort: "high" });
+  expect(roleModel("backend", "sdk", {})).toEqual({ model: "claude-sonnet-5", effort: "high" });
   expect(roleModel("smm", "codex", {})).toEqual({ model: "gpt-5.6-terra", effort: "medium" });
 });
 
@@ -43,7 +43,7 @@ test("sdkRoleOptions: table roles pick their alias, others fall back to ANTHROPI
   const saved = process.env.ANTHROPIC_LARGE_MODEL_SDK;
   process.env.ANTHROPIC_LARGE_MODEL_SDK = "haiku";
   try {
-    expect(sdkRoleOptions("orchestrator")).toEqual({ model: "opus", effort: "high" });
+    expect(sdkRoleOptions("orchestrator")).toEqual({ model: "claude-opus-5", effort: "high" });
     expect(sdkRoleOptions("_sdk")).toEqual({ model: "haiku" });
   } finally {
     if (saved === undefined) delete process.env.ANTHROPIC_LARGE_MODEL_SDK;
