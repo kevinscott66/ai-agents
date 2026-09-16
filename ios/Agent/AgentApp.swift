@@ -226,7 +226,8 @@ struct RootView: View {
     @StateObject private var model = ChatModel()
     @StateObject private var voice = VoiceInput()
     @StateObject private var approvals = ChatApprovals()
-    @AppStorage("server") private var server = "https://agents.dobropalm.tech:8443"
+    // Адреса сервера по умолчанию нет: репозиторий публичный, адрес задаётся при подключении.
+    @AppStorage("server") private var server = ""
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reducedMotion
@@ -275,6 +276,7 @@ struct RootView: View {
         }
         .onChange(of: voice.text) { _, value in model.draft = value }
         .onChange(of: voice.error) { _, value in if let value { model.error = value } }
+        .onAppear { if server.isEmpty { settings = true } }
         .onDisappear { voice.stop(); model.stopSpeech() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { voice.stop(); model.stopSpeech() }
@@ -446,7 +448,7 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section("Подключиться к лиду") {
-                TextField("HTTPS-адрес сервера", text: $serverDraft).disabled(pairing).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                TextField("HTTPS-адрес, например https://agent.example.com", text: $serverDraft).disabled(pairing).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
                 SecureField("Одноразовый код", text: $code).disabled(pairing).textInputAutocapitalization(.never).autocorrectionDisabled()
                 Button(pairing ? "Подключаем…" : "Подключить iPhone") {
                     pairing = true
@@ -457,7 +459,7 @@ struct SettingsView: View {
                         catch { status = error.localizedDescription }
                         pairing = false
                     }
-                }.disabled(pairing || code.isEmpty)
+                }.disabled(pairing || code.isEmpty || !serverDraft.trimmingCharacters(in: .whitespaces).lowercased().hasPrefix("https://"))
                 Text(status).font(.footnote)
             }
             Section("Как получить код") {
