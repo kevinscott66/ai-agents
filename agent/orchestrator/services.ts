@@ -2,7 +2,7 @@
  * T-320: Background-service wiring extracted from main() in orchestrator-team.ts.
  *
  * startBackgroundServices() starts all background services (watchdog, health,
- * miniapp, self-diag, backup, digest, db-maint, userbot, mac-bridge) and returns
+ * miniapp, self-diag, backup, digest, reminders, db-maint, userbot, mac-bridge) and returns
  * a handle whose stop() tears them all down (except bots and process.exit, which
  * stay in main's own signal handler).
  */
@@ -25,6 +25,7 @@ import {
 import { startSelfDiagPoller, type SelfDiagPollerHandle } from "../lib/self-diag.ts";
 import { startBackupScheduler, type BackupSchedulerHandle } from "../lib/backup.ts";
 import { startDigestScheduler, type DigestSchedulerHandle } from "../lib/digest.ts";
+import { startReminderScheduler, type ReminderSchedulerHandle } from "../lib/reminders.ts";
 import {
   startMaintScheduler,
   setSchedulerDisabled,
@@ -338,6 +339,27 @@ export async function startBackgroundServices(
     log.info("[digest] disabled via DIGEST_ENABLED=false");
   }
 
+  // Напоминания (CREATE_REMINDER): тик раз в REMINDERS_TICK_MS (дефолт 30 с).
+  // Пишет бот той роли, что напоминание завела; если её бота нет — лид.
+  // Адресат — chat_id из строки, то есть чат, где напоминание попросили.
+  let reminders: ReminderSchedulerHandle | null = null;
+  if (process.env.REMINDERS_ENABLED !== "false") {
+    try {
+      reminders = startReminderScheduler({
+        send: async (chatId, text, agentKey) => {
+          const bot = bots.find((b) => b.def.key === agentKey) ?? lead;
+          if (!bot) throw new Error("no running bot to deliver the reminder");
+          return bot.bot.telegram.sendMessage(chatId, text);
+        },
+        intervalMs: _envPositiveInt("REMINDERS_TICK_MS"),
+      });
+    } catch (e) {
+      log.error("[reminders] failed to start", { error: String(e) });
+    }
+  } else {
+    log.info("[reminders] disabled via REMINDERS_ENABLED=false");
+  }
+
   // C31 DB-maint: gcStaleTasks каждые 30 минут, archive + compact раз в сутки в 04:00 UTC.
   let maint: MaintSchedulerHandle | null = null;
   if (process.env.DB_MAINT_ENABLED !== "false") {
@@ -447,6 +469,7 @@ export async function startBackgroundServices(
       if (selfDiag) selfDiag.stop();
       if (backup) backup.stop();
       if (digest) digest.stop();
+      if (reminders) reminders.stop();
       if (maint) maint.stop();
       if (macBridge) macBridge.stop();
     },

@@ -67,6 +67,8 @@ import {
   handleWriteWiki,
   handleListRecentMessages,
   handleSchedulePost,
+  handleCreateReminder,
+  handleCancelReminder,
   type MiscHandlerContext,
 } from "./dispatch/misc.ts";
 import { logAction } from "./audit.ts";
@@ -955,6 +957,29 @@ export async function dispatchAction<T extends ActionType>(
       case "SCHEDULE_POST": {
         const p = payload as PayloadByType["SCHEDULE_POST"];
         return handleSchedulePost(p, {
+          agentKey: ctx.agentKey,
+          chatId: ctx.chatId,
+          resolveUserbot: () => resolveUserbotHandle(ctx),
+        });
+      }
+      case "CREATE_REMINDER": {
+        // Нативный клиент — не Telegram-чат: доставлять напоминание некуда.
+        if (nativeTurnContext.getStore()) {
+          return { ok: false, error: "reminders are available only in Telegram chats" };
+        }
+        const p = payload as PayloadByType["CREATE_REMINDER"];
+        return handleCreateReminder(p, {
+          agentKey: ctx.agentKey,
+          chatId: ctx.chatId,
+          resolveUserbot: () => resolveUserbotHandle(ctx),
+        });
+      }
+      case "CANCEL_REMINDER": {
+        if (nativeTurnContext.getStore()) {
+          return { ok: false, error: "reminders are available only in Telegram chats" };
+        }
+        const p = payload as PayloadByType["CANCEL_REMINDER"];
+        return handleCancelReminder(p, {
           agentKey: ctx.agentKey,
           chatId: ctx.chatId,
           resolveUserbot: () => resolveUserbotHandle(ctx),
