@@ -145,6 +145,9 @@ function deploySite(extra: Record<string, string> = {}): Run {
     env: {
       ...process.env,
       PATH: `${BIN}:${process.env.PATH ?? ""}`,
+      // Ключ оператора из окружения выкатки подменил бы ssh-заглушку настоящим
+      // `-i <ключ>`: deploy.sh гоняет эти тесты в смоуке со своим окружением.
+      DEPLOY_SSH_KEY: "",
       DRY_RUN: "0",
       DEPLOY_HOST: "stub@invalid.example",
       DEPLOY_SITE_PATH: REMOTE_DIR,
