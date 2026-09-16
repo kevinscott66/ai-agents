@@ -1,6 +1,6 @@
 import {test,expect} from 'bun:test';
 import {NativeAccess} from '../lib/native-access.ts';
-import {compactNativeKnowledge,knowledgePrompt,knowledgeState} from '../lib/native-knowledge-runtime.ts';
+import {compactNativeKnowledge,knowledgePrompt,knowledgeState,decodeKnowledgeResponse} from '../lib/native-knowledge-runtime.ts';
 function setup(){const s=new NativeAccess(':memory:');s.createConversation('conversation-000001','1','One');s.start('turn-one','device','1','Проект использует SQLite','conversation-000001');s.append('turn-one','Предлагаю проверить схему','backend');s.finish('turn-one','done');return s;}
 const entry={id:'database',kind:'fact',text:'Хранилище — SQLite',sourceMessageIds:['turn-one:user']};
 test('compaction persists provenance locally, proposes sharing but never autoaccepts',async()=>{
@@ -27,5 +27,16 @@ test('pending latest turn compacts after active extraction, without parallel inf
  const s=setup();let release!:()=>void;let finished!:()=>void;let calls=0;const done=new Promise<void>(r=>finished=r);const gate=new Promise<void>(r=>release=r);
  try{const first=compactNativeKnowledge(s,'1','conversation-000001',()=>true,async()=>{calls++;await gate;return JSON.stringify({entries:[entry]});});
  await compactNativeKnowledge(s,'1','conversation-000001',()=>true,async()=>{calls++;finished();return JSON.stringify({entries:[{...entry,text:'Latest'}]});});expect(calls).toBe(1);release();await first;await done;await new Promise(r=>setTimeout(r,0));expect(calls).toBe(2);expect(s.knowledge.snapshot('1','conversation-000001').entries[0].text).toBe('Latest');
+ }finally{s.db.close();}
+});
+
+test('whole JSON code fence from live provider is accepted, mixed prose stays rejected',async()=>{
+ const s=setup();try{
+ const json=JSON.stringify({entries:[entry],proposeEntryIds:[]});
+ expect(decodeKnowledgeResponse('```json\n'+json+'\n```')).toEqual(JSON.parse(json));
+ expect(()=>decodeKnowledgeResponse('Here is memory: '+json)).toThrow();
+ expect(()=>decodeKnowledgeResponse('```json\n'+json+'\n```\nExplanation')).toThrow();
+ await compactNativeKnowledge(s,'1','conversation-000001',()=>true,async()=>'```json\n'+json+'\n```');
+ expect(knowledgeState(s,'conversation-000001').state).toBe('ready');expect(s.knowledge.snapshot('1','conversation-000001').entries[0].id).toBe('database');
  }finally{s.db.close();}
 });

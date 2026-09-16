@@ -10,6 +10,13 @@ const SYSTEM=`Ты сжимаешь память одного личного д�
 const defaultExtractor:Extractor=(system,prompt)=>runTextViaAgentSdk({system,prompt,maxTurns:1,model:process.env.ANTHROPIC_SMALL_MODEL_SDK?.trim()||'haiku',agentKey:'_compactor'});
 let configuredExtractor:Extractor|undefined;
 export function configureKnowledgeExtraction(extract:Extractor=defaultExtractor){const old=configuredExtractor;configuredExtractor=extract;return()=>{configuredExtractor=old;};}
+/** Accept one whole JSON fence; never extract arbitrary prose or multiple blocks. */
+export function decodeKnowledgeResponse(raw:string):unknown {
+ if(raw.length>32_000)throw new Error('oversized_knowledge');
+ const text=raw.trim();
+ const fenced=/^```(?:json)?[ \t]*\r?\n([\s\S]*)\r?\n```$/.exec(text);
+ return JSON.parse(fenced?fenced[1]:text);
+}
 const active=new WeakMap<NativeAccess,Set<string>>();
 const pending=new WeakMap<NativeAccess,Map<string,()=>Promise<void>>>();
 export function knowledgePrompt(store:NativeAccess,user:string,chat:string):string {
@@ -39,8 +46,7 @@ export async function compactNativeKnowledge(store:NativeAccess,user:string,chat
   const prompt=untrusted('memory-input',JSON.stringify({previous:before.entries.map(e=>({...e,sourceMessageIds:e.sourceMessageIds.slice(0,2)})),project:before.project?.title??null,approvedProject:before.projectEntries.slice(0,16).map(e=>({kind:e.kind,text:e.text})),messages}));
   const raw=await extract(SYSTEM,prompt);
   if(!live()){set('interrupted');return;}
-  if(raw.length>32_000)throw new Error('oversized_knowledge');
-  const value=JSON.parse(raw);
+  const value=decodeKnowledgeResponse(raw) as Record<string,unknown>;
   if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>!['entries','proposeEntryIds'].includes(k)))throw new Error('invalid_knowledge');
   const entries=parseKnowledgeUpdate({entries:value.entries});
   const proposed=value.proposeEntryIds??[];
