@@ -12,7 +12,7 @@ import { bridgeSecretTransportError } from "./bridge-url.ts";
 import { cancelRun, killAll, type KillableChild } from "./kill.ts";
 import { parseBridgeMsg, toPermissionMode, type RunMsg } from "./protocol.ts";
 import { sanitizeChildEnv, resolveClaudeBin } from "./child-env.ts";
-import { isolatedClaudeProbeEnv } from "./probe-config.ts";
+import { isolatedClaudeProbeEnv } from "./readiness-config.ts";
 import { tmpdir } from "node:os";
 import { claudeReadinessCommand, probeClaudeReadiness } from "./readiness-preflight.ts";
 import { probeClaudeAuth } from "./auth-preflight.ts";
