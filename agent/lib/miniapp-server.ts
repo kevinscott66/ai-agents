@@ -18,7 +18,7 @@
  * action-dispatch.ts хука "выполнить после approve" не имеет (см. отчёт C13a).
  */
 import { readMediaJson } from "./native-media.ts";
-import { nativeApi } from "./native-api.ts";
+import { nativeApi, webApi } from "./native-api.ts";
 import { getErrorMessage } from "./errors.ts";
 import { HOUR_MS } from "./time-constants.ts";
 import { timingSafeEqual } from "node:crypto";
@@ -720,6 +720,10 @@ export function startMiniappServer(
     const path = url.pathname;
     const method = req.method.toUpperCase();
 
+    if (path.startsWith("/api/web/")) {
+      const limited = anonLimit(req, peer);
+      return limited ?? await webApi(req,undefined,trusted=>route(trusted,new URL(trusted.url),peer));
+    }
     if (path.startsWith("/api/native/")) {
       const limited = anonLimit(req, peer);
       return limited ?? await nativeApi(req);
@@ -2163,6 +2167,13 @@ export function startMiniappServer(
       return null;
     }
 
+    if(url.pathname==='/chat')return new Response(null,{status:308,headers:{Location:'/chat/','Cache-Control':'no-store'}});
+    if(url.pathname.startsWith('/chat/')){
+      const names:Record<string,string>={'/chat':'index.html','/chat/':'index.html','/chat/index.html':'index.html','/chat/app.js':'app.js','/chat/style.css':'style.css'};
+      const name=names[url.pathname];if(!name)return new Response('Not found',{status:404});
+      const asset=Bun.file(fileURLToPath(new URL('../web-chat/'+name,import.meta.url)));if(!await asset.exists())return new Response('Not found',{status:404});
+      return new Response(method==='HEAD'?null:asset,{headers:{'Content-Type':name.endsWith('.js')?'text/javascript; charset=utf-8':name.endsWith('.css')?'text/css; charset=utf-8':'text/html; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",'Referrer-Policy':'no-referrer','Permissions-Policy':'microphone=(self), camera=(), geolocation=()'}});
+    }
     // Resolve miniapp/dist relative to this file.
     const distDir = fileURLToPath(new URL("../miniapp/dist/", import.meta.url));
 
@@ -2332,6 +2343,8 @@ export function startMiniappServer(
           resp = json({ error: "internal error" }, 500);
         }
       }
+      // Bearer-only browser/audio responses must not acquire Mini App cookies or CORS.
+      if (url.pathname.startsWith('/api/web/') || url.pathname.startsWith('/api/native/voice/')) return resp;
       // C27: gzip + ETag pass for API responses (SSE is skipped inside).
       // T-311: then strip wildcard ACAO and echo origin only when allowed.
       //

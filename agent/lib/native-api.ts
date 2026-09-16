@@ -1,3 +1,4 @@
+import { voiceApi } from './native-voice.ts';
 import { compactNativeKnowledge, knowledgePrompt, knowledgeState } from "./native-knowledge-runtime.ts";
 import { attachmentId, parseUpload, locationValue, readMediaJson, type NativeMediaInput } from './native-media.ts';
 import { nativeAccess, type NativeAccess } from './native-access.ts';
@@ -28,6 +29,7 @@ export async function nativeApi(req: Request, injectedStore?: NativeAccess): Pro
     void req.body?.cancel().catch(() => {});
     return json({ error: 'unauthorized' }, 401);
   }
+  if (path.startsWith('/api/native/voice/') && identity) return voiceApi(req,identity.userId,()=>process.env.NATIVE_APP_ENABLED==='true' && store.authenticate(token)?.userId===identity.userId && permitted(identity.userId));
   let body: Record<string, unknown> = {};
   if (req.method === 'POST') {
     try {
@@ -192,4 +194,17 @@ export async function nativeApi(req: Request, injectedStore?: NativeAccess): Pro
     return result ? json(result) : json({ error: 'not_found' }, 404);
   }
   return json({ error: 'not_found' }, 404);
+}
+
+/** Browser boundary is separate; nativeApi still rejects every Origin. */
+export async function webApi(req:Request,store?:NativeAccess, decide?:(req:Request)=>Promise<Response>):Promise<Response>{
+ let origin:URL;try{origin=new URL(process.env.WEB_APP_ORIGIN??'');}catch{return json({error:'web_disabled'},503);}
+ if(origin.protocol!=='https:'||origin.origin!==process.env.WEB_APP_ORIGIN)return json({error:'web_disabled'},503);
+ const url=new URL(req.url),supplied=req.headers.get('origin');
+ if(!url.pathname.startsWith('/api/web/')||req.headers.has('cookie')||req.headers.get('sec-fetch-site')!=='same-origin'||(supplied!==null&&supplied!==origin.origin)||(req.method!=='GET'&&supplied!==origin.origin)||!['GET','POST'].includes(req.method))return json({error:'web_origin_forbidden'},403);
+ const headers=new Headers();for(const name of ['authorization','content-type','content-length']){const value=req.headers.get(name);if(value!==null)headers.set(name,value);}
+ const approval=req.method==='POST'&&/^\/api\/web\/approvals\/[a-zA-Z0-9-]{1,128}\/decide$/.test(url.pathname);
+ const target=new URL(origin.origin);target.pathname=url.pathname.replace('/api/web/',approval?'/api/':'/api/native/');target.search=url.search;
+ const trusted=new Request(target,{method:req.method,headers,body:req.body,signal:req.signal,duplex:'half'} as RequestInit);
+ return approval?(decide?decide(trusted):json({error:'not_found'},404)):nativeApi(trusted,store);
 }
