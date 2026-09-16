@@ -5,7 +5,7 @@ import { cleanupChat } from './_helpers.ts';
 import { db } from '../lib/db.ts';
 const id = 999323901;
 afterEach(() => { cleanupChat(id); db.query('DELETE FROM messages WHERE chat_id=?').run(String(id)); });
-test('native lead waits for legacy delegate and forwards its answer through the native sink', async () => {
+test('native lead does not execute incidental legacy bot mentions', async () => {
   const def = CHARACTERS.find(c => c.key === 'orchestrator')!;
   const specialist = CHARACTERS.find(c => c.key === 'design')!;
   const bot: any = { on() {}, telegram: { sendChatAction: async () => {} } };
@@ -26,7 +26,7 @@ test('native lead waits for legacy delegate and forwards its answer through the 
   });
   await processor({ chat:{id,type:'private'}, from:{id,is_bot:false}, message:{message_id:-100,text:'Сделай дизайн'}, sendChatAction:async()=>{},
     reply:async(text:string)=>{ replies.push(text); return {message_id:-200,date:1}; } } as any, { text:'Сделай дизайн',native:true });
-  expect(finished).toBe(true); expect(replies.some(r=>r.includes('Готовый результат'))).toBe(true);
+  expect(finished).toBe(false); expect(replies).toHaveLength(1);
 });
 test('native media-only turn reaches model with image and fenced document without Telegram download',async()=>{
  const def=CHARACTERS.find(c=>c.key==='orchestrator')!;let request:any;

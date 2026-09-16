@@ -923,6 +923,7 @@ export async function dispatchAction<T extends ActionType>(
       // без строки в `agent_actions`. Тот же дефект чинили для
       // PUBLISH_TO_CHANNEL выше.
       case "WRITE_WIKI": {
+        if (nativeTurnContext.getStore()) return {ok:false,error:"native_memory_managed_by_chat_compactor"};
         const p = payload as PayloadByType["WRITE_WIKI"];
         return await handleWriteWiki(p, {
           agentKey: ctx.agentKey,
@@ -931,6 +932,7 @@ export async function dispatchAction<T extends ActionType>(
         });
       }
       case "LIST_RECENT_MESSAGES": {
+        if (nativeTurnContext.getStore()) return {ok:false,error:"Native conversation history is already supplied; Telegram history is outside this dialogue."};
         const p = payload as PayloadByType["LIST_RECENT_MESSAGES"];
         return await handleListRecentMessages(p, {
           agentKey: ctx.agentKey,

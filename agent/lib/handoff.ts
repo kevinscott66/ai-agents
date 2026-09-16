@@ -6,6 +6,7 @@
  * от его токена. Глубина ограничена `MAX_HANDOFF_DEPTH`, повторные заходы в
  * того же агента в цепочке отсекаются через `visited`.
  */
+import { nativeTurnContext } from "./native-context.ts";
 import Anthropic from "@anthropic-ai/sdk";
 import { runWithTools } from "./tool-loop.ts";
 import { runCompactor } from "./compactor.ts";
@@ -30,6 +31,7 @@ import { sendWithHtml } from "./telegram-format.ts";
 import {
   NARRATIVE_DISCIPLINE_BLOCK,
   DELEGATED_EXECUTION_MANDATE,
+  NATIVE_DELEGATED_MANDATE,
   buildMemorySystemText,
   buildWikiPagesSystemText,
   speakerLabel,
@@ -297,6 +299,11 @@ export async function respondAs(
     inputDocuments,
     triggerUserId,
   } = opts;
+  // Approval/recovery callers must restore the conversation transport and history.
+  // Never silently fall back to Telegram or its global history inside a native turn.
+  if (nativeTurnContext.getStore() && !deps.nativeReply) {
+    return { status: "failed", reason: "native_handoff_context_unavailable" };
+  }
   const maxDepth = opts.maxDepth ?? MAX_HANDOFF_DEPTH;
   // Аудит 2026-08-09: остановленная цель (paused или disabled). У DELEGATE_TO_ROLE есть свой обход через
   // pickAvailableAgent, но respondAs — это ещё и легаси-путь по @-упоминанию,
@@ -335,7 +342,7 @@ export async function respondAs(
   // was given (legacy callers / direct @-mention path), derive one from visited
   // by inserting triggerAgentKey first, then target.
   const chainForTarget: string[] = delegationChain
-    ? [...delegationChain, target.def.key]
+    ? (delegationChain.at(-1) === target.def.key ? [...delegationChain] : [...delegationChain, target.def.key])
     : Array.from(new Set([triggerAgentKey, target.def.key]));
   const { anthropic, model, historyLimit, bots } = deps;
   // Точка невозврата: как только текст ушёл в чат, ход делегата состоялся, и
@@ -357,13 +364,13 @@ export async function respondAs(
   const deliveredParts: string[] = [];
   let lastPartSent: any;
   try {
-    await target.bot.telegram.sendChatAction(chatId, "typing").catch(() => {});
+    if (!deps.nativeReply) await target.bot.telegram.sendChatAction(chatId, "typing").catch(() => {});
 
-    const recent = deps.nativeHistory ? deps.nativeHistory.slice(-historyLimit) : getRecentMessages(chatId, historyLimit);
-    const teamIdx = wikiIndex("_team");
-    const teamLog = tailLines(wikiLog("_team"), 30);
-    const privIdx = wikiIndex(target.def.key);
-    const hits = wikiSearch(triggerText, ["_team", target.def.key], 4);
+    const recent = deps.nativeReply ? (deps.nativeHistory ?? []).slice(-historyLimit) : getRecentMessages(chatId, historyLimit);
+    const teamIdx = deps.nativeReply ? "" : wikiIndex("_team");
+    const teamLog = deps.nativeReply ? "" : tailLines(wikiLog("_team"), 30);
+    const privIdx = deps.nativeReply ? "" : wikiIndex(target.def.key);
+    const hits = deps.nativeReply ? [] : wikiSearch(triggerText, ["_team", target.def.key], 4);
     // Аудит 2026-08-10: содержимое вики уходило в system голым текстом —
     // см. WIKI_TRUST_BOUNDARY в lib/agent-prompts.ts.
     const hitPages = buildWikiPagesSystemText(
@@ -386,12 +393,12 @@ export async function respondAs(
       {
         // Шаг 1 автономности: форсим исполнение делегированной задачи в этом turn.
         type: "text",
-        text: DELEGATED_EXECUTION_MANDATE,
+        text: deps.nativeReply ? NATIVE_DELEGATED_MANDATE : DELEGATED_EXECUTION_MANDATE,
         cache_control: { type: "ephemeral" },
       },
       {
         type: "text",
-        text: buildMemorySystemText({
+        text: deps.nativeReply ? (nativeTurnContext.getStore()?.knowledge || "Контекст памяти текущего диалога отсутствует.") : buildMemorySystemText({
           agentKey: target.def.key,
           teamIndex: teamIdx,
           privateIndex: privIdx,
@@ -419,7 +426,7 @@ export async function respondAs(
       // S2 (security 2026-06-10): прокинуть botId, чтобы действия делегированного
       // агента шли через per-bot-per-chat rate-limit (раньше пропускался).
       botId: target.id,
-      telegram: target.bot.telegram,
+      telegram: deps.nativeReply ? nativeReplyTransport(target.bot.telegram, chatId, target.def.key, deps.nativeReply) : target.bot.telegram,
       triggerMessageId,
       // C10: keep the delegate-chain working when the target itself calls
       // DELEGATE_TO_ROLE — forward the resolver and deps bundle.
@@ -438,7 +445,7 @@ export async function respondAs(
       // Без этой строки делегат терял его и получал тихий forbidden.
       triggerUserId,
       // Step 3: заставить «производящую» роль сразу вызвать инструмент.
-      forceFirstTool: MAKER_ROLES.has(target.def.key),
+      forceFirstTool: !deps.nativeReply && MAKER_ROLES.has(target.def.key),
       // Крупный потолок токенов makers (SVG/HTML/код в tool-инпуте не должны рваться).
       maxTokens: MAKER_ROLES.has(target.def.key) ? MAKER_MAX_TOKENS : undefined,
     });
@@ -484,7 +491,7 @@ export async function respondAs(
       `[handoff-out][${target.def.key}] chat=${chatId} text=${redactText(reply)}`,
     );
 
-    recordMessage({
+    if (!deps.nativeReply) recordMessage({
       chatId,
       agentKey: target.def.key,
       isBot: true,
@@ -507,13 +514,15 @@ export async function respondAs(
         return `${who} ${defuseSpeakerLabels(r.text).slice(0, 200)}`;
       })
       .join("\n");
-    runCompactor(anthropic, {
+    if (!deps.nativeReply) runCompactor(anthropic, {
       agentKey: target.def.key,
       chatId,
       userText: triggerText,
       agentReply: reply,
       recentContext: recentSummary,
     });
+
+    if (deps.nativeReply) return { status: "answered", reply };
 
     if (depth < maxDepth) {
       const next = findHandoffTargets(reply, target.def.key, bots).filter(
@@ -588,7 +597,7 @@ export async function respondAs(
         parts: deliveredParts.length,
         error: reason,
       });
-      recordMessage({
+      if (!deps.nativeReply) recordMessage({
         chatId,
         agentKey: target.def.key,
         isBot: true,
@@ -610,4 +619,35 @@ export async function respondAs(
     log.error(`[handoff-err][${target.def.key}]`, { error: reason });
     return { status: "failed", reason };
   }
+}
+
+
+/** Read-only Telegram queries remain available; native chat mutations require a native adapter. */
+const NATIVE_TELEGRAM_READ_METHODS = new Set([
+  "getMe", "getChat", "getChatAdministrators", "getChatMember", "getChatMembersCount",
+  "getChatMemberCount", "getFile", "getFileLink", "getUserProfilePhotos", "getStickerSet",
+  "getCustomEmojiStickers", "getMyCommands", "getMyName", "getMyDescription",
+  "getMyShortDescription", "getChatMenuButton", "getMyDefaultAdministratorRights",
+]);
+
+/** Keep chat-local tool replies in the trusted native turn, with actual caller attribution. */
+export function nativeReplyTransport<T extends object>(telegram: T, chatId: string, agentKey: string, reply: NonNullable<HandoffDeps["nativeReply"]>): T {
+  return new Proxy(telegram, {
+    get(target, property) {
+      if (property === "sendMessage") return (destination: string | number, text: string) => {
+        if (String(destination) !== chatId) throw new Error("native_reply_destination_mismatch");
+        return reply(agentKey, text);
+      };
+      if (property === "sendChatAction") return async () => true;
+      // Do not expose tokens, raw callApi, or mutating methods through a fallback.
+      // Media uses its native sink before reaching this transport; unsupported
+      // operations must fail here rather than changing a Telegram chat.
+      if (typeof property === "string" && NATIVE_TELEGRAM_READ_METHODS.has(property)) {
+        const value = Reflect.get(target, property);
+        return typeof value === "function" ? value.bind(target) : undefined;
+      }
+      if (property === "token") return undefined;
+      return () => { throw new Error("native_telegram_operation_unsupported"); };
+    },
+  });
 }

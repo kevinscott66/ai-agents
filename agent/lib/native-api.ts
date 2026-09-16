@@ -1,3 +1,4 @@
+import { compactNativeKnowledge, knowledgePrompt, knowledgeState } from "./native-knowledge-runtime.ts";
 import { attachmentId, parseUpload, locationValue, readMediaJson, type NativeMediaInput } from './native-media.ts';
 import { nativeAccess, type NativeAccess } from './native-access.ts';
 import { isAssistantOwner as permitted } from './assistant-auth.ts';
@@ -9,7 +10,7 @@ import { parseUserIdList } from './allowlist.ts';
 import { getApproval } from './approvals.ts';
 import { log, scrubSecretString } from './log.ts';
 
-export type NativeLead = (userId: string, text: string, reply: (text: string) => void, history?: {role:string;text:string}[], media?: NativeMediaInput) => Promise<void>;
+export type NativeLead = (userId: string, text: string, reply: (text: string) => void, history?: {role:string;text:string;agentKey?:string}[], media?: NativeMediaInput) => Promise<void>;
 let lead: NativeLead | undefined;
 const uploading = new Set<string>();
 export function configureNativeLead(run: NativeLead) { const previous = lead; lead = run; return () => { lead = previous; }; }
@@ -63,6 +64,32 @@ export async function nativeApi(req: Request, injectedStore?: NativeAccess): Pro
     const safeMime = new Set(['image/jpeg','image/png','application/pdf','video/mp4','video/quicktime','text/plain']);
     return new Response(item.data,{headers:{'Content-Type':safeMime.has(item.mimeType)?item.mimeType:'application/octet-stream','Content-Length':String(item.size),'Content-Disposition':`attachment; filename="attachment"; filename*=UTF-8''${encodeURIComponent(item.name).replace(/'/g,'%27')}`,'X-Content-Type-Options':'nosniff','Cache-Control':'no-store'}});
   }
+  try {
+    if(path==='/api/native/projects' && req.method==='GET')return json({projects:store.knowledge.projects(identity.userId)});
+    if(path==='/api/native/projects' && req.method==='POST') {
+      if(typeof body.title!=='string')return json({error:'invalid_project'},400);
+      return json({project:store.knowledge.createProject(identity.userId,body.title)},201);
+    }
+    const knowledgeMatch=path.match(/^\/api\/native\/conversations\/([a-zA-Z0-9-]{16,64})\/(knowledge|project|proposals)$/);
+    if(knowledgeMatch){
+      const chat=knowledgeMatch[1];if(!store.conversation(chat,identity.userId))return json({error:'not_found'},404);
+      if(knowledgeMatch[2]==='knowledge'&&req.method==='GET')return json({...store.knowledge.snapshot(identity.userId,chat),memoryState:knowledgeState(store,chat)});
+      if(knowledgeMatch[2]==='project'&&req.method==='POST'){
+        if(body.projectId!==null&&(typeof body.projectId!=='string'||body.projectId.length>64))return json({error:'invalid_project'},400);
+        store.knowledge.assignProject(identity.userId,chat,body.projectId as string|null);
+        return json(store.knowledge.snapshot(identity.userId,chat));
+      }
+      if(knowledgeMatch[2]==='proposals'&&req.method==='POST'){
+        if(typeof body.entryId!=='string'||body.entryId.length>64)return json({error:'invalid_entry'},400);
+        return json({proposal:store.knowledge.propose(identity.userId,chat,body.entryId)},201);
+      }
+    }
+    const proposalMatch=path.match(/^\/api\/native\/knowledge\/proposals\/([a-zA-Z0-9-]{16,64})$/);
+    if(proposalMatch&&req.method==='POST'){
+      if(typeof body.accept!=='boolean')return json({error:'invalid_decision'},400);
+      return store.knowledge.decide(identity.userId,proposalMatch[1],body.accept)?json({ok:true}):json({error:'proposal_expired'},409);
+    }
+  }catch(error){const code=error instanceof Error?error.message:'';return json({error:code==='knowledge_not_found'?'not_found':code==='knowledge_limit'?'knowledge_limit':'invalid_knowledge'},code==='knowledge_not_found'?404:code==='knowledge_limit'?429:400);}
   if (path === '/api/native/status' && req.method === 'GET') return json({ name: 'Агент', userId: identity.userId, available: !!lead && !agentStopReason('orchestrator') });
   if (path === '/api/native/conversations' && req.method === 'GET') {
     const cursor = new URL(req.url).searchParams.get('cursor');
@@ -141,9 +168,16 @@ export async function nativeApi(req: Request, injectedStore?: NativeAccess): Pro
       const run = lead;
       // Detached job is persisted before invoking the lead; client polls, never replays on reconnect.
       const text = body.text;
-      void Promise.resolve().then(() => nativeTurnContext.run({userId:identity.userId,turnId:id,conversationId:store.turnConversation(id)!,mediaSink:store.artifactSink(id,identity.userId,identity.device,store.turnConversation(id)!),linkApproval: approvalId => store.linkApproval(approvalId,id,identity.userId)}, () => run(identity.userId, text, answer => store.append(id, answer), typeof conversationId === 'string' ? store.history(conversationId,identity.userId)!.messages.slice(-40) : undefined,store.media.input(ids,identity.userId,location)))).then(() => {
+      const deliver=(answer:string,agentKey='orchestrator')=>{
+        const live=store.authenticate(token);
+        if(process.env.NATIVE_APP_ENABLED!=='true'||!live||live.userId!==identity.userId||!permitted(identity.userId)||store.get(id,identity.device)?.status!=='running')throw new Error('native_turn_inactive');
+        store.append(id,answer,agentKey);
+      };
+      void Promise.resolve().then(() => nativeTurnContext.run({userId:identity.userId,turnId:id,conversationId:store.turnConversation(id)!,knowledge:knowledgePrompt(store,identity.userId,store.turnConversation(id)!),reply:async (agentKey,answer)=>{deliver(answer,agentKey);return {message_id:-Date.now(),date:Math.floor(Date.now()/1000)};},mediaSink:store.artifactSink(id,identity.userId,identity.device,store.turnConversation(id)!),linkApproval: approvalId => store.linkApproval(approvalId,id,identity.userId)}, () => run(identity.userId, text, answer => deliver(answer), typeof conversationId === 'string' ? store.history(conversationId,identity.userId)!.messages.slice(-40) : undefined,store.media.input(ids,identity.userId,location)))).then(() => {
         if (!store.get(id, identity.device)?.replies.length) store.append(id, 'Агент не вернул ответ. Проверь состояние роли и лимиты.');
         store.finish(id, 'done');
+        const dialog=store.turnConversation(id);
+        if(dialog) void compactNativeKnowledge(store,identity.userId,dialog,()=>process.env.NATIVE_APP_ENABLED==='true'&&!!store.authenticate(token)&&permitted(identity.userId));
       }).catch(() => {
         try {
           store.append(id, 'Запрос прерван. Проверь выполненные действия перед повтором.');

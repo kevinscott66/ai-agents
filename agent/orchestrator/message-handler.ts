@@ -24,6 +24,7 @@
  * client, the model id, and the shared HandoffDeps). The two pure helpers
  * (`isMentioned`/`tailLines`) come from ./helpers.ts to avoid a circular import.
  */
+import { nativeTurnContext } from "../lib/native-context.ts";
 import { Telegraf, type Context } from "telegraf";
 import { handleAssistantCommand } from "../lib/assistant-commands.ts";
 import Anthropic from "@anthropic-ai/sdk";
@@ -51,6 +52,7 @@ import {
 import { sendWithHtml } from "../lib/telegram-format.ts";
 import {
   respondAs,
+  nativeReplyTransport,
   findHandoffTargets,
   MAX_HANDOFF_DEPTH,
   HANDOFF_MAX_INVOCATIONS,
@@ -60,6 +62,7 @@ import { getDiscussionMode } from "../lib/chat-settings.ts";
 import {
   NARRATIVE_DISCIPLINE_BLOCK,
   ORCHESTRATION_MANDATE,
+  NATIVE_TEAM_MANDATE,
   buildMemorySystemText,
   buildWikiPagesSystemText,
   speakerLabel,
@@ -447,7 +450,7 @@ export function registerMessageHandler(
 
       // Запишем входящее сообщение в короткую память один раз — от Дирижёра-роутера,
       // чтобы не дублировать. Остальные пропускают запись.
-      if (isOrchestrator && !fromOurBot && (!voice || voice.native)) {
+      if (isOrchestrator && !fromOurBot && !voice) {
         recordMessage({
           chatId,
           agentKey: null,
@@ -529,19 +532,26 @@ export function registerMessageHandler(
 
       if (isOrchestrator && !fromOurBot && await handleAssistantCommand(ctx, text, { source: voice?.native ? 'native' : 'telegram' })) return;
 
+      const nativeHistory = [...(voice?.history ?? [])];
+      const nativeReply: NonNullable<HandoffDeps["nativeReply"]> = async (agentKey, answer) => {
+        const context = nativeTurnContext.getStore();
+        if (context && context.userId !== chatId) throw new Error("native_reply_owner_mismatch");
+        const sent = context?.reply ? await context.reply(agentKey, answer) : await ctx.reply(`[${agentKey}]\n${answer}`);
+        nativeHistory.push({ id: sent.message_id, chat_id: chatId, agent_key: agentKey,
+          is_bot: 1, from_user_id: "", from_name: agentKey, text: answer, ts: sent.date * 1000 });
+        return sent;
+      };
       const turnHandoffDeps: HandoffDeps = voice?.native ? {
-        ...handoffDeps,
-        nativeHistory: voice.history,
-        nativeReply: async (agentKey, answer) => ctx.reply(`[${agentKey}]\n${answer}`),
+        ...handoffDeps, nativeHistory, nativeReply,
       } : handoffDeps;
-      const recent = voice?.native && voice.history ? voice.history.slice(-historyLimit) : getRecentMessages(chatId, historyLimit);
+      const recent = voice?.native ? nativeHistory.slice(-historyLimit) : getRecentMessages(chatId, historyLimit);
       // T-303: run all wiki I/O concurrently (async) to avoid blocking the
       // event loop with sequential readFileSync calls on the hot path.
-      const hits = wikiSearch(text, ["_team", def.key], 4);
+      const hits = voice?.native ? [] : wikiSearch(text, ["_team", def.key], 4);
       const [teamIdx, teamLogRaw, privIdx, ...hitBodies] = await Promise.all([
-        wikiIndexAsync("_team"),
-        wikiLogAsync("_team"),
-        wikiIndexAsync(def.key),
+        voice?.native ? "" : wikiIndexAsync("_team"),
+        voice?.native ? "" : wikiLogAsync("_team"),
+        voice?.native ? "" : wikiIndexAsync(def.key),
         ...hits.map((h) => wikiReadAsync(h.scope, h.slug)),
       ]);
       const teamLog = tailLines(teamLogRaw, 30);
@@ -568,11 +578,11 @@ export function registerMessageHandler(
         // Шаг 2 автономности: только оркестратор ведёт весь пайплайн до результата
         // в одном turn (designer→frontend→qa…), а не «1-2 хопа и стоп».
         ...(def.key === "orchestrator"
-          ? [{ type: "text" as const, text: ORCHESTRATION_MANDATE + "\nПользователь называет тебя «Агент». Отзывайся на это имя. Ты единый собеседник, координирующий 12 ролей.", cache_control: { type: "ephemeral" as const } }]
+          ? [{ type: "text" as const, text: (voice?.native ? NATIVE_TEAM_MANDATE : ORCHESTRATION_MANDATE) + "\nПользователь называет тебя «Агент». Отзывайся на это имя. Ты единый собеседник, координирующий 12 ролей.", cache_control: { type: "ephemeral" as const } }]
           : []),
         {
           type: "text",
-          text: buildMemorySystemText({
+          text: voice?.native ? (nativeTurnContext.getStore()?.knowledge || "Контекст памяти текущего диалога отсутствует.") : buildMemorySystemText({
             agentKey: def.key,
             teamIndex: teamIdx,
             privateIndex: privIdx,
@@ -746,7 +756,7 @@ export function registerMessageHandler(
       // ДО runWithTools: делегирования оркестратора — такие же LLM-вызовы, как
       // и каскад по @-упоминаниям ниже, и раньше в потолок не попадали вовсе
       // (счётчик рождался строкой после, уже когда оркестратор отработал).
-      const handoffBudget = { n: 0, max: HANDOFF_MAX_INVOCATIONS };
+      const handoffBudget = { n: 0, max: voice?.native ? Math.min(8, HANDOFF_MAX_INVOCATIONS) : HANDOFF_MAX_INVOCATIONS };
       const reply = await runWithTools({
         anthropic,
         model,
@@ -755,7 +765,7 @@ export function registerMessageHandler(
         agentKey: def.key,
         chatId: Number(chatId),
         botId: running.id, // T-240: Add bot ID for per-bot-per-chat rate limiting
-        telegram: bot.telegram,
+        telegram: voice?.native ? nativeReplyTransport(bot.telegram, chatId, def.key, nativeReply) : bot.telegram,
         triggerMessageId: voice?.native ? undefined : ctx.message!.message_id,
         // C10: preferred handoff path via DELEGATE_TO_ROLE tool.
         // findHandoffTargets / @-mention path below stays as legacy fallback.
@@ -789,7 +799,7 @@ export function registerMessageHandler(
        */
       const delivered: string[] = [];
       let lastSent: any;
-      const sender = (t: string) => voice?.native ? ctx.reply(t) :
+      const sender = (t: string) => voice?.native ? nativeReply(def.key, t) :
         // T-fmt: each chunk goes out as Telegram HTML (Markdown-converted), with
         // a plain-text fallback on a parse error so delivery never breaks.
         sendWithHtml(
@@ -825,7 +835,7 @@ export function registerMessageHandler(
             parts: delivered.length,
             error: getErrorMessage(sendErr),
           });
-          recordMessage({
+          if (!voice?.native) recordMessage({
             chatId,
             agentKey: def.key,
             isBot: true,
@@ -854,7 +864,7 @@ export function registerMessageHandler(
         // и вход, только уже собранный. Симметрично со строкой [in].
         log.info(`[out][${def.key}] chat=${chatId} text=${redactText(reply)}`);
 
-        recordMessage({
+        if (!voice?.native) recordMessage({
           chatId,
           agentKey: def.key,
           isBot: true,
@@ -870,7 +880,7 @@ export function registerMessageHandler(
           const who = r.agent_key ? `[${r.agent_key}]` : speakerLabel(r.from_name);
           return `${who} ${defuseSpeakerLabels(r.text).slice(0, 200)}`;
         }).join("\n");
-        runCompactor(anthropic, {
+        if (!voice?.native) runCompactor(anthropic, {
           agentKey: def.key,
           chatId,
           userText: text,
@@ -889,7 +899,7 @@ export function registerMessageHandler(
         // Счётчик тот же, что ушёл в runWithTools выше: делегирования оркестратора
         // уже израсходовали часть запаса, и каскад по упоминаниям продолжает с
         // того же места, а не с нуля.
-        const targets = findHandoffTargets(reply, def.key, bots);
+        const targets = voice?.native ? [] : findHandoffTargets(reply, def.key, bots);
         for (const t of targets) {
           const cascade = (deps.respondAsImpl ?? respondAs)(
             {

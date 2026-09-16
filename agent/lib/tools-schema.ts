@@ -1,3 +1,4 @@
+import { nativeTurnContext } from "./native-context.ts";
 /**
  * C5/R-A: Anthropic tool_use схема + диспатчер.
  *
@@ -899,6 +900,12 @@ export async function executeTool(
 
   // C11: read-only wiki tools — pure reads, no gate, no audit-log. Общий
   // минутный бакет агента с 2026-09-11 их всё-таки считает (см. выше).
+  const nativeMemory = nativeTurnContext.getStore();
+  if (nativeMemory && ["SEARCH_WIKI", "READ_WIKI", "WRITE_WIKI"].includes(name)) {
+    if (nativeMemory.userId !== String(ctx.chatId)) return JSON.stringify({error:"native_owner_mismatch"});
+    if (name === "WRITE_WIKI") return JSON.stringify({error:"Память диалога обновляется автоматически после ответа. Общая память проекта меняется только после подтверждения владельца в разделе Память диалога."});
+    return JSON.stringify({scope:"current_conversation_and_approved_project",content:nativeMemory.knowledge ?? "Память этого диалога пока пуста."});
+  }
   if (name === "SEARCH_WIKI") {
     const query = String(i.query ?? "").trim();
     if (!query) return fmt({ ok: false, error: "query is required" });

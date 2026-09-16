@@ -33,7 +33,7 @@ test('restart preserves replies and marks unfinished work interrupted without re
     const path = join(dir, 'native.db');
     const first = new NativeAccess(path); first.start('job', 'device', '12', 'do work'); first.append('job', 'partial'); first.db.close();
     const second = new NativeAccess(path);
-    expect(second.get('job', 'device')).toEqual({ id: 'job', status: 'interrupted', replies: ['partial'] });
+    expect(second.get('job', 'device')).toEqual({ id: 'job', status: 'interrupted', replies: ['partial'], replyDetails:[{messageId:'job:reply:1',agentKey:'orchestrator'}] });
     second.db.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

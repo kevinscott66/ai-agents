@@ -26,6 +26,7 @@ import type { RunningBot } from "./lib/types.ts";
 import { log } from "./lib/log.ts";
 import { getErrorMessage } from "./lib/errors.ts";
 import { DEFAULT_MESSAGE_HISTORY_LIMIT } from "./lib/constants.ts";
+import { configureKnowledgeExtraction } from "./lib/native-knowledge-runtime.ts";
 import { configureNativeLead } from "./lib/native-api.ts";
 import { registerVoiceHandler } from "./orchestrator/voice-handler.ts";
 import { registerMessageHandler } from "./orchestrator/message-handler.ts";
@@ -137,6 +138,7 @@ export async function buildBot(def: CharacterDef): Promise<RunningBot | null> {
 
   if (def.key === "orchestrator") {
     let nativeMessageId = -Date.now() * 1000;
+    configureKnowledgeExtraction();
     configureNativeLead(async (userId, text, reply, history, media) => {
       const messageId = nativeMessageId--;
       const chat = { id: Number(userId), type: "private" as const };
@@ -150,7 +152,7 @@ export async function buildBot(def: CharacterDef): Promise<RunningBot | null> {
           return { message_id: nativeMessageId--, date: Math.floor(Date.now() / 1000), chat, text: answer };
         },
       } as unknown as import("telegraf").Context;
-      await processVoice(ctx, { text, native: true, ...media, history: history?.map((m,i) => ({id:i,chat_id:userId,from_user_id:userId,ts:Date.now(),is_bot:m.role === "assistant" ? 1 : 0,agent_key:m.role === "assistant" ? "orchestrator" : null,from_name:"Owner",text:m.text})) });
+      await processVoice(ctx, { text, native: true, ...media, history: history?.map((m,i) => ({id:i,chat_id:userId,from_user_id:userId,ts:Date.now(),is_bot:m.role === "assistant" ? 1 : 0,agent_key:m.role === "assistant" ? (m.agentKey ?? "orchestrator") : null,from_name:"Owner",text:m.text})) });
     });
   }
   return running;

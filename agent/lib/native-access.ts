@@ -1,3 +1,4 @@
+import { NativeKnowledge } from "./native-knowledge.ts";
 /** Separate device credentials/job state; never stores Telegram or service credentials. */
 import { NativeMedia, parseUpload, type NativeLocation } from './native-media.ts';
 import { DAY_MS } from './time-constants.ts';
@@ -10,6 +11,7 @@ const hash = (s: string) => createHash('sha256').update(s).digest('hex');
 export class NativeAccess {
   readonly db: Database;
   readonly media: NativeMedia;
+  readonly knowledge: NativeKnowledge;
   constructor(path: string) {
     if (path !== ':memory:') mkdirSync(dirname(resolve(path)), { recursive: true, mode: 0o700 });
     this.db = new Database(path);
@@ -21,6 +23,7 @@ export class NativeAccess {
       CREATE TABLE IF NOT EXISTS conversation_messages(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT UNIQUE NOT NULL,conversation_id TEXT NOT NULL,role TEXT NOT NULL,text TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS conversation_owner ON conversations(user_id,updated);
       CREATE INDEX IF NOT EXISTS conversation_history ON conversation_messages(conversation_id,seq);
+      CREATE TABLE IF NOT EXISTS native_message_authors(message_id TEXT PRIMARY KEY,agent_key TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS codes(hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS devices(hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS turns(id TEXT PRIMARY KEY, device TEXT NOT NULL, user_id TEXT NOT NULL,
@@ -29,6 +32,9 @@ export class NativeAccess {
       CREATE TABLE IF NOT EXISTS native_generations(id TEXT PRIMARY KEY,turn_id TEXT NOT NULL,state TEXT NOT NULL,started INTEGER NOT NULL,ended INTEGER);
       CREATE TABLE IF NOT EXISTS alert_settings(user_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS alert_state(user_id TEXT NOT NULL, agent TEXT NOT NULL, unhealthy INTEGER NOT NULL, PRIMARY KEY(user_id,agent));`);
+    this.knowledge = new NativeKnowledge(this.db);
+    this.db.run("CREATE TABLE IF NOT EXISTS native_knowledge_state(conversation_id TEXT PRIMARY KEY,state TEXT NOT NULL,updated INTEGER NOT NULL)");
+    this.db.query("UPDATE native_knowledge_state SET state='interrupted' WHERE state='updating'").run();
     // Archive retained legacy messages before short-lived polling rows expire.
     this.db.transaction(() => {
       const rows = this.db.query('SELECT * FROM turns WHERE id NOT IN (SELECT turn_id FROM conversation_turns) ORDER BY created,id').all() as {id:string;user_id:string;text:string;replies:string;created:number}[];
@@ -97,7 +103,8 @@ export class NativeAccess {
   get(id: string, device: string) {
     const row = this.db.query('SELECT id,status,replies FROM turns WHERE id=? AND device=?').get(id, device) as { id: string; status: string; replies: string } | null;
     const outputMedia=this.outputMedia(id),generations=this.generations(id);
-    return row ? { ...row, replies: JSON.parse(row.replies) as string[], ...(outputMedia.length?{outputMedia}:{}), ...(generations.length?{generations}:{}) } : null;
+    const replyDetails = row ? (JSON.parse(row.replies) as string[]).map((_,i)=>{const messageId=id+':reply:'+(i+1);return {messageId,agentKey:(this.db.query('SELECT agent_key FROM native_message_authors WHERE message_id=?').get(messageId) as {agent_key:string}|null)?.agent_key ?? 'orchestrator'};}) : [];
+    return row ? { ...row, ...(replyDetails.length ? {replyDetails} : {}), replies: JSON.parse(row.replies) as string[], ...(outputMedia.length?{outputMedia}:{}), ...(generations.length?{generations}:{}) } : null;
   }
   start(id: string, device: string, userId: string, text: string, conversationId?: string, attachmentIds: string[] = [], location?: NativeLocation): 'created' | 'duplicate' | 'busy' | 'conflict' {
     this.prune();
@@ -125,7 +132,8 @@ export class NativeAccess {
       return 'created';
     })();
   }
-  append(id: string, text: string) {
+  append(id: string, text: string, agentKey = "orchestrator") {
+    if(!/^[a-z][a-z0-9_]{0,31}$/.test(agentKey)) throw new Error("invalid_agent");
     this.db.transaction(() => {
     const row = this.db.query("SELECT replies FROM turns WHERE id=? AND status='running'").get(id) as { replies: string } | null;
     if(!row) return;
@@ -135,9 +143,20 @@ export class NativeAccess {
     const link = this.db.query('SELECT conversation_id FROM conversation_turns WHERE turn_id=?').get(id) as {conversation_id:string}|null;
     if (link) {
       this.db.query('INSERT OR IGNORE INTO conversation_messages(id,conversation_id,role,text) VALUES(?,?,?,?)').run(id+':reply:'+replies.length,link.conversation_id,'assistant',text.slice(0,8000));
+      this.db.query('INSERT OR REPLACE INTO native_message_authors(message_id,agent_key) VALUES(?,?)').run(id+':reply:'+replies.length,agentKey);
       this.db.query('UPDATE conversations SET updated=? WHERE id=?').run(Date.now(),link.conversation_id);
     }
     this.db.query('UPDATE turns SET replies=? WHERE id=?').run(JSON.stringify(replies), id);
+    })();
+  }
+  appendConversationReply(userId:string,conversationId:string,text:string,agentKey:string) {
+    if(!/^[a-z][a-z0-9_]{0,31}$/.test(agentKey)||!this.conversation(conversationId,userId))throw new Error('native_owner_mismatch');
+    return this.db.transaction(()=>{
+      const messageId='team:'+randomBytes(16).toString('hex');
+      const row=this.db.query('INSERT INTO conversation_messages(id,conversation_id,role,text) VALUES(?,?,?,?) RETURNING seq').get(messageId,conversationId,'assistant',text.slice(0,8000)) as {seq:number};
+      this.db.query('INSERT INTO native_message_authors VALUES(?,?)').run(messageId,agentKey);
+      this.db.query('UPDATE conversations SET updated=? WHERE id=?').run(Date.now(),conversationId);
+      return {messageId,seq:row.seq};
     })();
   }
   turnConversation(turnId:string): string | undefined {
@@ -180,7 +199,7 @@ export class NativeAccess {
   }
   history(id:string,userId:string,before = Number.MAX_SAFE_INTEGER) {
     if (!this.conversation(id,userId)) return null;
-    const rows = this.db.query('SELECT seq,id,role,text FROM conversation_messages WHERE conversation_id=? AND seq<? ORDER BY seq DESC LIMIT 101').all(id,before) as {seq:number;id:string;role:string;text:string}[];
+    const rows = this.db.query('SELECT m.seq,m.id,m.role,m.text,a.agent_key AS agentKey FROM conversation_messages m LEFT JOIN native_message_authors a ON a.message_id=m.id WHERE m.conversation_id=? AND m.seq<? ORDER BY m.seq DESC LIMIT 101').all(id,before) as {seq:number;id:string;role:string;text:string;agentKey?:string}[];
     const more = rows.length > 100; const messages = rows.slice(0,100).reverse().map(row => ({...row,...(row.role === 'user' ? this.media.history(row.id.replace(/:user$/,''),userId) : this.outputAttachments(row.id))}));
     const running = this.running(userId);
     const generations=(this.db.query('SELECT g.id,g.state,g.started,g.ended FROM native_generations g JOIN conversation_turns t ON t.turn_id=g.turn_id WHERE t.conversation_id=? ORDER BY g.started DESC LIMIT 100').all(id) as NativeGeneration[]).map(g=>({...g,ended:g.ended ?? undefined}));

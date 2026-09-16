@@ -1,4 +1,7 @@
 import { nativeTurnContext, nativeApprovalLinks, nativeExecutionMarker, recordNativeExecutionOutcome } from "./native-context.ts";
+import { knowledgePrompt } from "./native-knowledge-runtime.ts";
+import { isAssistantOwner } from "./assistant-auth.ts";
+import { nativeReplyTransport } from "./handoff.ts";
 import { nativeAccess } from "./native-access.ts";
 import { scrubSecretString } from "./log.ts";
 /**
@@ -192,7 +195,34 @@ export async function executeApproved(approval: Approval, deps: ApprovalExecDeps
     catch { log.error('[native] deferred approval link repair'); }
   }
   try {
-    result = linked && store ? await nativeTurnContext.run({userId:String(approval.chat_id),turnId:linked.turn_id,conversationId:linked.conversation_id,linkApproval:id=>store.linkApproval(id,linked.turn_id,String(approval.chat_id))},()=>executeApprovedAction(approval,deps)) : await executeApprovedAction(approval,deps);
+    if (linked && store) {
+      const userId = String(approval.chat_id);
+      const assertOwned = () => {
+        if (process.env.NATIVE_APP_ENABLED !== 'true' || !isAssistantOwner(userId) || !store.history(linked.conversation_id,userId)) {
+          throw new Error('native_approval_context_unavailable');
+        }
+      };
+      assertOwned();
+      const nativeHistory = store.history(linked.conversation_id,userId)!.messages.slice(-40).map((m,i) => ({
+        id:i,chat_id:userId,from_user_id:userId,ts:Date.now(),is_bot:m.role==='assistant'?1:0,
+        agent_key:m.role==='assistant'?(m.agentKey??'orchestrator'):null,from_name:m.agentKey??'Owner',text:m.text,
+      }));
+      const reply = async (agentKey:string,text:string) => {
+        assertOwned();
+        const saved = store.appendConversationReply(userId,linked.conversation_id,text,agentKey);
+        const date = Math.floor(Date.now()/1000);
+        nativeHistory.push({id:saved.seq,chat_id:userId,from_user_id:'',ts:date*1000,is_bot:1,agent_key:agentKey,from_name:agentKey,text});
+        return {message_id:-saved.seq,date};
+      };
+      const nativeDeps: ApprovalExecDeps = {
+        ...deps,
+        resolveTg: key => nativeReplyTransport(deps.resolveTg?.(key) ?? {} as Telegram,userId,key,reply),
+        handoffDeps: deps.handoffDeps ? {...deps.handoffDeps,nativeHistory,nativeReply:reply} : undefined,
+      };
+      result = await nativeTurnContext.run({userId,turnId:linked.turn_id,conversationId:linked.conversation_id,
+        knowledge:knowledgePrompt(store,userId,linked.conversation_id),reply,
+        linkApproval:id=>store.linkApproval(id,linked.turn_id,userId)},()=>executeApprovedAction(approval,nativeDeps));
+    } else result = await executeApprovedAction(approval,deps);
   }
   catch (error) {
     if (process.env.NATIVE_APP_ENABLED === 'true') {
@@ -320,6 +350,7 @@ async function executeApprovedAction(
     resolveAgent: deps.resolveAgent,
     handoffDeps: deps.handoffDeps,
     respondAsImpl: deps.respondAsImpl,
+    ...(nativeTurnContext.getStore() ? {triggerUserId:String(approval.chat_id),handoffBudget:{n:0,max:8}} : {}),
   });
   if (!res.ok) {
     // Как в gateOrDispatch: неудавшийся диспатч не должен съедать лимит.

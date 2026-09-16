@@ -11,7 +11,7 @@ export function recordNativeExecutionOutcome(database: Database, approvalId:stri
   return database.query("UPDATE native_approval_links SET execution=?,output=? WHERE approval_id=? AND (execution IS NULL OR execution LIKE 'running:%')").run(outcome,output,approvalId).changes > 0;
 }
 // Trusted ingress context, never model-supplied payload fields.
-export const nativeTurnContext = new AsyncLocalStorage<{ userId: string; turnId:string; conversationId:string; linkApproval: (id:string) => void; mediaSink?: NativeArtifactSink }>();
+export const nativeTurnContext = new AsyncLocalStorage<{ userId: string; turnId:string; conversationId:string; knowledge?:string; reply?:(agentKey:string,text:string)=>Promise<{message_id:number;date:number}>; linkApproval: (id:string) => void; mediaSink?: NativeArtifactSink }>();
 export function persistNativeApprovalLink(database: Database, approvalId:string, chatId:number) {
   const context = nativeTurnContext.getStore();
   if (!context || context.userId !== String(chatId)) return;
