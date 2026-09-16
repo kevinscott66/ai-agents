@@ -6,6 +6,7 @@ import { mkdtemp, writeFile, open, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { roleModel } from "./role-models.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -17,6 +18,14 @@ export function inferenceCatalog(raw: string, requested?: string): { catalog: an
   if (!model || !models.some((m: any) => m.slug === model)) throw new Error("CODEX_MODEL must exist in the bundled catalog");
   for (const item of catalog.models) item.apply_patch_tool_type = null;
   return { catalog, model };
+}
+
+/** Effort роли, если модель его поддерживает; иначе дефолт модели из каталога. */
+export function codexEffort(catalog: any, model: string, effort?: string): string | undefined {
+  if (!effort) return undefined;
+  const entry = catalog.models.find((m: any) => m.slug === model);
+  const levels = Array.isArray(entry?.supported_reasoning_levels) ? entry.supported_reasoning_levels.map((l: any) => l?.effort) : [];
+  return levels.includes(effort) ? effort : undefined;
 }
 
 const OUTPUT_LIMIT = 2 * 1024 * 1024;
@@ -60,7 +69,7 @@ export function parseCodexReply(raw: string, params: Anthropic.MessageCreatePara
   return content;
 }
 
-export async function callCodex(params: Anthropic.MessageCreateParamsNonStreaming, onUsage?: (input: number, output: number) => void): Promise<Anthropic.Message> {
+export async function callCodex(params: Anthropic.MessageCreateParamsNonStreaming, onUsage?: (input: number, output: number) => void, agentKey?: string): Promise<Anthropic.Message> {
   if (!process.env.CODEX_AUTH_HOME || !isAbsolute(process.env.CODEX_AUTH_HOME)) throw new Error("CODEX_AUTH_HOME is required; authorize Codex before switching");
   const binary = process.env.CODEX_BIN;
   if (!binary || !isAbsolute(binary)) throw new Error("CODEX_BIN must be an absolute path to verified CLI 0.149.0");
@@ -70,7 +79,9 @@ export async function callCodex(params: Anthropic.MessageCreateParamsNonStreamin
     const version = await execFileAsync(binary, ["--version"], { cwd: dir, env: childEnv, timeout: 10_000, maxBuffer: 4096 });
     if (version.stdout.trim() !== "codex-cli 0.149.0") throw new Error("Unsupported Codex CLI; inference isolation requires 0.149.0");
     const catalogResult = await execFileAsync(binary, ["debug", "models", "--bundled"], { cwd: dir, env: childEnv, timeout: 10_000, maxBuffer: 4 * OUTPUT_LIMIT });
-    const { catalog, model } = inferenceCatalog(catalogResult.stdout, process.env.CODEX_MODEL);
+    const role = roleModel(agentKey, "codex");
+    const { catalog, model } = inferenceCatalog(catalogResult.stdout, role.model ?? process.env.CODEX_MODEL?.trim());
+    const effort = codexEffort(catalog, model, role.effort);
     const catalogPath = join(dir, "models.json");
     await writeFile(catalogPath, JSON.stringify(catalog), { mode: 0o600 });
     const schemaPath = join(dir, "output-schema.json");
@@ -79,6 +90,7 @@ export async function callCodex(params: Anthropic.MessageCreateParamsNonStreamin
     const args = ["exec", "--ignore-user-config", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "--json", "--color", "never", "--output-schema", schemaPath, "--output-last-message", outputPath,
       "-c", 'approval_policy="never"', "-c", 'web_search="disabled"', "-c", "project_doc_max_bytes=0", "-c", `model_catalog_json=${JSON.stringify(catalogPath)}`,
       "-c", "tools.update_plan.enabled=false", "-c", "tools.experimental_request_user_input.enabled=false", "--model", model,
+      ...(effort ? ["-c", `model_reasoning_effort=${JSON.stringify(effort)}`] : []),
       ...DISABLED_CODEX_FEATURES.flatMap(f => ["--disable", f])];
     // Represent image inputs as actual image attachments, never base64 prose.
     const messages = structuredClone(params.messages);
