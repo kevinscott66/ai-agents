@@ -96,7 +96,7 @@ struct ChatLine: Identifiable, Codable { var id = UUID().uuidString; let role: S
             remoteBusy = index.running; historyError = nil
         } catch { if generation == syncGeneration { historyError = "Не удалось загрузить диалоги: " + error.localizedDescription } }
     }
-    private let speaker = AVSpeechSynthesizer()
+    private let speaker = ReplySpeaker()
     private var polling: Task<Void, Never>?
     private var currentReplies = 0
     private var currentTurn: String?
@@ -189,15 +189,11 @@ struct ChatLine: Identifiable, Codable { var id = UUID().uuidString; let role: S
         clearPending()
         error = "Ожидание сброшено. Серверная задача могла продолжить работу; перед повтором проверьте её состояние."
     }
-    func speak(_ text: String) {
-        speaker.stopSpeaking(at: .immediate)
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio)
-        try? AVAudioSession.sharedInstance().setActive(true)
-        let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = AVSpeechSynthesisVoice(language: "ru-RU")
-        speaker.speak(utterance)
+    func speak(_ text: String, server: String) {
+        guard let token = Credentials.read(server: server) else { error = "Подключите устройство в настройках"; return }
+        speaker.speak(text, server: server, token: token) { [weak self] message in self?.error = "Озвучка: " + message }
     }
-    func stopSpeech() { speaker.stopSpeaking(at: .immediate) }
+    func stopSpeech() { speaker.stop() }
 }
 
 struct AgentGlass: ViewModifier {
@@ -371,7 +367,7 @@ struct RootView: View {
                                     Text(.init(line.text)).font(.body).lineSpacing(5).textSelection(.enabled)
                                     HStack(spacing: 8) {
                                         Button { UIPasteboard.general.string = line.text } label: { Image(systemName: "doc.on.doc").frame(width: 44, height: 44) }.accessibilityLabel("Скопировать ответ")
-                                        Button { voice.stop(); model.speak(line.text) } label: { Image(systemName: "speaker.wave.2").frame(width: 44, height: 44) }.accessibilityLabel("Озвучить ответ")
+                                        Button { voice.stop(); model.speak(line.text, server: server) } label: { Image(systemName: "speaker.wave.2").frame(width: 44, height: 44) }.accessibilityLabel("Озвучить ответ")
                                         Button { model.stopSpeech() } label: { Image(systemName: "speaker.slash").frame(width: 44, height: 44) }.accessibilityLabel("Остановить озвучивание")
                                     }.font(.system(size: 15)).foregroundStyle(.secondary)
                                 }.id(line.id)

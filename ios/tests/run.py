@@ -18,7 +18,7 @@ with tempfile.TemporaryDirectory(prefix='agent-ios-tests-') as scratch:
     model = source[source.index('struct ChatLine:'):source.index('struct AgentGlass:')]
     model = model[:model.index('    func speak(')] + '}\n'
     model = model.replace(': ObservableObject', '').replace('@Published ', '')
-    model = model.replace('    private let speaker = AVSpeechSynthesizer()\n', '')
+    model = model.replace('    private let speaker = ReplySpeaker()\n', '')
     fixture = (root / 'tests/ChatStateFixture.swift').read_text().replace('// MODEL_UNDER_TEST', model)
     fixture = fixture.replace('import Foundation', 'import Foundation\nlet testDomain = "agent-tests-" + UUID().uuidString\nlet testDefaults = UserDefaults(suiteName: testDomain)!', 1)
     fixture = fixture.replace('UserDefaults.standard', 'testDefaults').replace('@MainActor static func main() async {', '@MainActor static func main() async {\n  defer { testDefaults.removePersistentDomain(forName: testDomain) }')

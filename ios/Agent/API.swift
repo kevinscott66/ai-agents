@@ -79,7 +79,7 @@ struct AgentAPI {
         let failures: [Int: Set<String>] = [400: ["invalid_turn", "invalid_body", "body_aborted"], 401: ["unauthorized"], 403: ["native_only"], 404: ["not_found"], 408: ["body_timeout"], 413: ["body_too_large"], 415: ["json_required"], 409: ["busy", "conflict"], 503: ["lead_unavailable", "native_disabled"]]
         return failures[status]?.contains(failure.error) == true
     }
-    private func request<T: Decodable>(_ path: String, body: [String: String]? = nil, authenticated: Bool = true, expectedToken: String? = nil) async throws -> T {
+    private func urlRequest(_ path: String, body: [String: String]?, authenticated: Bool, expectedToken: String?) throws -> URLRequest {
         guard var parts = URLComponents(string: server), parts.scheme == "https", parts.host != nil,
               parts.user == nil, parts.password == nil, parts.query == nil, parts.fragment == nil,
               parts.path.isEmpty || parts.path == "/" else { throw AgentError.message("Укажите HTTPS-адрес сервера без пути") }
@@ -98,10 +98,17 @@ struct AgentAPI {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONEncoder().encode(body)
         }
+        return request
+    }
+    private static func session(resourceTimeout: TimeInterval = 30) -> URLSession {
         let config = URLSessionConfiguration.ephemeral
         config.httpShouldSetCookies = false
-        config.timeoutIntervalForResource = 30
-        let session = URLSession(configuration: config, delegate: NoRedirect(), delegateQueue: nil)
+        config.timeoutIntervalForResource = resourceTimeout
+        return URLSession(configuration: config, delegate: NoRedirect(), delegateQueue: nil)
+    }
+    private func request<T: Decodable>(_ path: String, body: [String: String]? = nil, authenticated: Bool = true, expectedToken: String? = nil) async throws -> T {
+        let request = try urlRequest(path, body: body, authenticated: authenticated, expectedToken: expectedToken)
+        let session = Self.session()
         defer { session.invalidateAndCancel() }
         let (bytes, response) = try await session.bytes(for: request)
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
@@ -118,6 +125,52 @@ struct AgentAPI {
         }
         let data = try await Self.readBody(bytes)
         return try JSONDecoder().decode(T.self, from: data)
+    }
+    /// Максимум текста за один запрос озвучки: сервер отвергает `text.length > 4000` в единицах UTF-16.
+    static let speechTextLimit = 4_000
+    static let maximumSpeechBytes = 8 * 1_024 * 1_024
+    /// Режет ответ на куски для `/voice/speech`, предпочитая границу пробела или конца фразы во второй половине куска.
+    /// По умолчанию половина серверного лимита — как `speechChunks` в web-chat: первый кусок озвучивается быстрее.
+    static func speechChunks(_ text: String, limit: Int = speechTextLimit / 2) -> [String] {
+        var chunks: [String] = []
+        var rest = Substring(text)
+        while !rest.isEmpty {
+            var end = rest.startIndex, units = 0
+            while end < rest.endIndex, units + rest[end].utf16.count <= limit { units += rest[end].utf16.count; end = rest.index(after: end) }
+            if end == rest.startIndex { end = rest.index(after: end) }
+            if end < rest.endIndex {
+                var cut = end, seen = 0
+                while cut > rest.startIndex, seen * 2 < units {
+                    let previous = rest.index(before: cut)
+                    if rest[previous].isWhitespace || ".!?…".contains(rest[previous]) { end = cut; break }
+                    seen += rest[previous].utf16.count; cut = previous
+                }
+            }
+            chunks.append(String(rest[..<end])); rest = rest[end...]
+        }
+        return chunks
+    }
+    /// Тот же голос, что в голосовом разговоре: серверный TTS, а не системный синтезатор iOS.
+    func speech(_ text: String, expectedToken: String? = nil) async throws -> Data {
+        var request = try urlRequest("/api/native/voice/speech", body: ["text": text], authenticated: true, expectedToken: expectedToken)
+        request.timeoutInterval = 50
+        // Сервер ждёт провайдера до 45 с; клиент не должен сдаваться раньше.
+        let session = Self.session(resourceTimeout: 60)
+        defer { session.invalidateAndCancel() }
+        let (bytes, response) = try await session.bytes(for: request)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw AgentError.message(code == 401 ? "Код или ключ недействителен. Подключите устройство заново." : code == 429 ? "Озвучка занята. Повторите через минуту." : code == 503 ? "Озвучка на сервере не настроена." : "Не удалось озвучить ответ (\(code))")
+        }
+        guard http.mimeType == "audio/mpeg", response.expectedContentLength <= Int64(Self.maximumSpeechBytes) else { throw AgentError.message("Сервер вернул не аудио") }
+        var data = Data()
+        for try await byte in bytes {
+            try Task.checkCancellation()
+            guard data.count < Self.maximumSpeechBytes else { throw AgentError.message("Аудио ответа слишком большое") }
+            data.append(byte)
+        }
+        guard !data.isEmpty else { throw AgentError.message("Сервер вернул пустое аудио") }
+        return data
     }
     func conversations(cursor: String? = nil, expectedToken: String? = nil) async throws -> ConversationIndex {
         var route = URLComponents(); route.path = "/api/native/conversations"
