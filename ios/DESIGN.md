@@ -85,3 +85,31 @@ An approval card contains action parameters and decision/execution status. The r
 ## Readiness polish (0.1.9)
 
 Previous-history loading preserves its anchor; only an appended tail triggers scrolling down. Leaving a dialog/account or opening another sheet stops dictation. Rejected sends restore the draft instead of leaving permanent recovery controls. Interrupted approvals explicitly describe uncertainty and stay noninteractive. Action parameters use human-readable labels while hiding internal metadata. Transfer copy confirmation resets after editing, and the amount must be a complete positive decimal with at most two fractional digits.
+
+## Image generation and assistant attachments (0.1.12)
+
+Refero's [ChatGPT style reference](https://styles.refero.design/style/52a007ed-ad1b-46a6-bd44-b76f91df6d0c) was revisited 2026-09-16. Adapted principles remain grayscale chrome, system typography and subtle separators. Native image cards use the app's existing rounded surfaces rather than copying web layout measurements.
+
+Only a running server generation creates the 280-point image canvas: low-contrast moving grayscale shapes with a restrained shimmer, followed by “Создаю изображение…”. There is no invented percentage or simulated partial output. Reduce Motion and inactive scenes stop the movement. Failure and interruption replace motion with a static symbol and explicit status; completion removes the waiting card and reveals the authenticated image with a short transition. Completed results remain ordinary assistant content outside confirmation cards.
+
+Assistant image previews decode to at most1200pixels; tapping opens QuickLook and system sharing/saving. Other attachments use file rows. Expired downloads retain their history label and show an error instead of an empty frame. Polling and restored history use stable message IDs so reconnecting cannot duplicate media or replay speech.
+
+Higgsfield MCP is a real optional generation provider, not a decorative animation service. The same loading component works for OpenAI, Higgsfield and SVG generation. DEBUG-only generation preview is excluded from Release.
+
+## Mac executor fallback
+
+The Mac form retains the selected initial executor. New Claude Code launches default to allowing Codex only if Claude is unavailable before task execution. Unchecking the control forces Claude. Selecting Codex disables fallback and explains that Claude requires a separate selection and confirmation because its permissions differ. The native bridge accepts an explicit boolean; old requests without the flag keep fallback disabled. Approval details name the first executor and describe the pre-start boundary; results identify the actual executor separately.
+
+## Accepted confirmations and OpenFlux shortcut
+
+An approval card disappears after a validated server acknowledgement or an approved/completed polling record. The model retains the approval for reconciliation; its result remains a separate assistant message. Unacknowledged decisions, failed and interrupted execution retain recovery status cards, with no automatic POST retry.
+
+The chat navigation bar includes a compact “OF” power button with a 44-point target and a spoken on/off state. It toggles the existing Keychain configuration and resets the transport; it never retries chat mutations. Enabling without valid configuration opens OpenFlux settings. The indicator represents the saved setting, not verified connectivity, and refreshes after settings changes and foreground entry.
+
+## Chat memory, projects and role attribution
+
+Menu → «Память диалога» opens a native list for the selected conversation. It shows the distilled facts, decisions and tasks, with collapsible source message references. Projects are created and assigned explicitly by the user; «Без проекта» detaches the chat. Approved project entries appear separately from chat entries. Proposals display their exact text with independent «Принять» / «Отклонить» actions; a chat entry can also be proposed explicitly. Creating a project does not silently move the current chat.
+
+The view pins its account credential for its lifetime. Mutations are never automatically retried: an uncertain response disables further writes until an explicit successful GET refresh reconciles the snapshot. A failed refresh after a successful mutation also keeps writes disabled. Loading, empty, unavailable and saving states use the existing grayscale system surfaces and readable inline text.
+
+Team replies show a restrained role heading from verified message metadata, preserved through turn polling and history loading. Missing or unknown metadata retains the generic assistant label; the UI does not infer role names from message text or fabricate discussion participants. Existing media, copy/speech and confirmation behavior is retained.

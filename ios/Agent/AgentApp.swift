@@ -1,13 +1,29 @@
 import SwiftUI
 import AVFoundation
+import PhotosUI
+import UniformTypeIdentifiers
 
-struct ChatLine: Identifiable, Codable { var id = UUID().uuidString; let role: String; let text: String }
+struct ChatLine: Identifiable, Codable {
+    var id = UUID().uuidString; let role: String; let text: String
+    var agentKey: String? = nil
+    var attachments: [NativeAttachment]? = nil
+    var location: SharedLocation? = nil
+}
 @MainActor final class ChatModel: ObservableObject {
     @Published var lines: [ChatLine] = []
     @Published var busy = false
     @Published var pending = UserDefaults.standard.string(forKey: "pendingTurn") != nil
     @Published var error: String?
     @Published var draft = ""
+    @Published var attachments: [AttachmentDraft] = []
+    @Published var location: SharedLocation?
+    @Published var uploadStatus: String?
+    @Published var generations: [NativeGeneration] = []
+    private var recovering = false
+    @Published var newReplyForSpeech: ChatLine?
+    @Published private(set) var attachmentGeneration = UUID()
+    func clearMedia() { attachments = []; location = nil; attachmentGeneration = UUID() }
+
     @Published var conversations: [ConversationRecord] = []
     @Published var moreConversations = false
     private var conversationCursor: String?
@@ -26,22 +42,25 @@ struct ChatLine: Identifiable, Codable { var id = UUID().uuidString; let role: S
         let token = Credentials.read(server: server)
         if boundServer != server || boundToken != token {
             operation = UUID(); polling?.cancel(); polling = nil; busy = false
+            let previousServer = boundServer
             syncGeneration = UUID(); boundServer = server; boundToken = token
             conversationCursor = nil; moreConversations = false; loadedMoreConversations = false
-            lines = []; conversations = []; fresh = false; firstSequence = nil; moreHistory = false; remoteBusy = false
+            if !previousServer.isEmpty { clearMedia() }; lines = []; generations = []; conversations = []; fresh = false; firstSequence = nil; moreHistory = false; remoteBusy = false
             conversationId = UserDefaults.standard.string(forKey: "conversation:" + server)
         }
     }
     func newConversation(server: String) {
         guard !busy, !pending else { return }
         bind(server: server)
-        syncGeneration = UUID(); conversationId = nil; lines = []; draft = ""; fresh = true; moreHistory = false; firstSequence = nil
+        clearMedia()
+        syncGeneration = UUID(); conversationId = nil; lines = []; generations = []; draft = ""; fresh = true; moreHistory = false; firstSequence = nil
         UserDefaults.standard.removeObject(forKey: "conversation:" + server)
     }
     func selectConversation(_ id: String, server: String) async {
         guard !busy, !pending else { return }
         bind(server: server)
-        syncGeneration = UUID(); conversationId = id; fresh = false; lines = []; draft = ""; firstSequence = nil; moreHistory = false
+        clearMedia()
+        syncGeneration = UUID(); conversationId = id; fresh = false; lines = []; generations = []; draft = ""; firstSequence = nil; moreHistory = false
         UserDefaults.standard.set(id, forKey: "conversation:" + server)
         await synchronize(server: server)
     }
@@ -61,7 +80,7 @@ struct ChatLine: Identifiable, Codable { var id = UUID().uuidString; let role: S
             if let id = conversationId {
                 let history = try await AgentAPI(server: server).history(id, before: older ? firstSequence : nil, expectedToken: token)
                 guard generation == syncGeneration, Credentials.read(server: server) == token, conversationId == id, !busy, !pending else { return }
-                let incoming = history.messages.map { ChatLine(id:$0.id,role:$0.role == "user" ? "Вы" : "Агент",text:$0.text) }
+                let incoming = history.messages.map { ChatLine(id:$0.id,role:$0.role == "user" ? "Вы" : "Агент",text:$0.text,agentKey:$0.agentKey,attachments:$0.attachments,location:$0.location) }
                 if older {
                     let ids = Set(lines.map(\.id)); lines = incoming.filter { !ids.contains($0.id) } + lines
                     firstSequence = history.messages.first?.seq ?? firstSequence; moreHistory = history.more
@@ -71,6 +90,7 @@ struct ChatLine: Identifiable, Codable { var id = UUID().uuidString; let role: S
                     lines = (first.map { Array(lines.prefix($0)) } ?? []) + incoming
                     if firstSequence == nil || first == nil { firstSequence = history.messages.first?.seq; moreHistory = history.more }
                 }
+                generations = history.generations ?? []
                 remoteBusy = history.running
                 UserDefaults.standard.set(id, forKey:"conversation:" + server)
             }
@@ -96,24 +116,24 @@ struct ChatLine: Identifiable, Codable { var id = UUID().uuidString; let role: S
             remoteBusy = index.running; historyError = nil
         } catch { if generation == syncGeneration { historyError = "Не удалось загрузить диалоги: " + error.localizedDescription } }
     }
-    private let speaker = ReplySpeaker()
     private var polling: Task<Void, Never>?
     private var currentReplies = 0
     private var currentTurn: String?
     private var operation = UUID()
     @discardableResult func send(server: String) -> Bool {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !busy, !remoteBusy else { return false }
+        guard (!text.isEmpty || !attachments.isEmpty || location != nil), !busy, !remoteBusy else { return false }
         guard text.utf16.count <= 8_000 else { error = "Сообщение слишком длинное. Сократите его до 8000 символов."; return false }
         guard !pending else { error = "Сначала проверьте ответ на предыдущий запрос."; return false }
         bind(server: server)
         guard let token = boundToken else { error = "Подключите устройство в настройках"; return false }
+        let media = attachments; let place = location
         let dialogID = conversationId ?? UUID().uuidString
         conversationId = dialogID; fresh = false; syncGeneration = UUID()
         UserDefaults.standard.set(dialogID, forKey: "conversation:" + server)
         let id = UUID().uuidString
-        draft = ""; error = nil; busy = true; pending = true; currentReplies = 0; currentTurn = id
-        lines.append(ChatLine(id: id + ":user", role: "Вы", text: text))
+        draft = ""; clearMedia(); error = nil; recovering = false; busy = true; pending = true; currentReplies = 0; currentTurn = id
+        lines.append(ChatLine(id: id + ":user", role: "Вы", text: text, attachments: media.map(\.metadata), location: place))
         // Save the request ID before sending. A reconnect only polls this ID.
         UserDefaults.standard.set(id, forKey: "pendingTurn")
         UserDefaults.standard.set(server, forKey: "pendingServer")
@@ -123,17 +143,24 @@ struct ChatLine: Identifiable, Codable { var id = UUID().uuidString; let role: S
         polling = Task {
             var submitted = false
             do {
-                try await AgentAPI(server: server).createConversation(dialogID, title: text, expectedToken: token)
+                try await AgentAPI(server: server).createConversation(dialogID, title: text.isEmpty ? (media.first?.name ?? "Геопозиция") : text, expectedToken: token)
                 try Task.checkCancellation()
+                for (index, item) in media.enumerated() {
+                    uploadStatus = "Загрузка \(index + 1) из \(media.count)…"
+                    _ = try await AgentAPI(server: server).upload(item, expectedToken: token)
+                    try Task.checkCancellation()
+                }
+                uploadStatus = nil
                 submitted = true
-                let first = try await AgentAPI(server: server).send(text, id: id, conversationId: dialogID, expectedToken: token)
+                let first = try await AgentAPI(server: server).send(text, id: id, conversationId: dialogID, expectedToken: token, attachmentIds: media.map(\.id), location: place)
                 try Task.checkCancellation()
                 guard boundServer == server, boundToken == token, Credentials.read(server: server) == token else { throw AgentError.message("Подключение изменилось") }
                 consume(first)
                 if first.status == "running" { try await watch(server: server, id: id, token: token) }
             } catch is CancellationError { } catch {
                 guard operation == activeOperation, !Task.isCancelled else { return }
-                if !submitted || error is TurnRejected { submitted = false; clearPending(); draft = text; lines.removeAll { $0.id == id + ":user" } }
+                if !submitted || error is TurnRejected { submitted = false; clearPending(); draft = text; attachments = media; location = place; lines.removeAll { $0.id == id + ":user" } }
+                uploadStatus = nil
                 self.error = error.localizedDescription + (submitted ? " Если запрос принят сервером, нажмите «Проверить ответ»." : ""); busy = false }
         }
         return true
@@ -146,7 +173,7 @@ struct ChatLine: Identifiable, Codable { var id = UUID().uuidString; let role: S
         conversationId = UserDefaults.standard.string(forKey:"pendingConversation")
         boundServer = pendingServer
         if currentTurn != id { currentReplies = 0; currentTurn = id }
-        error = nil; busy = true
+        error = nil; busy = true; recovering = true
         let activeOperation = UUID()
         operation = activeOperation
         polling = Task {
@@ -172,7 +199,22 @@ struct ChatLine: Identifiable, Codable { var id = UUID().uuidString; let role: S
         error = "Запрос ещё выполняется. Нажмите «Проверить ответ» позже."
     }
     private func consume(_ turn: Turn) {
-        for (index, text) in turn.replies.enumerated().dropFirst(currentReplies) { lines.append(ChatLine(id: turn.id + ":reply:" + String(index + 1), role: "Агент", text: text)) }
+        let newReplies = Array(turn.replies.enumerated().dropFirst(currentReplies))
+        for (index, text) in turn.replies.enumerated() {
+            let id = turn.id + ":reply:" + String(index + 1)
+            let media = turn.outputMedia?.first(where: { $0.messageId == id })?.attachments
+            let line = ChatLine(id: id, role: "Агент", text: text, agentKey: turn.replyDetails?.first(where: { $0.messageId == id })?.agentKey, attachments: media)
+            if let existing = lines.firstIndex(where: { $0.id == id }) { lines[existing] = line }
+            else { lines.append(line) }
+        }
+        if let jobs = turn.generations {
+            let ids = Set(jobs.map(\.id))
+            generations = generations.filter { !ids.contains($0.id) } + jobs
+        }
+        if !recovering && !newReplies.isEmpty {
+            let text = newReplies.map { $0.element }.filter { !$0.isEmpty }.joined(separator: "\n\n")
+            if !text.isEmpty { newReplyForSpeech = ChatLine(id: turn.id + ":speech:" + String(turn.replies.count), role: "Агент", text: text) }
+        }
         currentReplies = turn.replies.count
         if turn.status != "running" {
             busy = false; clearPending()
@@ -189,11 +231,9 @@ struct ChatLine: Identifiable, Codable { var id = UUID().uuidString; let role: S
         clearPending()
         error = "Ожидание сброшено. Серверная задача могла продолжить работу; перед повтором проверьте её состояние."
     }
-    func speak(_ text: String, server: String) {
-        guard let token = Credentials.read(server: server) else { error = "Подключите устройство в настройках"; return }
-        speaker.speak(text, server: server, token: token) { [weak self] message in self?.error = "Озвучка: " + message }
-    }
-    func stopSpeech() { speaker.stop() }
+    func speak(_ text: String) { VoiceOutput.shared.speak(text) }
+    func stopSpeech() { VoiceOutput.shared.stop() }
+
 }
 
 struct AgentGlass: ViewModifier {
@@ -212,7 +252,11 @@ struct AgentGlass: ViewModifier {
 @main struct AgentApp: App {
     var body: some Scene { WindowGroup {
         #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("--approval-preview") { ChatApprovalPreview() }
+        if ProcessInfo.processInfo.arguments.contains("--generation-preview") { GenerationPreview() }
+        else if ProcessInfo.processInfo.arguments.contains("--media-selftest") { MediaSelfTestView() }
+        else if ProcessInfo.processInfo.arguments.contains("--voice-settings-preview") { NavigationStack { VoiceSettingsView() }.tint(.primary) }
+        else if ProcessInfo.processInfo.arguments.contains("--openflux-probe") { OpenFluxProbeView() }
+        else if ProcessInfo.processInfo.arguments.contains("--approval-preview") { ChatApprovalPreview() }
         else if ProcessInfo.processInfo.arguments.contains("--panel-sheet-preview") { PanelSheetPreview() }
         else if ProcessInfo.processInfo.arguments.contains("--panel-preview") {
             NavigationStack { PanelView(server: "https://agent.invalid") }.tint(.primary)
@@ -225,6 +269,17 @@ struct AgentGlass: ViewModifier {
 struct RootView: View {
     @StateObject private var model = ChatModel()
     @StateObject private var voice = VoiceInput()
+    @State private var conversationVoice = false
+    @StateObject private var locator = LocationPicker()
+    @ObservedObject private var speech = VoiceOutput.shared
+    @State private var photos: [PhotosPickerItem] = []
+    @State private var showPhotos = false
+    @State private var showFiles = false
+    @State private var showCamera = false
+    @State private var mediaLoading = false
+    @State private var preparationTask: Task<Void, Never>?
+    @State private var activeMediaJob: UUID?
+
     @StateObject private var approvals = ChatApprovals()
     // Адреса сервера по умолчанию нет: репозиторий публичный, адрес задаётся при подключении.
     @AppStorage("server") private var server = ""
@@ -248,6 +303,7 @@ struct RootView: View {
                     ToolbarItem(placement: .topBarLeading) {
                         Button { menu = true } label: { Image(systemName: "line.3.horizontal").font(.system(size: 19, weight: .medium)) }.accessibilityLabel("Открыть меню")
                     }
+                    ToolbarItem(placement: .topBarTrailing) { OpenFluxQuickToggle(server: server) }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button { voice.stop(); model.newConversation(server: server); typing = true } label: { Image(systemName: "square.and.pencil").font(.system(size: 20, weight: .regular)) }.disabled(model.busy || model.pending).accessibilityLabel("Новый диалог")
                     }
@@ -263,12 +319,28 @@ struct RootView: View {
                 do { try await Task.sleep(for: .seconds(5)) } catch { break }
             }
         }
-        .onChange(of: server) { _, _ in voice.stop(); model.stopSpeech() }
+        .photosPicker(isPresented: $showPhotos, selection: $photos, maxSelectionCount: 4, matching: .any(of: [.images, .videos]))
+        .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            switch result { case .success(let urls): importFiles(urls); case .failure(let error): model.error = error.localizedDescription }
+        }
+        .sheet(isPresented: $showCamera) { CameraPicker { image in
+            showCamera = false
+            guard let image, let data = image.jpegData(compressionQuality: 0.9) else { return }
+            do { if model.attachments.count < 4 { model.attachments.append(try MediaPreparation.photo(data)) } } catch { model.error = error.localizedDescription }
+        }.ignoresSafeArea() }
+        .sheet(isPresented: $conversationVoice) { ConversationVoiceView(model: model, server: server) }
+        .onChange(of: photos) { _, items in importPhotos(items) }
+        .onChange(of: model.newReplyForSpeech?.id) { _, _ in
+            if !conversationVoice, VoiceOutput.autoSpeak, scenePhase == .active, let reply = model.newReplyForSpeech { voice.stop(); speech.enqueue(reply.text) }
+        }
+        .onChange(of: model.attachmentGeneration) { _, _ in cancelMediaPreparation(); locator.cancel() }
+        .onAppear { speech.server = server; if server.isEmpty { settings = true } }
+        .onChange(of: server) { _, value in speech.server = value; conversationVoice = false; cancelMediaPreparation(); locator.cancel(); voice.stop(); model.stopSpeech() }
         .onChange(of: menu) { _, opened in if opened { voice.stop(); model.stopSpeech() } }
         .onChange(of: actions) { _, opened in if opened { voice.stop(); model.stopSpeech() } }
         .onChange(of: settings) { _, opened in if opened { voice.stop(); model.stopSpeech() } }
         .onChange(of: model.conversationId) { _, conversation in
-            voice.stop(); model.stopSpeech()
+            locator.cancel(); voice.stop(); model.stopSpeech()
             Task { await approvals.refresh(server: server, conversation: conversation) }
         }
         .onChange(of: model.busy) { _, busy in
@@ -276,7 +348,6 @@ struct RootView: View {
         }
         .onChange(of: voice.text) { _, value in model.draft = value }
         .onChange(of: voice.error) { _, value in if let value { model.error = value } }
-        .onAppear { if server.isEmpty { settings = true } }
         .onDisappear { voice.stop(); model.stopSpeech() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { voice.stop(); model.stopSpeech() }
@@ -285,14 +356,17 @@ struct RootView: View {
             NavigationStack {
                 List {
                     Section {
-                        Label("Чат с лидом", systemImage: "bubble.left.and.bubble.right")
-                        NavigationLink { PanelView(server: server, onMacStart: { project, task, provider in
+                        Label("Чат с командой", systemImage: "bubble.left.and.bubble.right")
+                        if let conversationId = model.conversationId {
+                            NavigationLink { KnowledgeView(server: server, conversationID: conversationId) } label: { Label("Память диалога", systemImage: "books.vertical") }
+                        }
+                        NavigationLink { PanelView(server: server, onMacStart: { project, task, provider, allowFallback in
                             guard !model.busy && !model.pending && !model.remoteBusy else { throw AgentError.message("Дождитесь завершения текущего запроса") }
-                            model.draft = "Запусти рабочую сессию на моём Mac через MAC_RUN_CLAUDE. Исполнитель: \(provider). Передай provider=\(provider) в MAC_RUN_CLAUDE; не заменяй исполнителя. Проект: \(project). Задача: \(task)"
+                            model.draft = PanelMacLaunch.draft(project: project, prompt: task, provider: provider, allowFallback: allowFallback)
                             guard model.send(server: server) else { throw AgentError.message(model.error ?? "Не удалось отправить запрос") }
                         }) } label: { Label("Панель команды", systemImage: "rectangle.grid.2x2") }
                         NavigationLink { ActionsView { choose($0); menu = false } } label: { Label("Все действия", systemImage: "square.grid.2x2") }
-                        NavigationLink { SettingsView(server: $server).disabled(model.busy || model.pending) } label: { Label("Подключение", systemImage: "slider.horizontal.3") }
+                        NavigationLink { SettingsView(server: $server, connectionLocked: model.busy || model.pending) } label: { Label("Подключение", systemImage: "slider.horizontal.3") }
                     }
                     Section("Диалоги") {
                         if let error = model.historyError { Text(error).font(.caption).foregroundStyle(.secondary) }
@@ -322,7 +396,7 @@ struct RootView: View {
                 .presentationDetents([.large]).presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $settings) {
-            NavigationStack { SettingsView(server: $server).disabled(model.busy || model.pending).toolbar { ToolbarItem(placement: .confirmationAction) { Button("Готово") { settings = false } } } }
+            NavigationStack { SettingsView(server: $server, connectionLocked: model.busy || model.pending).toolbar { ToolbarItem(placement: .confirmationAction) { Button("Готово") { settings = false } } } }
                 .presentationDragIndicator(.visible)
         }
         .alert("Сбросить ожидание?", isPresented: $abandon) {
@@ -335,7 +409,7 @@ struct RootView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 if model.remoteBusy && !model.busy { Text("Агент выполняет запрос с другого устройства. Ответ появится в соответствующем диалоге.").font(.footnote).foregroundStyle(.secondary).padding() }
-                if model.lines.isEmpty && approvals.items.isEmpty {
+                if model.lines.isEmpty && approvals.visibleItems.isEmpty {
                     VStack(spacing: 14) {
                         Spacer(minLength: 140)
                         Text("Чем помочь?").font(.system(size: 30, weight: .semibold)).tracking(-0.7)
@@ -359,31 +433,41 @@ struct RootView: View {
                             }
                         } }
                         ForEach(model.lines) { line in
-                            if let item = approvals.items.first(where: { line.id == "approval:" + $0.id + ":result" }) {
+                            if let item = approvals.visibleItems.first(where: { line.id == "approval:" + $0.id + ":result" }) {
                                 approvalCard(item)
                             }
                             if line.role == "Вы" {
-                                HStack { Spacer(minLength: 44); Text(line.text).font(.body).textSelection(.enabled).padding(.horizontal, 18).padding(.vertical, 12).background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 24)) }.id(line.id)
+                                HStack {
+                                    Spacer(minLength: 44)
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        if !line.text.isEmpty { Text(line.text).font(.body).textSelection(.enabled) }
+                                        ForEach(line.attachments ?? []) { item in AttachmentRow(attachment: item, server: server) }
+                                        if let place = line.location { locationLabel(place) }
+                                    }.padding(.horizontal, 18).padding(.vertical, 12).background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 24))
+                                }.id(line.id)
                             } else {
                                 VStack(alignment: .leading, spacing: 12) {
-                                    Text(.init(line.text)).font(.body).lineSpacing(5).textSelection(.enabled)
-                                    HStack(spacing: 8) {
+                                    if let key = line.agentKey { Text(AgentRole.name(key)).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary) }
+                                    if !line.text.isEmpty { Text(.init(line.text)).font(.body).lineSpacing(5).textSelection(.enabled) }
+                                    ForEach(line.attachments ?? []) { item in AttachmentRow(attachment: item, server: server) }
+                                    if !line.text.isEmpty { HStack(spacing: 8) {
                                         Button { UIPasteboard.general.string = line.text } label: { Image(systemName: "doc.on.doc").frame(width: 44, height: 44) }.accessibilityLabel("Скопировать ответ")
-                                        Button { voice.stop(); model.speak(line.text, server: server) } label: { Image(systemName: "speaker.wave.2").frame(width: 44, height: 44) }.accessibilityLabel("Озвучить ответ")
+                                        Button { voice.stop(); model.speak(line.text) } label: { Image(systemName: "speaker.wave.2").frame(width: 44, height: 44) }.accessibilityLabel("Озвучить ответ")
                                         Button { model.stopSpeech() } label: { Image(systemName: "speaker.slash").frame(width: 44, height: 44) }.accessibilityLabel("Остановить озвучивание")
-                                    }.font(.system(size: 15)).foregroundStyle(.secondary)
+                                    }.font(.system(size: 15)).foregroundStyle(.secondary) }
                                 }.id(line.id)
                             }
                         }
-                        ForEach(approvals.items.filter { item in !model.lines.contains(where: { $0.id == "approval:" + item.id + ":result" }) }) { item in
+                        ForEach(approvals.visibleItems.filter { item in !model.lines.contains(where: { $0.id == "approval:" + item.id + ":result" }) }) { item in
                             approvalCard(item)
                         }
-                        if model.busy { HStack(spacing: 10) { ProgressView(); Text("Агент работает").font(.subheadline).foregroundStyle(.secondary) } }
+                        ForEach(model.generations.filter { $0.state != "completed" }) { job in GenerationCanvas(status: job.state).id(job.id) }
+                        if model.busy && !model.generations.contains(where: { $0.state == "running" }) { HStack(spacing: 10) { ProgressView(); Text("Агент работает").font(.subheadline).foregroundStyle(.secondary) } }
                     }.padding(.horizontal, 22).padding(.vertical, 24)
                 }
             }.scrollDismissesKeyboard(.interactively)
-                .onChange(of: approvals.items.count) { _, _ in
-                    if let item = approvals.items.last { proxy.scrollTo("approval-" + item.id, anchor: .bottom) }
+                .onChange(of: approvals.visibleItems.count) { _, _ in
+                    if let item = approvals.visibleItems.last { proxy.scrollTo("approval-" + item.id, anchor: .bottom) }
                 }
                 .onChange(of: model.lines.last?.id) { _, _ in
                     if let id = model.lines.last?.id {
@@ -405,11 +489,84 @@ struct RootView: View {
         Button { choose(prompt) } label: { Label(title, systemImage: icon).font(.subheadline).padding(.horizontal, 16).padding(.vertical, 12) }
             .buttonStyle(.plain).overlay(Capsule().stroke(ink.opacity(0.10), lineWidth: 0.7))
     }
+    private func locationLabel(_ place: SharedLocation) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Label("Геопозиция", systemImage: "location.fill")
+            Text(String(format: "%.5f, %.5f", place.latitude, place.longitude)).font(.caption).textSelection(.enabled)
+            if let accuracy = place.accuracy { Text("Точность около \(Int(accuracy)) м").font(.caption2).foregroundStyle(.secondary) }
+        }
+    }
+    private func cancelMediaPreparation() {
+        preparationTask?.cancel(); preparationTask = nil; activeMediaJob = nil; mediaLoading = false; photos = []
+    }
+    private func prepareFile(_ url: URL, name: String? = nil) async throws -> AttachmentDraft {
+        let worker = Task.detached(priority: .userInitiated) { try await MediaPreparation.file(url, displayName: name) }
+        return try await withTaskCancellationHandler {
+            let result = try await worker.value
+            try Task.checkCancellation()
+            return result
+        } onCancel: { worker.cancel() }
+    }
+    private func importFiles(_ urls: [URL]) {
+        guard !mediaLoading else { return }
+        let generation = model.attachmentGeneration
+        let remaining = max(0, 4 - model.attachments.count)
+        guard remaining > 0 else { model.error = "Можно прикрепить до 4 файлов"; return }
+        let job = UUID(); activeMediaJob = job; mediaLoading = true
+        preparationTask = Task {
+            defer { if activeMediaJob == job { mediaLoading = false; preparationTask = nil; activeMediaJob = nil } }
+            for url in urls.prefix(remaining) {
+                if Task.isCancelled { return }
+                do {
+                    let item = try await prepareFile(url)
+                    guard model.attachmentGeneration == generation else { return }
+                    model.attachments.append(item)
+                } catch { if !Task.isCancelled && model.attachmentGeneration == generation { model.error = error.localizedDescription } }
+            }
+            if !Task.isCancelled && model.attachmentGeneration == generation && urls.count > remaining { model.error = "Добавлены первые \(remaining) файлов: максимум 4 вложения" }
+        }
+    }
+    private func importPhotos(_ items: [PhotosPickerItem]) {
+        guard !items.isEmpty, !mediaLoading else { return }
+        let generation = model.attachmentGeneration
+        let remaining = max(0, 4 - model.attachments.count)
+        guard remaining > 0 else { photos = []; model.error = "Можно прикрепить до 4 файлов"; return }
+        let job = UUID(); activeMediaJob = job; mediaLoading = true
+        preparationTask = Task {
+            defer { if activeMediaJob == job { mediaLoading = false; photos = []; preparationTask = nil; activeMediaJob = nil } }
+            for item in items.prefix(remaining) {
+                if Task.isCancelled { return }
+                do {
+                    guard let selected = try await item.loadTransferable(type: PickedMedia.self) else { throw AgentError.message("Не удалось открыть выбранное медиа") }
+                    defer { try? FileManager.default.removeItem(at: selected.url) }
+                    let prepared = try await prepareFile(selected.url, name: item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }) ? "Видео.mp4" : "Фото.jpg")
+                    guard model.attachmentGeneration == generation else { return }
+                    model.attachments.append(prepared)
+                } catch { if !Task.isCancelled && model.attachmentGeneration == generation { model.error = error.localizedDescription } }
+            }
+        }
+    }
     private var composer: some View {
         VStack(spacing: 10) {
             if let error = approvals.error {
                 HStack { Text(error).font(.caption).foregroundStyle(.secondary); Button("Повторить") { Task { await approvals.refresh(server: server, conversation: model.conversationId) } } }.padding(.horizontal, 12)
             }
+            if speech.isSpeaking {
+                HStack { Text("Агент говорит").font(.caption); Spacer(); Button(speech.isPaused ? "Продолжить" : "Пауза") { speech.togglePause() }; Button("Стоп") { speech.stop() } }.font(.caption)
+            }
+            if let error = speech.error { Text(error).font(.caption).foregroundStyle(.secondary) }
+            if let error = locator.error { Text(error).font(.caption).foregroundStyle(.secondary) }
+            if mediaLoading || locator.loading || model.uploadStatus != nil { HStack { ProgressView(); Text(model.uploadStatus ?? (locator.loading ? "Определяем место…" : "Подготавливаем вложения…")).font(.caption) } }
+            if !model.attachments.isEmpty {
+                ScrollView(.horizontal) { HStack {
+                    ForEach(model.attachments) { item in
+                        HStack { Image(systemName: "paperclip"); Text(verbatim: item.name).lineLimit(1); Button { model.attachments.removeAll { $0.id == item.id } } label: { Image(systemName: "xmark.circle.fill") }.accessibilityLabel("Удалить вложение") }
+                            .font(.caption).padding(10).background(.thinMaterial, in: Capsule())
+                    }
+                } }
+                Text("До 4 файлов по 10 МБ. Видео — до 2 минут. Файлы хранятся 30 дней; общий лимит — 40 МБ.").font(.caption2).foregroundStyle(.secondary)
+            }
+            if let place = model.location { HStack { locationLabel(place); Spacer(); Button("Убрать") { model.location = nil }.font(.caption) } }
             if let error = model.error { Text(error).font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 8) }
             if model.pending {
                 HStack {
@@ -419,20 +576,31 @@ struct RootView: View {
                 }.font(.caption).padding(.horizontal, 8)
             }
             HStack(alignment: .bottom, spacing: 4) {
-                Button { typing = false; actions = true } label: { Image(systemName: "plus").font(.system(size: 22, weight: .regular)).frame(width: 44, height: 46) }.accessibilityLabel("Быстрые действия")
+                Menu {
+                    Button("Фото или видео", systemImage: "photo.on.rectangle") { voice.stop(); model.stopSpeech(); showPhotos = true }
+                    if UIImagePickerController.isSourceTypeAvailable(.camera) { Button("Камера", systemImage: "camera") { voice.stop(); model.stopSpeech(); showCamera = true } }
+                    Button("Файл", systemImage: "doc") { voice.stop(); model.stopSpeech(); showFiles = true }
+                    Button("Геопозиция", systemImage: "location") {
+                        let generation = model.attachmentGeneration
+                        locator.request { place in if model.attachmentGeneration == generation { model.location = place } }
+                    }
+                    Divider()
+                    Button("Быстрые действия", systemImage: "sparkle") { typing = false; actions = true }
+                } label: { Image(systemName: "plus").font(.system(size: 22)).frame(width: 44, height: 46) }
+                    .disabled(model.busy || model.pending || mediaLoading).accessibilityLabel("Прикрепить или выполнить действие")
                 TextField(voice.recording ? "Слушаю…" : "Спросите Агента", text: $model.draft, axis: .vertical)
                     .font(.body).lineLimit(1...5).focused($typing).padding(.vertical, 12)
                 Button { model.stopSpeech(); typing = false; if voice.recording || voice.starting { voice.stop() } else { Task { await voice.start() } } } label: {
                     Image(systemName: (voice.recording || voice.starting) ? "stop.fill" : "mic").font(.system(size: 19)).frame(width: 44, height: 46)
                 }.accessibilityLabel((voice.recording || voice.starting) ? "Остановить запись" : "Голосовой ввод")
                 Button {
-                    if model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        model.stopSpeech(); typing = false; Task { await voice.start() }
+                    if model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && model.attachments.isEmpty && model.location == nil {
+                        voice.stop(); model.stopSpeech(); typing = false; conversationVoice = true
                     } else { voice.stop(); typing = false; model.send(server: server) }
                 } label: {
-                    Image(systemName: model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "waveform" : "arrow.up")
+                    Image(systemName: model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && model.attachments.isEmpty && model.location == nil ? "waveform" : "arrow.up")
                         .font(.system(size: 18, weight: .semibold)).foregroundStyle(inverseInk).frame(width: 40, height: 40).background(ink, in: Circle()).frame(width: 44, height: 44)
-                }.disabled(model.busy || model.pending || model.remoteBusy).accessibilityLabel(model.draft.isEmpty ? "Начать голосовой ввод" : "Отправить").padding(.vertical, 3).padding(.trailing, 4)
+                }.disabled(model.busy || model.pending || model.remoteBusy || mediaLoading || locator.loading).accessibilityLabel(model.draft.isEmpty ? "Начать голосовой разговор" : "Отправить").padding(.vertical, 3).padding(.trailing, 4)
             }.padding(6).modifier(AgentGlass(radius: 30))
             Text(voice.recording ? "Нажмите стоп, проверьте текст и отправьте" : "Агент помогает действовать. Важное проверяйте.")
                 .font(.system(size: 11)).foregroundStyle(.secondary).multilineTextAlignment(.center)
@@ -441,6 +609,7 @@ struct RootView: View {
 }
 struct SettingsView: View {
     @Binding var server: String
+    var connectionLocked = false
     @State private var serverDraft = ""
     @State private var code = ""
     @State private var status = ""
@@ -448,8 +617,8 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section("Подключиться к лиду") {
-                TextField("HTTPS-адрес, например https://agent.example.com", text: $serverDraft).disabled(pairing).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
-                SecureField("Одноразовый код", text: $code).disabled(pairing).textInputAutocapitalization(.never).autocorrectionDisabled()
+                TextField("HTTPS-адрес, например https://agent.example.com", text: $serverDraft).disabled(pairing || connectionLocked).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                SecureField("Одноразовый код", text: $code).disabled(pairing || connectionLocked).textInputAutocapitalization(.never).autocorrectionDisabled()
                 Button(pairing ? "Подключаем…" : "Подключить iPhone") {
                     pairing = true
                     let pairingCode = code
@@ -459,16 +628,20 @@ struct SettingsView: View {
                         catch { status = error.localizedDescription }
                         pairing = false
                     }
-                }.disabled(pairing || code.isEmpty || !serverDraft.trimmingCharacters(in: .whitespaces).lowercased().hasPrefix("https://"))
+                }.disabled(pairing || connectionLocked || code.isEmpty)
                 Text(status).font(.footnote)
+            }
+            Section("Голос") { NavigationLink("Голос помощника") { VoiceSettingsView() } }
+            Section("Сеть") {
+                NavigationLink("OpenFlux · работа при белых списках") { OpenFluxSettingsView(server: server) }
             }
             Section("Как получить код") {
                 Text("В личном чате с лидом отправьте /pair_native. Вставьте полученный код сюда в течение 5 минут.")
                 Text("Доступ к GitHub, серверам и другим сервисам выполняется лидом через настроенные инструменты сервера и Mac.").foregroundStyle(.secondary)
             }
             Section("Управление доступом") {
-                Button("Удалить ключ с этого iPhone", role: .destructive) { Credentials.delete(server: server); status = "Локальный ключ удалён" }.disabled(pairing)
-                Text("Для отзыва всех ключей отправьте лиду /revoke_native. Подтверждения действий доступны в существующей Telegram-панели.").font(.footnote)
+                Button("Удалить ключ с этого iPhone", role: .destructive) { Credentials.delete(server: server); status = "Локальный ключ удалён" }.disabled(pairing || connectionLocked)
+                Text("Для отзыва всех ключей отправьте лиду /revoke_native. Подтверждения действий доступны прямо в чате приложения.").font(.footnote)
             }
         }.navigationTitle("Подключение")
             .onAppear { serverDraft = server }

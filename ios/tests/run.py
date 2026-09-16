@@ -18,7 +18,7 @@ with tempfile.TemporaryDirectory(prefix='agent-ios-tests-') as scratch:
     model = source[source.index('struct ChatLine:'):source.index('struct AgentGlass:')]
     model = model[:model.index('    func speak(')] + '}\n'
     model = model.replace(': ObservableObject', '').replace('@Published ', '')
-    model = model.replace('    private let speaker = ReplySpeaker()\n', '')
+    model = model.replace('    private let speaker = AVSpeechSynthesizer()\n', '')
     fixture = (root / 'tests/ChatStateFixture.swift').read_text().replace('// MODEL_UNDER_TEST', model)
     fixture = fixture.replace('import Foundation', 'import Foundation\nlet testDomain = "agent-tests-" + UUID().uuidString\nlet testDefaults = UserDefaults(suiteName: testDomain)!', 1)
     fixture = fixture.replace('UserDefaults.standard', 'testDefaults').replace('@MainActor static func main() async {', '@MainActor static func main() async {\n  defer { testDefaults.removePersistentDomain(forName: testDomain) }')
@@ -58,3 +58,43 @@ print("PASS: transfer amount requires entire positive decimal with at most two f
 ''')
     subprocess.run(['xcrun','swiftc','-module-cache-path',str(temp/'cache'),str(temp/'Transfer.swift'),'-o',str(temp/'test')],check=True,timeout=90)
     subprocess.run([str(temp/'test')],check=True,timeout=15)
+
+with tempfile.TemporaryDirectory(prefix='agent-openflux-tests-') as scratch:
+    temp = Path(scratch)
+    source = (root / 'Agent/OpenFlux.swift').read_text().split('/// All C runtime')[0].replace('import SwiftUI', '')
+    (temp / 'Settings.swift').write_text(source)
+    subprocess.run(['xcrun', 'swiftc', '-module-cache-path', str(temp/'cache'), str(root/'Agent/API.swift'), str(temp/'Settings.swift'), str(root/'tests/OpenFluxValidation.swift'), '-o', str(temp/'test')], check=True, timeout=90)
+    subprocess.run([str(temp/'test')], check=True, timeout=15)
+
+with tempfile.TemporaryDirectory(prefix='agent-speech-tests-') as scratch:
+    temp = Path(scratch)
+    source = (root / 'Agent/VoiceOutput.swift').read_text().split('import AVFoundation')[0]
+    (temp / 'SpeechText.swift').write_text(source)
+    subprocess.run(['xcrun', 'swiftc', '-module-cache-path', str(temp/'cache'), str(temp/'SpeechText.swift'), str(root/'tests/SpeechTextValidation.swift'), '-o', str(temp/'test')], check=True, timeout=90)
+    subprocess.run([str(temp/'test')], check=True, timeout=15)
+
+with tempfile.TemporaryDirectory(prefix='agent-knowledge-tests-') as scratch:
+    temp = Path(scratch)
+    source = (root / 'Agent/Knowledge.swift').read_text().split('struct KnowledgeView: View')[0]
+    source = source.replace('import SwiftUI', '').replace(': ObservableObject', '').replace('@Published ', '')
+    fixture = (root / 'tests/KnowledgeStateFixture.swift').read_text().replace('// MODEL', source)
+    (temp / 'Knowledge.swift').write_text(fixture)
+    subprocess.run(['xcrun', 'swiftc', '-parse-as-library', '-module-cache-path', str(temp/'cache'), str(temp/'Knowledge.swift'), '-o', str(temp/'test')], check=True, timeout=90)
+    subprocess.run([str(temp/'test')], check=True, timeout=15)
+
+# Actual silence detector and UTF16-safe neural speech boundaries from production.
+with tempfile.TemporaryDirectory(prefix='agent-conversation-voice-tests-') as scratch:
+    temp = Path(scratch)
+    source = (root / 'Agent/ConversationVoice.swift').read_text().split('enum VoiceConversationPolicy {')[1]
+    (temp / 'VoicePolicy.swift').write_text('import Foundation\nenum VoiceConversationPolicy {' + source + r'''
+precondition(!VoiceConversationPolicy.finishedUtterance(samples: 3, silence: 2))
+precondition(!VoiceConversationPolicy.finishedUtterance(samples: 4, silence: 1.19))
+precondition(VoiceConversationPolicy.finishedUtterance(samples: 4, silence: 1.2))
+let original = String(repeating: "Привет 👨‍👩‍👧‍👦. ", count: 900)
+let chunks = VoiceConversationPolicy.chunks(original)
+precondition(chunks.count > 1 && chunks.joined() == original)
+precondition(chunks.allSatisfy { $0.utf16.count <= 3000 })
+print("PASS: voice silence boundary and lossless UTF16-safe neural speech chunks")
+''')
+    subprocess.run(['xcrun', 'swiftc', '-module-cache-path', str(temp / 'cache'), str(temp / 'VoicePolicy.swift'), '-o', str(temp / 'test')], check=True, timeout=90)
+    subprocess.run([str(temp / 'test')], check=True, timeout=15)

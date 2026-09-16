@@ -1,6 +1,7 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")"
+bash ./build-openflux.sh
 (cd ../agent/miniapp && bun run build --mode native)
 agent_build="${AGENT_IOS_BUILD_DIR:-$PWD/build}"
 mkdir -p "$agent_build"
