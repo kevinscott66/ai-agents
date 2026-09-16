@@ -639,14 +639,16 @@ const DISALLOWED = [
   "RemoteTrigger", "PushNotification",
   "TaskCreate", "TaskUpdate", "TaskGet", "TaskList", "TaskOutput", "TaskStop",
   // Публикация наружу в обход draft+approve.
-  "Artifact",
+  "Artifact", "ClaudeDesign", "SendFeedback",
   // Чужие MCP-серверы: наш подключён кодом, всё остальное — из настроек на
   // диске, которых мы как раз не читаем (settingSources: []).
-  "Mcp", "ListMcpResources", "ReadMcpResource",
+  "Mcp", "ListMcpResources", "ReadMcpResource", "ReadMcpResourceDir",
+  "RefreshMcpTools",
   // Интерактивная механика CLI, которой у бота в чате нет.
   "TodoWrite", "AskUserQuestion", "EnterPlanMode", "ExitPlanMode",
   "EnterWorktree", "ExitWorktree", "Projects", "ShowOnboardingRolePicker",
-  "SlashCommand", "Skill",
+  "SlashCommand", "Skill", "ProposeGoal", "ProposeSkills", "ReportFindings",
+  "ReadNotifications",
   // Native WebFetch is outside our DNS/redirect boundary. The MCP tool with
   // the same capability is the only permitted WebFetch route.
   "WebFetch",
