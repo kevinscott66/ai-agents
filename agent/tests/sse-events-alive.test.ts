@@ -8,23 +8,13 @@
  * реализовано.
  *
  * Этот тест проверяет обратное направление: у каждого имени, на которое Mini
- * App подписан, должен быть эмиттер в коде сервера. Известные исключения
- * перечислены явно и списком, который может только сокращаться.
+ * App подписан, должен быть эмиттер в коде сервера. Исключений для несуществующих потоков больше нет.
  */
 import { test, expect, describe } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 const ROOT = new URL("..", import.meta.url).pathname;
-
-/**
- * `mac.output` — поток вывода claude-сессии с Mac. Мост (`mac-daemon`) отдаёт
- * только финальный результат вызова, потокового канала у него нет, так что
- * эмиттер потребует отдельной работы на стороне демона и рестарта на Mac.
- * Подписка оставлена намеренно: она безвредна и включится сама, когда эмиттер
- * появится. Список — не «разрешено забить», а «известно и посчитано».
- */
-const KNOWN_UNIMPLEMENTED = ["mac.output"];
 
 function walk(dir: string, exts: string[], out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
@@ -45,7 +35,7 @@ function namesFrom(files: string[], re: RegExp): Set<string> {
   return found;
 }
 
-const SUBSCRIBE_RE = /sseSubscribe\(\s*"([a-z][a-z.]*)"/g;
+const SUBSCRIBE_RE = /\b(?:sseSubscribe|subscribe)\(\s*["']([a-z][a-z.]*)["']/g;
 // И `emit(...)` из events-bus, и реэкспорт `busEmit(...)` — оба варианта в ходу.
 const EMIT_RE = /\bbus[Ee]mit\(\s*"([a-z][a-z.]*)"|(?<![a-zA-Z])emit\(\s*"([a-z][a-z.]*)"/g;
 
@@ -73,29 +63,17 @@ describe("T-810: у каждой SSE-подписки есть эмиттер", 
     expect(subscribed.has("task.updated")).toBe(true);
   });
 
-  test("нет подписок без эмиттера, кроме известного списка", () => {
+  test("нет подписок без эмиттера", () => {
     const live = emitted();
     const dead = [...subscribed]
       .filter((n) => !live.has(n))
-      .filter((n) => !KNOWN_UNIMPLEMENTED.includes(n))
       .sort();
     expect(dead).toEqual([]);
   });
 
-  test("список известных исключений не разросся", () => {
-    // Если эмиттер появился — имя убирается отсюда, и предыдущий тест начинает
-    // его сторожить. Если список пополнился — это осознанное решение, а не
-    // побочный эффект правки.
-    expect(KNOWN_UNIMPLEMENTED).toEqual(["mac.output"]);
-  });
-
-  test("известное исключение всё ещё исключение, а не забытое имя", () => {
-    // Обратная сторона: если mac.output кто-то реализовал, тест напомнит убрать
-    // его из списка, а не оставит вечное «известное» пятно.
-    const live = emitted();
-    for (const n of KNOWN_UNIMPLEMENTED) {
-      expect(live.has(n)).toBe(false);
-      expect(subscribed.has(n)).toBe(true);
-    }
+  test("Mac uses a real completion event and no dead output stream", () => {
+    expect(subscribed.has("action.executed")).toBe(true);
+    expect(subscribed.has("mac.output")).toBe(false);
+    expect(emitted().has("action.executed")).toBe(true);
   });
 });

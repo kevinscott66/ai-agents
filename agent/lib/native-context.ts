@@ -1,5 +1,15 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Database } from 'bun:sqlite';
+import { randomUUID } from 'node:crypto';
+export type NativeExecutionOutcome = 'completed' | 'failed' | 'interrupted';
+export const nativeExecutionMarker = 'running:' + randomUUID();
+export const NATIVE_INTERRUPTED_MESSAGE = 'Связь прервана. Результат действия неизвестен. Перед повтором проверьте, что уже выполнено.';
+export function isNativeExecutionOutcome(value: string | null): value is NativeExecutionOutcome {
+  return value === 'completed' || value === 'failed' || value === 'interrupted';
+}
+export function recordNativeExecutionOutcome(database: Database, approvalId:string, outcome:NativeExecutionOutcome, output:string) {
+  return database.query("UPDATE native_approval_links SET execution=?,output=? WHERE approval_id=? AND (execution IS NULL OR execution LIKE 'running:%')").run(outcome,output,approvalId).changes > 0;
+}
 // Trusted ingress context, never model-supplied payload fields.
 export const nativeTurnContext = new AsyncLocalStorage<{ userId: string; turnId:string; conversationId:string; linkApproval: (id:string) => void }>();
 export function persistNativeApprovalLink(database: Database, approvalId:string, chatId:number) {

@@ -46,6 +46,11 @@ enum AgentError: LocalizedError { case message(String); var errorDescription: St
   precondition(concurrent.outcomes["approval-1"] == completed && completed!.contains("Выполнено"))
   let relaunched = ChatApprovals(); await relaunched.refresh(server:"https://test",conversation:dialog)
   precondition(relaunched.items.count == 1 && relaunched.outcomes["approval-1"] == completed)
+  Fixture.execution = "interrupted"
+  let interrupted = ChatApprovals(); await interrupted.refresh(server:"https://test",conversation:dialog)
+  precondition(interrupted.outcomes["approval-1"]!.contains("неизвестен") && !interrupted.outcomes["approval-1"]!.contains("Ожидаем"))
+  await interrupted.decide(interrupted.items[0],approve:true,server:"https://test")
+  precondition(Fixture.posts == 2, "Interrupted execution must never replay")
   let card = relaunched.items[0]; Fixture.token = "different-account"
   await relaunched.decide(card,approve:true,server:"https://test")
   precondition(Fixture.posts == 2 && relaunched.items.isEmpty)

@@ -90,7 +90,15 @@ struct TaxiView: View {
             route = parts.url
             let address: (CLPlacemark) -> String = { p in [p.locality, p.thoroughfare, p.subThoroughfare].compactMap { $0 }.joined(separator: ", ") }
             routeDescription = "\(address(a))\n↓\n\(address(b))"
-        } catch { self.error = error.localizedDescription }
+        } catch { if start == requestedStart && destination == requestedDestination { self.error = error.localizedDescription } }
+    }
+}
+enum TransferAmount {
+    static func normalized(_ raw: String) -> String? {
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: ".")
+        guard value.range(of: #"^[0-9]+(?:\.[0-9]{1,2})?$"#, options: .regularExpression) != nil,
+              let number = Decimal(string: value, locale: Locale(identifier: "en_US_POSIX")), !number.isNaN, number > 0 else { return nil }
+        return NSDecimalNumber(decimal: number).stringValue
     }
 }
 struct TransferView: View {
@@ -99,7 +107,7 @@ struct TransferView: View {
     @State private var amount = ""
     @State private var purpose = ""
     @State private var copied = false
-    private var valid: Bool { !recipient.trimmingCharacters(in: .whitespaces).isEmpty && (Decimal(string: amount.replacingOccurrences(of: ",", with: ".")) ?? 0) > 0 }
+    private var valid: Bool { !recipient.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && TransferAmount.normalized(amount) != nil }
     var body: some View {
         Form {
             Section("Подготовить перевод") {
@@ -109,7 +117,7 @@ struct TransferView: View {
             }
             Section {
                 Button(copied ? "Данные скопированы" : "Скопировать данные перевода") {
-                    UIPasteboard.general.setItems([["public.utf8-plain-text": "Получатель: \(recipient)\nСумма: \(amount) ₽\nНазначение: \(purpose)"]], options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(120)])
+                    UIPasteboard.general.setItems([["public.utf8-plain-text": "Получатель: \(recipient)\nСумма: \(TransferAmount.normalized(amount) ?? amount) ₽\nНазначение: \(purpose)"]], options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(120)])
                     copied = true
                 }.disabled(!valid)
                 Button("Открыть Т‑Банк") { openURL(URL(string: "https://www.tbank.ru/mybank/")!) }
@@ -117,5 +125,8 @@ struct TransferView: View {
                 Text("Это подготовка данных. Проверьте получателя и сумму и выполните перевод в банке. Банковские реквизиты из этой формы не отправляются лиду.")
             }
         }.navigationTitle("Перевод")
+            .onChange(of: recipient) { _, _ in copied = false }
+            .onChange(of: amount) { _, _ in copied = false }
+            .onChange(of: purpose) { _, _ in copied = false }
     }
 }

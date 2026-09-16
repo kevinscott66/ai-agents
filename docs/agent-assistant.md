@@ -86,3 +86,11 @@ Trusted AsyncLocalStorage ingress context records owner, turn and conversation i
 Execution output is a stable assistant archive message `approval:<id>:result`, synchronized across devices and shown outside/below its confirmation card. The card contains parameters and status only. Client terminal states win over late POST errors; relaunch reads all statuses for the selected conversation. Main completion records and archived messages are idempotent. Old approvals created before durable association cannot be assigned to a dialog retroactively.
 
 Legacy clients are archived when each turn starts, so retention pruning during long uptime cannot erase their messages. Native input/title limits use the backend UTF-16 contract. Mac protocol now uses mutual HMAC authentication and sequenced signatures in both directions; CLI cancellation targets the process group. See the daemon README for backend-first rollout and strict legacy-auth setting.
+
+### Readiness fixes (0.1.9)
+
+Native requests revalidate the device bearer after reading their bounded JSON body, including Mini App mutation ingress. Documented turn rejections clear client pending state; uncertain failures retain polling recovery. The JSON byte ceiling accommodates8,000 UTF-16 units even when JSON escaping expands them.
+
+Main approval links use `running:<process-id>` while executing. A later process recognizes an old/missing marker as interrupted/unknown; it never automatically repeats the action. Durable/audited success still wins when available. The derived archive stores an explicit interrupted outcome and a stable warning message. Same-process active work remains pending.
+
+Mac history uses real `action.executed` events and15-second visible-page polling; it displays stored bounded output rather than waiting on a nonexistent stream. Voice capture is stopped when leaving its dialog context. Previous-message pagination preserves position. Calendar helper errors expose fixed permission/configuration codes, never private OS stderr. Calendar still requires an explicit local macOS permission grant.

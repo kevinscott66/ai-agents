@@ -123,11 +123,15 @@ export async function handleAssistantCommand(ctx: Context, text: string, options
     if (command !== 'evening' && personal) {
       try {
         const result = await deps.mac('calendar_today', userId, chatId);
-        if (!result.ok || result.truncated) throw new Error('calendar_unavailable');
+        if (!result.ok || result.truncated) throw new Error(result.error || 'calendar_unavailable');
         sections.push(formatCalendar(parseCalendarDay(result.stdout)));
-      } catch {
+      } catch (error) {
         status = 'error';
-        sections.push('Apple Calendar недоступен. Проверь связь с Mac, MAC_CALENDAR_ENABLED и разрешение доступа к календарю.');
+        const code = error instanceof Error ? error.message : '';
+        sections.push(code === 'calendar_access_required'
+          ? 'Apple Calendar: нужно разрешение на Mac. Откройте Системные настройки → Конфиденциальность и безопасность → Календари и разрешите доступ Агенту.'
+          : code === 'calendar_disabled' ? 'Apple Calendar пока не подключён на Mac. Включите интеграцию календаря в настройках Mac-исполнителя.'
+          : 'Apple Calendar недоступен. Проверь связь с Mac и разрешение доступа к календарю.');
       }
     } else if (command === 'morning') {
       sections.push('Личный календарь доступен владельцу в личном чате.');

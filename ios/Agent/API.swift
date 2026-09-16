@@ -27,6 +27,10 @@ struct Pairing: Decodable {
         return token
     }
 }
+struct TurnRejected: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
+}
 enum AgentError: LocalizedError {
     case message(String)
     var errorDescription: String? { if case .message(let text) = self { return text }; return nil }
@@ -69,6 +73,12 @@ struct AgentAPI {
         }
         return data
     }
+    static func turnWasRejected(status: Int, data: Data) -> Bool {
+        struct Failure: Decodable { let error: String }
+        guard let failure = try? JSONDecoder().decode(Failure.self, from: data) else { return false }
+        let failures: [Int: Set<String>] = [400: ["invalid_turn", "invalid_body", "body_aborted"], 401: ["unauthorized"], 403: ["native_only"], 404: ["not_found"], 408: ["body_timeout"], 413: ["body_too_large"], 415: ["json_required"], 409: ["busy", "conflict"], 503: ["lead_unavailable", "native_disabled"]]
+        return failures[status]?.contains(failure.error) == true
+    }
     private func request<T: Decodable>(_ path: String, body: [String: String]? = nil, authenticated: Bool = true, expectedToken: String? = nil) async throws -> T {
         guard var parts = URLComponents(string: server), parts.scheme == "https", parts.host != nil,
               parts.user == nil, parts.password == nil, parts.query == nil, parts.fragment == nil,
@@ -96,7 +106,12 @@ struct AgentAPI {
         let (bytes, response) = try await session.bytes(for: request)
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
             let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-            throw AgentError.message(code == 401 ? "Код или ключ недействителен. Подключите устройство заново." : code == 409 ? "Лид уже выполняет запрос. Дождитесь результата." : code == 503 ? "Лид или доступ приложения пока недоступен." : "Сервер вернул ошибку \(code)")
+            let message = code == 401 ? "Код или ключ недействителен. Подключите устройство заново." : code == 409 ? "Лид уже выполняет запрос. Дождитесь результата." : code == 503 ? "Лид или доступ приложения пока недоступен." : "Сервер вернул ошибку \(code)"
+            if path == "/api/native/turns", body != nil {
+                let data = try await Self.readBody(bytes)
+                if Self.turnWasRejected(status: code, data: data) { throw TurnRejected(message: message) }
+            }
+            throw AgentError.message(message)
         }
         guard response.expectedContentLength <= Int64(Self.maximumResponseBytes) else {
             throw AgentError.message("Ответ сервера слишком большой")

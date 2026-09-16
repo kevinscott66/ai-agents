@@ -2,7 +2,7 @@ import { describe, test, expect, afterEach } from 'bun:test';
 import type { Context } from 'telegraf';
 import { parseAssistantCommand, handleAssistantCommand, prioritizeTasks, formatCalendar } from '../lib/assistant-commands.ts';
 import { parseCalendarDay } from '../lib/assistant-types.ts';
-import { runAssistantOperation, nativeExec } from '../mac-daemon/assistant.ts';
+import { runAssistantOperation, nativeExec, assistantErrorCode } from '../mac-daemon/assistant.ts';
 import { parseBridgeMsg } from '../mac-daemon/protocol.ts';
 import { createAuthGate } from '../mac-daemon/auth-gate.ts';
 import { sendAssistantToMac, _setActiveSocketForTests, _handleClientMessageForTests } from '../lib/mac-bridge.ts';
@@ -131,3 +131,16 @@ test('actual native subprocess exits on cancellation', async () => {
   try { await expect(result).rejects.toThrow('native_command_failed'); }
   finally { clearTimeout(timer); }
 }, 2000);
+
+
+test('calendar permission failure is actionable and never exposes private stderr', async () => {
+  expect(assistantErrorCode(new Error('calendar_access_required'))).toBe('calendar_access_required');
+  expect(assistantErrorCode(new Error('private event and credential details'))).toBe('assistant_unavailable');
+  const {ctx,replies}=context();
+  await handleAssistantCommand(ctx,'/calendar',{}, {
+    tasks:()=>[],online:()=>true,allowed:()=>true,
+    mac:async()=>({ok:false,stdout:'',stderr:'',error:'calendar_access_required'}),
+  });
+  expect(replies[0]).toContain('Системные настройки');
+  expect(replies[0]).not.toContain('Событий на сегодня нет');
+});

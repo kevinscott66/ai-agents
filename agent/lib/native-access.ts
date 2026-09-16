@@ -4,6 +4,7 @@ import { Database } from 'bun:sqlite';
 import { randomBytes, createHash } from 'node:crypto';
 import { mkdirSync, chmodSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import type { NativeExecutionOutcome } from './native-context.ts';
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
 export class NativeAccess {
   readonly db: Database;
@@ -141,11 +142,14 @@ export class NativeAccess {
     return this.db.query('SELECT a.approval_id,a.execution FROM conversation_approvals a JOIN conversation_turns t ON t.turn_id=a.turn_id WHERE t.conversation_id=?').all(id) as {approval_id:string;execution:string|null}[];
   }
   completeApproval(approvalId: string, userId: string, ok: boolean, text: string) {
+    this.recordApprovalOutcome(approvalId,userId,ok ? 'completed' : 'failed',text);
+  }
+  recordApprovalOutcome(approvalId:string,userId:string,outcome:NativeExecutionOutcome,text:string) {
     this.db.transaction(() => {
       const link = this.db.query('SELECT t.conversation_id FROM conversation_approvals a JOIN conversation_turns t ON t.turn_id=a.turn_id JOIN conversations c ON c.id=t.conversation_id WHERE a.approval_id=? AND c.user_id=? AND a.execution IS NULL').get(approvalId,userId) as {conversation_id:string}|null;
       if (!link) return;
       this.db.query('INSERT OR IGNORE INTO conversation_messages(id,conversation_id,role,text) VALUES(?,?,?,?)').run('approval:'+approvalId+':result',link.conversation_id,'assistant',text.slice(0,8000));
-      this.db.query('UPDATE conversation_approvals SET execution=? WHERE approval_id=?').run(ok ? 'completed' : 'failed',approvalId);
+      this.db.query('UPDATE conversation_approvals SET execution=? WHERE approval_id=?').run(outcome,approvalId);
       this.db.query('UPDATE conversations SET updated=? WHERE id=?').run(Date.now(),link.conversation_id);
     })();
   }

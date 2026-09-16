@@ -133,7 +133,7 @@ struct ChatLine: Identifiable, Codable { var id = UUID().uuidString; let role: S
                 if first.status == "running" { try await watch(server: server, id: id, token: token) }
             } catch is CancellationError { } catch {
                 guard operation == activeOperation, !Task.isCancelled else { return }
-                if !submitted { clearPending(); draft = text; lines.removeAll { $0.id == id + ":user" } }
+                if !submitted || error is TurnRejected { submitted = false; clearPending(); draft = text; lines.removeAll { $0.id == id + ":user" } }
                 self.error = error.localizedDescription + (submitted ? " Если запрос принят сервером, нажмите «Проверить ответ»." : ""); busy = false }
         }
         return true
@@ -252,7 +252,7 @@ struct RootView: View {
                         Button { menu = true } label: { Image(systemName: "line.3.horizontal").font(.system(size: 19, weight: .medium)) }.accessibilityLabel("Открыть меню")
                     }
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button { model.newConversation(server: server); typing = true } label: { Image(systemName: "square.and.pencil").font(.system(size: 20, weight: .regular)) }.disabled(model.busy || model.pending).accessibilityLabel("Новый диалог")
+                        Button { voice.stop(); model.newConversation(server: server); typing = true } label: { Image(systemName: "square.and.pencil").font(.system(size: 20, weight: .regular)) }.disabled(model.busy || model.pending).accessibilityLabel("Новый диалог")
                     }
                 }
                 .safeAreaInset(edge: .bottom, spacing: 0) { composer }
@@ -266,7 +266,12 @@ struct RootView: View {
                 do { try await Task.sleep(for: .seconds(5)) } catch { break }
             }
         }
+        .onChange(of: server) { _, _ in voice.stop(); model.stopSpeech() }
+        .onChange(of: menu) { _, opened in if opened { voice.stop(); model.stopSpeech() } }
+        .onChange(of: actions) { _, opened in if opened { voice.stop(); model.stopSpeech() } }
+        .onChange(of: settings) { _, opened in if opened { voice.stop(); model.stopSpeech() } }
         .onChange(of: model.conversationId) { _, conversation in
+            voice.stop(); model.stopSpeech()
             Task { await approvals.refresh(server: server, conversation: conversation) }
         }
         .onChange(of: model.busy) { _, busy in
@@ -293,9 +298,9 @@ struct RootView: View {
                     }
                     Section("Диалоги") {
                         if let error = model.historyError { Text(error).font(.caption).foregroundStyle(.secondary) }
-                        Button("Новый диалог", systemImage: "square.and.pencil") { model.newConversation(server: server); menu = false }.disabled(model.busy || model.pending)
+                        Button("Новый диалог", systemImage: "square.and.pencil") { voice.stop(); model.newConversation(server: server); menu = false }.disabled(model.busy || model.pending)
                         ForEach(model.conversations) { conversation in
-                            Button { Task { await model.selectConversation(conversation.id, server: server); menu = false } } label: {
+                            Button { voice.stop(); Task { await model.selectConversation(conversation.id, server: server); menu = false } } label: {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(conversation.title).lineLimit(2)
                                     Text(Date(timeIntervalSince1970: conversation.updated / 1000), style: .date).font(.caption).foregroundStyle(.secondary)
@@ -347,7 +352,14 @@ struct RootView: View {
                     }.frame(maxWidth: .infinity).padding(.horizontal, 24)
                 } else {
                     LazyVStack(alignment: .leading, spacing: 26) {
-                        if model.moreHistory { Button("Предыдущие сообщения") { Task { await model.synchronize(server: server, older: true) } } }
+                        if model.moreHistory { Button("Предыдущие сообщения") {
+                            let anchor = model.lines.first?.id
+                            let conversation = model.conversationId
+                            Task {
+                                await model.synchronize(server: server, older: true)
+                                if model.conversationId == conversation, let anchor { proxy.scrollTo(anchor, anchor: .top) }
+                            }
+                        } }
                         ForEach(model.lines) { line in
                             if let item = approvals.items.first(where: { line.id == "approval:" + $0.id + ":result" }) {
                                 approvalCard(item)
@@ -375,7 +387,7 @@ struct RootView: View {
                 .onChange(of: approvals.items.count) { _, _ in
                     if let item = approvals.items.last { proxy.scrollTo("approval-" + item.id, anchor: .bottom) }
                 }
-                .onChange(of: model.lines.count) { _, _ in
+                .onChange(of: model.lines.last?.id) { _, _ in
                     if let id = model.lines.last?.id {
                         if reducedMotion { proxy.scrollTo(id, anchor: .bottom) }
                         else { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .bottom) } }

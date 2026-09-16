@@ -34,3 +34,6 @@ html:has(.native-panel) {
 .native-panel .native-error p { color: var(--hint); font-size: 15px; margin: 8px 0 14px; }
 .native-panel .tabs .icon { display: flex; justify-content: center; padding: 2px 0; }
 .native-panel .tabs button { min-width: 66px; padding: 7px 9px; font-size: 11px; }
+
+.native-panel .page-header { margin-bottom: 18px; }
+.native-panel .page-header p { font-size: 14px; }

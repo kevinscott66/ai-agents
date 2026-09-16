@@ -6,9 +6,9 @@ import { parseCalendarDay } from '../lib/assistant-types.ts';
 export type AssistantOperation = 'calendar_today' | 'open_workspace';
 export type NativeExec = (file: string, args: string[], signal?: AbortSignal) => Promise<string>;
 export const nativeExec: NativeExec = (file, args, signal) => new Promise((resolve, reject) => {
-  execFile(file, args, { timeout: 20_000, signal, killSignal: 'SIGKILL', maxBuffer: 60_000, env: sanitizeChildEnv(process.env) }, (err, stdout) => {
+  execFile(file, args, { timeout: 20_000, signal, killSignal: 'SIGKILL', maxBuffer: 60_000, env: sanitizeChildEnv(process.env) }, (err, stdout, stderr) => {
     // Never forward OS stderr (may contain personal information).
-    if (err) reject(new Error('native_command_failed'));
+    if (err) reject(new Error(stderr.trim() === 'calendar_access_required' ? 'calendar_access_required' : 'native_command_failed'));
     else resolve(stdout);
   });
 });
@@ -51,4 +51,10 @@ export async function runAssistantOperation(
     clearTimeout(timer);
     signal?.removeEventListener('abort', cancel);
   }
+}
+
+/** Only fixed diagnostic codes may leave the Mac; never OS stderr or personal data. */
+export function assistantErrorCode(error: unknown): string {
+  const code = error instanceof Error ? error.message : '';
+  return ['calendar_disabled','calendar_access_required','workspace_not_configured','assistant_cancelled'].includes(code) ? code : 'assistant_unavailable';
 }

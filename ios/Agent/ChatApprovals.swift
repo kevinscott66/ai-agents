@@ -9,7 +9,12 @@ struct ChatApproval: Identifiable, Decodable {
     let payload: ApprovalValue?
     let redacted: Bool?
     let execution: String?
-    var details: String { payload?.description ?? "Описание отсутствует" }
+    var details: String {
+        guard case .object(let fields) = payload else { return payload?.description ?? "Описание отсутствует" }
+        let labels = ["project":"Проект", "prompt":"Задача", "provider":"Исполнитель", "mode":"Режим"]
+        let keys = fields.keys.filter { !$0.hasPrefix("_") }.sorted()
+        return keys.map { "\(labels[$0] ?? $0): \(fields[$0]!.description)" }.joined(separator: "\n")
+    }
 }
 indirect enum ApprovalValue: Decodable {
     case text(String), object([String: ApprovalValue]), array([ApprovalValue]), other(String)
@@ -65,7 +70,10 @@ indirect enum ApprovalValue: Decodable {
             struct List: Decodable { let approvals: [ChatApproval] }
             items = try JSONDecoder().decode(List.self, from: Data(text.utf8)).approvals.filter { String($0.chat_id) == owner }
             for item in items where !terminal.contains(item.id) {
-                if item.execution == "completed" {
+                if item.execution == "interrupted" {
+                    outcomes[item.id] = "Связь прервана. Результат действия неизвестен. Перед повтором проверьте, что уже выполнено."
+                    terminal.insert(item.id); awaitingDecision.remove(item.id)
+                } else if item.execution == "completed" {
                     outcomes[item.id] = "Выполнено. Результат — в сообщении ниже."
                     terminal.insert(item.id); awaitingDecision.remove(item.id)
                 } else if item.execution == "failed" || item.status == "failed" {

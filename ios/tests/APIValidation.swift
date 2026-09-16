@@ -30,6 +30,12 @@ struct ByteFixture: AsyncSequence, AsyncIteratorProtocol {
         precondition(AgentAPI.conversationTitle(String(repeating: "😀", count: 60)) == String(repeating: "😀", count: 50))
         precondition(AgentAPI.conversationTitle(String(repeating: "a", count: 99) + "😀").utf16.count == 99)
         precondition(AgentAPI.conversationTitle(String(repeating: "a", count: 101)).utf16.count == 100)
+        for (status, reason) in [(409,"busy"),(409,"conflict"),(503,"lead_unavailable"),(401,"unauthorized")] {
+            precondition(AgentAPI.turnWasRejected(status:status,data:Data("{\"error\":\"\(reason)\"}".utf8)))
+        }
+        for (status, body) in [(503,"<html>proxy unavailable</html>"),(500,"{\"error\":\"lead_unavailable\"}"),(503,"{\"error\":\"unknown\"}"),(409,"{}")] {
+            precondition(!AgentAPI.turnWasRejected(status:status,data:Data(body.utf8)))
+        }
         let exact = try await AgentAPI.readBody(ByteFixture(remaining: AgentAPI.maximumResponseBytes))
         precondition(exact.count == AgentAPI.maximumResponseBytes)
         do {

@@ -581,6 +581,7 @@ export function registerMessageHandler(
           cache_control: { type: "ephemeral" },
         },
         ...(hitPages ? [{ type: "text" as const, text: hitPages }] : []),
+        ...(voice?.native ? [{type:"text" as const,text:"Канал ответа: приложение iPhone «Агент». Подтверждения действий отображаются карточками прямо в этом диалоге. При pending_approval предложи подтвердить карточку здесь; не отправляй пользователя в Telegram или Mini App. Не называй действие выполненным до получения результата инструмента."}] : []),
       ];
 
       const messages: Anthropic.MessageParam[] = recent.map((r) => {

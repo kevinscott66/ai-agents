@@ -10,8 +10,8 @@ test('native body has deadline and cancellation does not wait for hostile stream
 test('native body checks actual bytes, object shape and declared size', async () => {
   await expect(readNativeJson(request('[]'))).rejects.toThrow('invalid_body');
   await expect(readNativeJson(request('null'))).rejects.toThrow('invalid_body');
-  await expect(readNativeJson(request(JSON.stringify({text:'x'.repeat(20_000)})))).rejects.toThrow('body_too_large');
-  await expect(readNativeJson(request('{}', {'content-length':'20000'}))).rejects.toThrow('body_too_large');
+  await expect(readNativeJson(request(JSON.stringify({text:'x'.repeat(70_000)})))).rejects.toThrow('body_too_large');
+  await expect(readNativeJson(request('{}', {'content-length':'70000'}))).rejects.toThrow('body_too_large');
   expect(await readNativeJson(request('{"code":"abc"}'))).toEqual({code:'abc'});
 });
 test('native body abort interrupts a stalled read', async () => {
@@ -20,4 +20,12 @@ test('native body abort interrupts a stalled read', async () => {
   const reading = readNativeJson(req);
   controller.abort();
   await expect(reading).rejects.toThrow('body_aborted');
+});
+
+
+test('body bound accepts every supported UTF-16 text including multibyte and escaped characters', async () => {
+  for (const text of ['界'.repeat(8000), '\u0001'.repeat(8000)]) {
+    const body=JSON.stringify({id:'native-turn-0000001',conversationId:'native-dialog-00001',text});
+    expect((await readNativeJson(request(body))).text).toBe(text);
+  }
 });

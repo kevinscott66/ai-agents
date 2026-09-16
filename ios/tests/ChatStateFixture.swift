@@ -6,6 +6,7 @@ struct ConversationRecord: Codable, Identifiable { let id: String; let title: St
 struct ConversationMessage: Codable, Identifiable { let seq: Int; let id: String; let role: String; let text: String }
 struct ConversationIndex { let conversations: [ConversationRecord]; let running: Bool; let nextCursor: String?; let more: Bool }
 struct ConversationHistory { let messages: [ConversationMessage]; let more: Bool; let running: Bool }
+struct TurnRejected: Error { let message: String }
 enum AgentError: Error { case message(String) }
 @MainActor enum Credentials { static var token = "fixture"; static func read(server: String) -> String? { token } }
 @MainActor var remoteRunning = false
@@ -63,8 +64,11 @@ struct AgentAPI {
   archive = (1...150).map { ConversationMessage(seq:$0,id:"message-" + String($0),role:"user",text:String($0)) }
   await model.selectConversation("dialog-0000000001", server:"https://two.example")
   precondition(model.lines.count == 100 && model.moreHistory)
+  let originalHistoryAnchor = model.lines.first!.id
+  let originalTail = model.lines.last!.id
   await model.synchronize(server:"https://two.example",older:true)
   precondition(model.lines.count == 150 && !model.moreHistory)
+  precondition(model.lines.last!.id == originalTail && model.lines.contains(where: { $0.id == originalHistoryAnchor }), "Pagination must retain scroll anchor and must not signal an appended tail")
   await model.synchronize(server:"https://two.example")
   precondition(model.lines.count == 150 && !model.moreHistory, "Refresh erased older history")
   let restored = ChatModel()
@@ -97,6 +101,16 @@ struct AgentAPI {
   await catalog.loadMoreConversations(server:"https://catalog.example")
   precondition(catalog.conversations.count == 450 && !catalog.moreConversations)
   precondition(Set(catalog.conversations.map(\.id)).count == 450)
+  for failure in ["busy", "lead_unavailable"] {
+   let rejected = ChatModel(); rejected.draft = "restore this"
+   let position = continuations.count
+   precondition(rejected.send(server:"https://rejected.example"))
+   while continuations.count <= position { await Task.yield() }
+   continuations[position].resume(throwing:TurnRejected(message:failure))
+   while rejected.busy { await Task.yield() }
+   precondition(!rejected.pending && rejected.draft == "restore this" && rejected.lines.isEmpty)
+   precondition(UserDefaults.standard.string(forKey:"pendingTurn") == nil)
+  }
   print("PASS: synchronized history, pagination, restoration and cross-server isolation")
   print("PASS: stale cancellation isolation and pending-server recovery")
  }

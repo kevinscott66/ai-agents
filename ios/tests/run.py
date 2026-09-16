@@ -45,3 +45,16 @@ with tempfile.TemporaryDirectory(prefix='agent-approvals-tests-') as scratch:
     (temp / 'Approvals.swift').write_text(fixture)
     subprocess.run(['xcrun', 'swiftc', '-parse-as-library', '-module-cache-path', str(temp / 'cache'), str(temp / 'Approvals.swift'), '-o', str(temp / 'test')], check=True, timeout=90)
     subprocess.run([str(temp / 'test')], check=True, timeout=15)
+
+# Exercise full-string monetary parsing without SwiftUI or clipboard access.
+with tempfile.TemporaryDirectory(prefix='agent-transfer-tests-') as scratch:
+    temp = Path(scratch)
+    source = (root / 'Agent/ActionsView.swift').read_text().split('enum TransferAmount {')[1].split('struct TransferView: View')[0]
+    (temp / 'Transfer.swift').write_text('import Foundation\nenum TransferAmount {' + source + '''
+precondition(TransferAmount.normalized(" 12,50 ") == "12.5")
+precondition(TransferAmount.normalized("0.01") == "0.01")
+for text in ["12junk", "1.234", "1e3", "0", "-1", "NaN", "1 2", "", "12.3.4"] { precondition(TransferAmount.normalized(text) == nil) }
+print("PASS: transfer amount requires entire positive decimal with at most two fractional digits")
+''')
+    subprocess.run(['xcrun','swiftc','-module-cache-path',str(temp/'cache'),str(temp/'Transfer.swift'),'-o',str(temp/'test')],check=True,timeout=90)
+    subprocess.run([str(temp/'test')],check=True,timeout=15)

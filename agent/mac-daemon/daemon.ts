@@ -13,7 +13,7 @@ import { cancelRun, killAll, type KillableChild } from "./kill.ts";
 import { parseBridgeMsg, toPermissionMode, type RunMsg } from "./protocol.ts";
 import { sanitizeChildEnv, resolveClaudeBin } from "./child-env.ts";
 import { codexCommand } from "./codex-command.ts";
-import { runAssistantOperation } from "./assistant.ts";
+import { runAssistantOperation, assistantErrorCode } from "./assistant.ts";
 import { createDaemonHandshake } from "./auth-handshake.ts";
 import { createAuthGate } from "./auth-gate.ts";
 // Порт в подсказке при старте: раньше литерал 8787 — это HTTP-порт Mini App,
@@ -391,8 +391,8 @@ function connect(): void {
         runAssistantOperation(msg.operation, undefined, undefined, controller.signal).then(output => {
           sendChunk(ws, msg.id, "stdout", output);
           sendResult(ws, msg.id, true, 0);
-        }).catch(() => {
-          sendResult(ws, msg.id, false, undefined, "assistant_unavailable");
+        }).catch(error => {
+          sendResult(ws, msg.id, false, undefined, assistantErrorCode(error));
         }).finally(() => { assistantControllers.delete(msg.id); });
         return;
       case "run":

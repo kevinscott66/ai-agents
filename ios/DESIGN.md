@@ -81,3 +81,7 @@ A decision POST may time out while the server awaits a long Mac action. The clie
 ## Confirmation result placement
 
 An approval card contains action parameters and decision/execution status. The result is a separate assistant message immediately below the card, with normal text selection, copy and speech controls. Its server archive identity links it to the correct conversation across devices. Completed cards use “Подтверждение действия”; output never appears as secondary text inside the card. Conversation menus load older pages on demand.
+
+## Readiness polish (0.1.9)
+
+Previous-history loading preserves its anchor; only an appended tail triggers scrolling down. Leaving a dialog/account or opening another sheet stops dictation. Rejected sends restore the draft instead of leaving permanent recovery controls. Interrupted approvals explicitly describe uncertainty and stay noninteractive. Action parameters use human-readable labels while hiding internal metadata. Transfer copy confirmation resets after editing, and the amount must be a complete positive decimal with at most two fractional digits.

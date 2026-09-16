@@ -1,4 +1,4 @@
-import { useNativeRefresh } from "../lib/native-refresh";
+import { watchMacHistory } from "../lib/mac-refresh";
 import { nativePanel } from "../lib/native";
 import { useEffect, useRef, useState } from "react";
 import { api, formatApiError } from "../lib/api";
@@ -17,12 +17,6 @@ import {
 import { adminFromAutonomy } from "../lib/admin";
 import { toast } from "../lib/tg";
 import { ellipsize } from "../lib/text";
-
-interface MacOutputEvent {
-  sessionId: string;
-  chunk: string;
-  timestamp: number;
-}
 
 export default function Mac() {
   const [provider, setProvider] = useState<"claude" | "codex">("claude");
@@ -47,14 +41,12 @@ export default function Mac() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
-  const [outputLog, setOutputLog] = useState<Map<string, string[]>>(new Map());
   const [stopping, setStopping] = useState(false);
   const [canStop, setCanStop] = useState(false);
 
-  // Load Mac action history on mount
-  useEffect(() => {
-    loadMacHistory();
-  }, []);
+  useEffect(() => watchMacHistory(
+    () => loadMacHistory(false), sseSubscribe, () => !document.hidden,
+  ), []);
 
   // Отдельно от загрузки списка: права — не то, ради чего открывают вкладку,
   // и их запрос не должен ни ронять историю сессий, ни всплывать над ней.
@@ -66,37 +58,9 @@ export default function Mac() {
       .catch(() => setCanStop(adminFromAutonomy(null)));
   }, []);
 
-  // Живой поток вывода: подписка на будущее, не на настоящее.
-  //
-  // Аудит 2026-08-14: события `mac.output` не шлёт никто. По репозиторию имя
-  // встречается ровно дважды — здесь и в тесте, который проверяет форму
-  // придуманного объекта. Раньше панель вывода читала ТОЛЬКО эту карту и
-  // потому вечно висела на подписи про ожидание. Теперь она берёт сохранённый
-  // вывод из самой сессии, а живые чанки — если появятся — просто дописываются
-  // сверху. Подписку оставляем: она ничего не стоит и готова к серверу.
-  useEffect(() => {
-    const unsubscribe = sseSubscribe("mac.output", (payload: any) => {
-      try {
-        const event = payload as MacOutputEvent;
-        setOutputLog(prev => {
-          const updated = new Map(prev);
-          const existing = updated.get(event.sessionId) || [];
-          updated.set(event.sessionId, [...existing, event.chunk]);
-          return updated;
-        });
-      } catch (err) {
-        console.warn("[Mac] Failed to parse mac.output SSE event:", err);
-      }
-    });
-
-    return unsubscribe;
-  }, []);
-
-  useNativeRefresh(loadMacHistory);
-
-  async function loadMacHistory() {
+  async function loadMacHistory(showLoading = true) {
     setError(null);
-    setLoading(true);
+    if (showLoading) setLoading(true);
     
     try {
       // Fetch all MAC_RUN_CLAUDE actions from history
@@ -134,9 +98,8 @@ export default function Mac() {
    *
    * Кнопка стояла в карточке сессии и называлась «Остановить», а `api.macStop()`
    * аргументов не принимает: демону уходит один сигнал `stop`, после которого
-   * падают и все ожидающие операции (lib/mac-bridge.ts:373). Точечной отмены нет
-   * ни в протоколе, ни в ручке — значит кнопка обязана стоять над списком и
-   * называться тем, что делает, а не притворяться действием над карточкой.
+   * падают и все ожидающие операции. Эта ручка останавливает все процессы,
+   * поэтому кнопка расположена над списком и явно называет область действия.
    */
   async function handleStopAll(running: number) {
     if (!window.confirm(stopAllConfirmText(running))) return;
@@ -224,8 +187,8 @@ export default function Mac() {
   return (
     <div className="page">
       <div className="page-header">
-        <h2>Сессии на Mac</h2>
-        <p style={{ color: "#666", margin: 0 }}>
+        {!nativePanel && <h2>Сессии на Mac</h2>}
+        <p style={{ color: "var(--hint)", margin: 0 }}>
           История запусков Claude Code и Codex на Mac
         </p>
       </div>
@@ -237,25 +200,7 @@ export default function Mac() {
         <button type="submit" disabled={launchBusy || !project.trim() || !prompt.trim()}>{launchBusy ? "Передаём задачу…" : "Запустить сессию"}</button>
         {launchStatus && <p role="status">{launchStatus}</p>}
       </form>}
-      {/*
-        Аварийный стоп стоит здесь, а не в списке сессий, и не спрашивает,
-        сколько их сейчас активно.
-
-        Аудит 2026-08-28: условие было `canStop && runningCount > 0`, а
-        ненулевым `runningCount` стать не мог. Строка в `agent_actions`
-        появляется уже терминальной — `dispatchAndAudit` пишет её ПОСЛЕ
-        `await dispatchAction` (lib/action-dispatch.ts:1093), `UPDATE
-        agent_actions` в коде нет ни одного, а единственный статус, который
-        `toMacSession` перевёл бы в «выполняется», — `attempted` — не пишет
-        никто. Пока запуск идёт, строки нет вовсе; когда она появится, запуск
-        уже кончился. Кнопка не рисовалась ни в одном состоянии, и вместе с
-        ней была недостижима вся ручка `/api/mac/stop` (ca58aefc). Внутри
-        ветки «сессии есть» она вдобавок пропадала на пустой истории.
-
-        Панель принципиально не знает, что крутится на Mac. Значит гейт у
-        аварийного стопа ровно один — админский, тот же, что у ручки
-        (requireAdmin, lib/miniapp-server.ts:952).
-      */}
+      {/* Stop remains available even if an active run is outside this history page. */}
       {canStop && (
         <button
           onClick={() => handleStopAll(runningCount)}
@@ -282,8 +227,8 @@ export default function Mac() {
       ) : sessions.length === 0 ? (
         <EmptyState
           icon="💻"
-          title="Нет активных Mac сессий"
-          hint="Mac Control сессии появятся здесь после запуска через Orchestrator"
+          title="Пока нет сессий на Mac"
+          hint="Запущенные сессии и их результаты появятся здесь."
         />
       ) : (
         <div className="mac-container">
@@ -313,10 +258,10 @@ export default function Mac() {
                     <div style={{ fontWeight: 500, marginBottom: 4 }}>
                       {session.project}
                     </div>
-                    <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>
+                    <div style={{ fontSize: 12, color: "var(--hint)", marginBottom: 8 }}>
                       {session.provider === "codex" ? "Codex" : session.provider === "claude" ? "Claude Code" : "—"} • {session.mode} • {formatTimestamp(session.createdAt)}
                     </div>
-                    <div style={{ fontSize: 12, color: "#888" }}>
+                    <div style={{ fontSize: 12, color: "var(--hint)" }}>
                       {ellipsize(session.prompt, 100)}
                     </div>
                   </div>
@@ -329,19 +274,16 @@ export default function Mac() {
             ))}
 
             {runningCount === 0 && (
-              <div style={{ color: "#666", fontSize: 14, padding: 16, textAlign: "center" }}>
-                Идущий запуск здесь не виден: в журнал он попадает только после
-                завершения. Остановить его можно кнопкой выше.
+              <div style={{ color: "var(--hint)", fontSize: 14, padding: 16, textAlign: "center" }}>
+                В загруженной истории нет выполняющихся сессий.
               </div>
             )}
           </div>
 
           {/* Session Output */}
           {selectedSession && (() => {
-            // Сохранённый вывод плюс живые чанки, если они когда-нибудь пойдут.
             const view = macOutputView(
               sessions.find((s) => s.id === selectedSession),
-              outputLog.get(selectedSession),
             );
             return (
             <div className="mac-output">
@@ -361,7 +303,7 @@ export default function Mac() {
                 }}
               >
                 {view.note ? (
-                  <div style={{ color: "#666" }}>{view.note}</div>
+                  <div style={{ color: "var(--hint)" }}>{view.note}</div>
                 ) : (
                   view.lines.map((chunk, i) => (
                     <div key={i} style={{ marginBottom: 2 }}>
@@ -400,10 +342,10 @@ export default function Mac() {
                     <div style={{ fontWeight: 500, marginBottom: 4 }}>
                       {session.project}
                     </div>
-                    <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>
+                    <div style={{ fontSize: 12, color: "var(--hint)", marginBottom: 8 }}>
                       {session.provider === "codex" ? "Codex" : session.provider === "claude" ? "Claude Code" : "—"} • {session.mode} • {formatTimestamp(session.createdAt)}
                     </div>
-                    <div style={{ fontSize: 12, color: "#888" }}>
+                    <div style={{ fontSize: 12, color: "var(--hint)" }}>
                       {ellipsize(session.prompt, 150)}
                     </div>
                   </div>

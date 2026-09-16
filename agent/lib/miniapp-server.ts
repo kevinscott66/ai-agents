@@ -651,12 +651,22 @@ export function startMiniappServer(
     return !!m && constantTimeEqual(m[1], token);
   }
 
+  class NativeAuthorizationChanged extends Error {
+    constructor(readonly response: Response) { super('native authorization changed while reading body'); }
+  }
   async function readJson(req: Request): Promise<any> {
+    let body: unknown;
     try {
-      return await req.json();
+      body = await req.json();
     } catch {
       return null;
     }
+    // Revocation/expiry can happen while a streamed mutation body is arriving.
+    if (req.headers.has('authorization')) {
+      const current = authOr401(req,new URL(req.url));
+      if (!current.ok) throw new NativeAuthorizationChanged(current.resp);
+    }
+    return body;
   }
 
   /**
@@ -2313,8 +2323,11 @@ export function startMiniappServer(
           }
         }
       } catch (e: any) {
-        log.error("[miniapp] handler error", { error: (e as Error)?.message });
-        resp = json({ error: "internal error" }, 500);
+        if (e instanceof NativeAuthorizationChanged) resp = e.response;
+        else {
+          log.error("[miniapp] handler error", { error: (e as Error)?.message });
+          resp = json({ error: "internal error" }, 500);
+        }
       }
       // C27: gzip + ETag pass for API responses (SSE is skipped inside).
       // T-311: then strip wildcard ACAO and echo origin only when allowed.

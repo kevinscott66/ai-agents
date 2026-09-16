@@ -3,7 +3,7 @@ import { isAssistantOwner as permitted } from './assistant-auth.ts';
 import { agentStopReason } from './permissions.ts';
 import { readNativeJson } from './native-request.ts';
 import { db } from "./db.ts";
-import { nativeTurnContext, nativeApprovalLinks } from './native-context.ts';
+import { nativeTurnContext, nativeApprovalLinks, nativeExecutionMarker, isNativeExecutionOutcome, recordNativeExecutionOutcome, NATIVE_INTERRUPTED_MESSAGE } from './native-context.ts';
 import { parseUserIdList } from './allowlist.ts';
 import { getApproval } from './approvals.ts';
 import { log, scrubSecretString } from './log.ts';
@@ -41,7 +41,9 @@ export async function nativeApi(req: Request, injectedStore?: NativeAccess): Pro
     if (!paired || !permitted(paired.userId)) return json({ error: 'invalid_pairing' }, 401);
     return json(paired);
   }
-  if (!identity || !permitted(identity.userId)) return json({ error: 'unauthorized' }, 401);
+  // Reading a streamed body yields: the device can be revoked or expire while
+  // bytes arrive. Authorize the mutation against the live credential again.
+  if (!identity || process.env.NATIVE_APP_ENABLED !== 'true' || !store.authenticate(token) || !permitted(identity.userId)) return json({ error: 'unauthorized' }, 401);
   if (path === '/api/native/status' && req.method === 'GET') return json({ name: 'Агент', userId: identity.userId, available: !!lead && !agentStopReason('orchestrator') });
   if (path === '/api/native/conversations' && req.method === 'GET') {
     const cursor = new URL(req.url).searchParams.get('cursor');
@@ -62,9 +64,10 @@ export async function nativeApi(req: Request, injectedStore?: NativeAccess): Pro
   const approvalsMatch = path.match(/^\/api\/native\/conversations\/([a-zA-Z0-9-]{16,64})\/approvals$/);
   if (approvalsMatch && req.method === 'GET') {
     if (!parseUserIdList(process.env.MINIAPP_ADMIN_USER_IDS).includes(Number(identity.userId))) return json({error:'forbidden'},403);
-    for (const link of nativeApprovalLinks(db,identity.userId,approvalsMatch[1])) {
+    const durableLinks = nativeApprovalLinks(db,identity.userId,approvalsMatch[1]);
+    for (const link of durableLinks) {
       store.linkApproval(link.approval_id,link.turn_id,identity.userId);
-      if (link.execution) store.completeApproval(link.approval_id,identity.userId,link.execution === 'completed',scrubSecretString(link.output ?? 'Действие завершено.'));
+      if (isNativeExecutionOutcome(link.execution)) store.recordApprovalOutcome(link.approval_id,identity.userId,link.execution,scrubSecretString(link.output ?? 'Действие завершено.'));
     }
     const links = store.conversationApprovals(approvalsMatch[1],identity.userId);
     if (!links) return json({error:'not_found'},404);
@@ -74,13 +77,22 @@ export async function nativeApi(req: Request, injectedStore?: NativeAccess): Pro
         if (approval.status === 'failed') {
           store.completeApproval(approval.id,identity.userId,false,'Не удалось завершить действие. Проверьте его состояние перед повтором.');
           link.execution = 'failed';
-        } else if (approval.status === 'approved' && approval.action_type === 'MAC_RUN_CLAUDE') {
+        } else if (approval.status === 'approved') {
           // Recover a result if the process stopped after auditing but before archiving.
-          const action = db.query("SELECT result FROM agent_actions WHERE chat_id=? AND action_type='MAC_RUN_CLAUDE' AND status='ok' AND json_valid(result) AND json_extract(result,'$.approvalId')=? ORDER BY created_at DESC,rowid DESC LIMIT 1").get(approval.chat_id,approval.id) as {result:string}|null;
+          const action = approval.action_type === 'MAC_RUN_CLAUDE' ? db.query("SELECT result FROM agent_actions WHERE chat_id=? AND action_type='MAC_RUN_CLAUDE' AND status='ok' AND json_valid(result) AND json_extract(result,'$.approvalId')=? ORDER BY created_at DESC,rowid DESC LIMIT 1").get(approval.chat_id,approval.id) as {result:string}|null : null;
+          const durable = durableLinks.find(row=>row.approval_id === approval.id);
           if (action) {
             const result = JSON.parse(action.result);
-            store.completeApproval(approval.id,identity.userId,true,scrubSecretString(typeof result.output === 'string' ? result.output : 'Действие выполнено.'));
+            const output = scrubSecretString(typeof result.output === 'string' ? result.output : 'Действие выполнено.').slice(0,8000);
+            if (durable) recordNativeExecutionOutcome(db,approval.id,'completed',output);
+            store.completeApproval(approval.id,identity.userId,true,output);
             link.execution = 'completed';
+          } else if (durable?.execution !== nativeExecutionMarker) {
+            // A missing marker or one from another boot has no live executor.
+            // Side effects may have occurred; uncertainty is not definite failure.
+            if (durable) recordNativeExecutionOutcome(db,approval.id,'interrupted',NATIVE_INTERRUPTED_MESSAGE);
+            store.recordApprovalOutcome(approval.id,identity.userId,'interrupted',NATIVE_INTERRUPTED_MESSAGE);
+            link.execution = 'interrupted';
           }
         }
       }
