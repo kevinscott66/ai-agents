@@ -1,4 +1,5 @@
 /** Separate device credentials/job state; never stores Telegram or service credentials. */
+import { NativeMedia, type NativeLocation } from './native-media.ts';
 import { DAY_MS } from './time-constants.ts';
 import { Database } from 'bun:sqlite';
 import { randomBytes, createHash } from 'node:crypto';
@@ -8,9 +9,11 @@ import type { NativeExecutionOutcome } from './native-context.ts';
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
 export class NativeAccess {
   readonly db: Database;
+  readonly media: NativeMedia;
   constructor(path: string) {
     if (path !== ':memory:') mkdirSync(dirname(resolve(path)), { recursive: true, mode: 0o700 });
     this.db = new Database(path);
+    this.media = new NativeMedia(this.db,path);
     if (path !== ':memory:') chmodSync(path, 0o600);
     this.db.run(`CREATE TABLE IF NOT EXISTS conversations(id TEXT PRIMARY KEY,user_id TEXT NOT NULL,title TEXT NOT NULL,created INTEGER NOT NULL,updated INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS conversation_turns(turn_id TEXT PRIMARY KEY,conversation_id TEXT NOT NULL);
@@ -43,6 +46,7 @@ export class NativeAccess {
     this.prune();
   }
   prune(now = Date.now()) {
+    this.media.prune(now);
     this.db.query('DELETE FROM codes WHERE expires < ?').run(now);
     this.db.query('DELETE FROM devices WHERE expires < ?').run(now);
     this.db.query("DELETE FROM turns WHERE created < ? AND status != 'running'").run(now - 7 * DAY_MS);
@@ -91,17 +95,18 @@ export class NativeAccess {
     const row = this.db.query('SELECT id,status,replies FROM turns WHERE id=? AND device=?').get(id, device) as { id: string; status: string; replies: string } | null;
     return row ? { ...row, replies: JSON.parse(row.replies) as string[] } : null;
   }
-  start(id: string, device: string, userId: string, text: string, conversationId?: string): 'created' | 'duplicate' | 'busy' | 'conflict' {
+  start(id: string, device: string, userId: string, text: string, conversationId?: string, attachmentIds: string[] = [], location?: NativeLocation): 'created' | 'duplicate' | 'busy' | 'conflict' {
     this.prune();
     return this.db.transaction(() => {
       const existing = this.db.query('SELECT device,text FROM turns WHERE id=?').get(id) as { device: string; text: string } | null;
       if (existing) {
         const linked = this.db.query('SELECT conversation_id FROM conversation_turns WHERE turn_id=?').get(id) as {conversation_id:string}|null;
-        return existing.device === device && existing.text === text && (!conversationId || linked?.conversation_id === conversationId) ? 'duplicate' : 'conflict';
+        return this.media.signature(id) === JSON.stringify({attachmentIds,...(location?{location}:{})}) && existing.device === device && existing.text === text && (!conversationId || linked?.conversation_id === conversationId) ? 'duplicate' : 'conflict';
       }
       if (this.db.query('SELECT 1 FROM conversation_turns WHERE turn_id=?').get(id)) return 'conflict';
       if (conversationId && !this.conversation(conversationId,userId)) return 'conflict';
       if (this.db.query("SELECT 1 FROM turns WHERE user_id=? AND status='running'").get(userId)) return 'busy';
+      this.media.bind(id,userId,attachmentIds,location);
       if (!conversationId) {
         const owned = this.db.query("SELECT id FROM conversations WHERE user_id=? AND id LIKE 'legacy-%' ORDER BY created LIMIT 1").get(userId) as {id:string}|null;
         conversationId = owned?.id ?? 'legacy-' + randomBytes(16).toString('hex');
@@ -171,7 +176,7 @@ export class NativeAccess {
   history(id:string,userId:string,before = Number.MAX_SAFE_INTEGER) {
     if (!this.conversation(id,userId)) return null;
     const rows = this.db.query('SELECT seq,id,role,text FROM conversation_messages WHERE conversation_id=? AND seq<? ORDER BY seq DESC LIMIT 101').all(id,before) as {seq:number;id:string;role:string;text:string}[];
-    const more = rows.length > 100; const messages = rows.slice(0,100).reverse();
+    const more = rows.length > 100; const messages = rows.slice(0,100).reverse().map(row => ({...row,...(row.role === 'user' ? this.media.history(row.id.replace(/:user$/,''),userId) : {})}));
     const running = this.running(userId);
     return {messages,more,running};
   }

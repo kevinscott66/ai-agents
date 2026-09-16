@@ -376,11 +376,11 @@ export function registerMessageHandler(
   def: CharacterDef,
   running: RunningBot,
   deps: MessageHandlerDeps,
-): (ctx: Context, voice: { text: string; native?: boolean; history?: import("../lib/db.ts").ChatRow[] }) => Promise<void> {
+): (ctx: Context, voice: { text: string; native?: boolean; inputImages?: {mediaType:string;base64:string}[]; inputDocuments?: {filename:string;text:string}[]; history?: import("../lib/db.ts").ChatRow[] }) => Promise<void> {
   const { bots, allowed, historyLimit, anthropic, model, handoffDeps } = deps;
 
   // Only the trusted voice handler calls this continuation after ingest/dedup.
-  const processMessage = async (ctx: Context, voice?: { text: string; native?: boolean; history?: import("../lib/db.ts").ChatRow[] }) => {
+  const processMessage = async (ctx: Context, voice?: { text: string; native?: boolean; inputImages?: {mediaType:string;base64:string}[]; inputDocuments?: {filename:string;text:string}[]; history?: import("../lib/db.ts").ChatRow[] }) => {
     if (!ctx.chat || !ctx.message) return;
     try {
       const chatId = ctx.chat.id.toString();
@@ -411,7 +411,7 @@ export function registerMessageHandler(
         return;
       }
       const msg: any = ctx.message;
-      const rawText: string = voice?.text ?? msg.text ?? msg.caption ?? "";
+      const rawText: string = voice?.native && !voice.text.trim() && (voice.inputImages?.length || voice.inputDocuments?.length) ? "Пользователь приложил материалы. Рассмотри доступное содержимое и ответь с учётом ограничений извлечения." : voice?.text ?? msg.text ?? msg.caption ?? "";
       // C8: детектим вложенную картинку (photo[] либо document с image/* mime).
       const photos: any[] | undefined = Array.isArray(msg.photo) ? msg.photo : undefined;
       const largestPhoto = photos && photos.length ? photos[photos.length - 1] : undefined;
@@ -614,8 +614,8 @@ export function registerMessageHandler(
       }
 
       // C8: скачиваем картинку (если есть) и передаём в runWithTools.
-      const inputImages: { mediaType: string; base64: string }[] = [];
-      if (hasImage) {
+      const inputImages: { mediaType: string; base64: string }[] = voice?.native ? [...(voice.inputImages ?? [])] : [];
+      if (hasImage && !voice?.native) {
         try {
           const fileId: string = largestPhoto?.file_id ?? doc?.file_id;
           // Канон, а не то, что объявил отправитель: ниже строка сверяется с
@@ -672,8 +672,8 @@ export function registerMessageHandler(
       }
 
       // READ_FILE (P1): скачать текстовый файл-вложение и подмешать в контекст.
-      const inputDocuments: { filename: string; text: string }[] = [];
-      if (hasTextDoc) {
+      const inputDocuments: { filename: string; text: string }[] = voice?.native ? [...(voice.inputDocuments ?? [])] : [];
+      if (hasTextDoc && !voice?.native) {
         try {
           const fileId: string = textDoc.file_id;
           const declaredSize: number =

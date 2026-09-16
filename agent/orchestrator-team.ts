@@ -124,7 +124,7 @@ export async function buildBot(def: CharacterDef): Promise<RunningBot | null> {
 
   // T-320: voice + message handlers extracted to ./orchestrator/*.ts
   // Register voice first (Telegraf's message handler otherwise swallows it).
-  let processVoice: (ctx: import("telegraf").Context, voice: { text: string; native?: boolean; history?: import("./lib/db.ts").ChatRow[] }) => Promise<void>;
+  let processVoice: (ctx: import("telegraf").Context, voice: { text: string; native?: boolean; inputImages?: {mediaType:string;base64:string}[]; inputDocuments?: {filename:string;text:string}[]; history?: import("./lib/db.ts").ChatRow[] }) => Promise<void>;
   registerVoiceHandler(bot, def, running, ALLOWED, (ctx, voice) => processVoice(ctx, voice));
   processVoice = registerMessageHandler(bot, def, running, {
     bots,
@@ -137,7 +137,7 @@ export async function buildBot(def: CharacterDef): Promise<RunningBot | null> {
 
   if (def.key === "orchestrator") {
     let nativeMessageId = -Date.now() * 1000;
-    configureNativeLead(async (userId, text, reply, history) => {
+    configureNativeLead(async (userId, text, reply, history, media) => {
       const messageId = nativeMessageId--;
       const chat = { id: Number(userId), type: "private" as const };
       const from = { id: Number(userId), is_bot: false, first_name: "Owner" };
@@ -150,7 +150,7 @@ export async function buildBot(def: CharacterDef): Promise<RunningBot | null> {
           return { message_id: nativeMessageId--, date: Math.floor(Date.now() / 1000), chat, text: answer };
         },
       } as unknown as import("telegraf").Context;
-      await processVoice(ctx, { text, native: true, history: history?.map((m,i) => ({id:i,chat_id:userId,from_user_id:userId,ts:Date.now(),is_bot:m.role === "assistant" ? 1 : 0,agent_key:m.role === "assistant" ? "orchestrator" : null,from_name:"Owner",text:m.text})) });
+      await processVoice(ctx, { text, native: true, ...media, history: history?.map((m,i) => ({id:i,chat_id:userId,from_user_id:userId,ts:Date.now(),is_bot:m.role === "assistant" ? 1 : 0,agent_key:m.role === "assistant" ? "orchestrator" : null,from_name:"Owner",text:m.text})) });
     });
   }
   return running;

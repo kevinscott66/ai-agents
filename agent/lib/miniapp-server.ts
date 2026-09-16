@@ -17,6 +17,7 @@
  * После approve approval-action НЕ запускается здесь: текущий
  * action-dispatch.ts хука "выполнить после approve" не имеет (см. отчёт C13a).
  */
+import { readMediaJson } from "./native-media.ts";
 import { nativeApi } from "./native-api.ts";
 import { getErrorMessage } from "./errors.ts";
 import { HOUR_MS } from "./time-constants.ts";
@@ -657,7 +658,7 @@ export function startMiniappServer(
   async function readJson(req: Request): Promise<any> {
     let body: unknown;
     try {
-      body = await req.json();
+      body = await readMediaJson(req, 5_000, 2_000_000, false);
     } catch {
       return null;
     }
@@ -2234,7 +2235,9 @@ export function startMiniappServer(
     // потолок на Content-Length ОТВЕТОВ, которые мы сами тянем с Figma/TGStat,
     // к нашим ответам он отношения не имеет. Исходящие ограничены лишь
     // потолком gzip в http-utils.ts и LIMIT'ами в самих запросах.)
-    maxRequestBodySize: 2_000_000,
+    // Native uploads have a dedicated authenticated 16 MiB reader; all other
+    // mutation readers retain their 2 MB streaming ceiling above.
+    maxRequestBodySize: 16 * 1024 * 1024,
     // Аудит 2026-08-13. Дефолт Bun — 10 секунд, и он считает «простоем» в том
     // числе стрим без записи и хендлер, который ещё не ответил. Воспроизведено
     // на голом Bun.serve 1.3.14: `[Bun.serve]: request timed out after 10

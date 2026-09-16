@@ -1,3 +1,4 @@
+import { attachmentId, parseUpload, locationValue, readMediaJson, type NativeMediaInput } from './native-media.ts';
 import { nativeAccess, type NativeAccess } from './native-access.ts';
 import { isAssistantOwner as permitted } from './assistant-auth.ts';
 import { agentStopReason } from './permissions.ts';
@@ -8,8 +9,9 @@ import { parseUserIdList } from './allowlist.ts';
 import { getApproval } from './approvals.ts';
 import { log, scrubSecretString } from './log.ts';
 
-export type NativeLead = (userId: string, text: string, reply: (text: string) => void, history?: {role:string;text:string}[]) => Promise<void>;
+export type NativeLead = (userId: string, text: string, reply: (text: string) => void, history?: {role:string;text:string}[], media?: NativeMediaInput) => Promise<void>;
 let lead: NativeLead | undefined;
+const uploading = new Set<string>();
 export function configureNativeLead(run: NativeLead) { const previous = lead; lead = run; return () => { lead = previous; }; }
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers: { 'Cache-Control': 'no-store' } });
 export async function nativeApi(req: Request, injectedStore?: NativeAccess): Promise<Response> {
@@ -27,7 +29,13 @@ export async function nativeApi(req: Request, injectedStore?: NativeAccess): Pro
   }
   let body: Record<string, unknown> = {};
   if (req.method === 'POST') {
-    try { body = await readNativeJson(req); }
+    try {
+      if (path === '/api/native/attachments') {
+        if (!identity || uploading.has(identity.device) || uploading.size >= 2) { void req.body?.cancel().catch(()=>{}); return json({error:'upload_busy'},429); }
+        uploading.add(identity.device);
+        try { body = await readMediaJson(req); } finally { uploading.delete(identity.device); }
+      } else body = await readNativeJson(req);
+    }
     catch (error) {
       const known = new Set(['json_required', 'body_timeout', 'body_too_large', 'body_aborted']);
       const code = error instanceof Error && known.has(error.message) ? error.message : 'invalid_body';
@@ -44,6 +52,17 @@ export async function nativeApi(req: Request, injectedStore?: NativeAccess): Pro
   // Reading a streamed body yields: the device can be revoked or expire while
   // bytes arrive. Authorize the mutation against the live credential again.
   if (!identity || process.env.NATIVE_APP_ENABLED !== 'true' || !store.authenticate(token) || !permitted(identity.userId)) return json({ error: 'unauthorized' }, 401);
+  if (path === '/api/native/attachments' && req.method === 'POST') {
+    try { return json({attachment:store.media.put(identity.userId,parseUpload(body))}); }
+    catch(e) { const code=e instanceof Error?e.message:''; return json({error:['media_conflict','media_quota'].includes(code)?code:'invalid_media'},code==='media_conflict'?409:code==='media_quota'?413:400); }
+  }
+  const download = path.match(/^\/api\/native\/attachments\/([^/]+)$/);
+  if(download && req.method === 'GET') {
+    const item=attachmentId.test(download[1])?store.media.get(download[1],identity.userId):null;
+    if(!item) return json({error:'not_found'},404);
+    const safeMime = new Set(['image/jpeg','image/png','application/pdf','video/mp4','video/quicktime','text/plain']);
+    return new Response(item.data,{headers:{'Content-Type':safeMime.has(item.mimeType)?item.mimeType:'application/octet-stream','Content-Length':String(item.size),'Content-Disposition':`attachment; filename="attachment"; filename*=UTF-8''${encodeURIComponent(item.name).replace(/'/g,'%27')}`,'X-Content-Type-Options':'nosniff','Cache-Control':'no-store'}});
+  }
   if (path === '/api/native/status' && req.method === 'GET') return json({ name: 'Агент', userId: identity.userId, available: !!lead && !agentStopReason('orchestrator') });
   if (path === '/api/native/conversations' && req.method === 'GET') {
     const cursor = new URL(req.url).searchParams.get('cursor');
@@ -109,17 +128,20 @@ export async function nativeApi(req: Request, injectedStore?: NativeAccess): Pro
   }
   if (path === '/api/native/turns' && req.method === 'POST') {
     if (!lead || agentStopReason('orchestrator')) return json({ error: 'lead_unavailable' }, 503);
-    if (typeof body?.text !== 'string' || !body.text.trim() || body.text.length > 8000 || typeof body.id !== 'string' || !/^[a-zA-Z0-9-]{16,64}$/.test(body.id)) return json({ error: 'invalid_turn' }, 400);
+    let ids:string[]; let location;
+    try { if(body.attachmentIds!==undefined && (!Array.isArray(body.attachmentIds) || body.attachmentIds.length>4 || body.attachmentIds.some(id=>typeof id!=='string'||!attachmentId.test(id)))) throw new Error(); ids=((body.attachmentIds??[]) as string[]).map(id=>id.toLowerCase()); if(new Set(ids).size!==ids.length) throw new Error(); location=locationValue(body.location); } catch { return json({error:'invalid_media'},400); }
+    if (typeof body?.text !== 'string' || (!body.text.trim() && !ids.length && !location) || body.text.length > 8000 || typeof body.id !== 'string' || !/^[a-zA-Z0-9-]{16,64}$/.test(body.id)) return json({ error: 'invalid_turn' }, 400);
     const conversationId = body.conversationId;
     if (conversationId !== undefined && (typeof conversationId !== 'string' || !/^[a-zA-Z0-9-]{16,64}$/.test(conversationId) || !store.conversation(conversationId,identity.userId))) return json({error:'not_found'},404);
-    const started = store.start(body.id, identity.device, identity.userId, body.text, conversationId as string|undefined);
+    let started;
+    try { started = store.start(body.id, identity.device, identity.userId, body.text, conversationId as string|undefined,ids,location); } catch { return json({error:'media_conflict'},409); }
     if (started === 'busy' || started === 'conflict') return json({ error: started }, 409);
     if (started === 'created') {
       const id = body.id;
       const run = lead;
       // Detached job is persisted before invoking the lead; client polls, never replays on reconnect.
       const text = body.text;
-      void Promise.resolve().then(() => nativeTurnContext.run({userId:identity.userId,turnId:id,conversationId:store.turnConversation(id)!,linkApproval: approvalId => store.linkApproval(approvalId,id,identity.userId)}, () => run(identity.userId, text, answer => store.append(id, answer), typeof conversationId === 'string' ? store.history(conversationId,identity.userId)!.messages.slice(-40) : undefined))).then(() => {
+      void Promise.resolve().then(() => nativeTurnContext.run({userId:identity.userId,turnId:id,conversationId:store.turnConversation(id)!,linkApproval: approvalId => store.linkApproval(approvalId,id,identity.userId)}, () => run(identity.userId, text, answer => store.append(id, answer), typeof conversationId === 'string' ? store.history(conversationId,identity.userId)!.messages.slice(-40) : undefined,store.media.input(ids,identity.userId,location)))).then(() => {
         if (!store.get(id, identity.device)?.replies.length) store.append(id, 'Агент не вернул ответ. Проверь состояние роли и лимиты.');
         store.finish(id, 'done');
       }).catch(() => {
