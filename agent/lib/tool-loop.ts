@@ -1,4 +1,5 @@
 import { inferenceProvider } from "./inference-provider.ts";
+import { roleModel } from "./role-models.ts";
 /**
  * Anthropic tool_use loop: на каждом шаге пушим ассистент-блок в messages,
  * выполняем все tool_use → пушим user-сообщение с tool_result, повторяем.
@@ -256,7 +257,7 @@ export async function runWithTools(opts: RunWithToolsOpts): Promise<string> {
   }
   const {
     anthropic,
-    model,
+    model: fallbackModel,
     system,
     agentKey,
     chatId,
@@ -275,6 +276,8 @@ export async function runWithTools(opts: RunWithToolsOpts): Promise<string> {
     requestId,
     forceFirstTool,
   } = opts;
+  // Роль из таблицы идёт в свою модель; остальные — в переданную вызывающим.
+  const model = roleModel(agentKey, "api").model ?? fallbackModel;
   if (!anthropic && inferenceProvider() === "claude") {
     throw new Error(
       "Anthropic API client unavailable: configure CLAUDE_CODE_OAUTH_TOKEN or set USE_AGENT_SDK=false with ANTHROPIC_API_KEY",
