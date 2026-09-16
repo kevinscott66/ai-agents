@@ -66,9 +66,15 @@ for I in "${!PATTERNS[@]}"; do
   # класса secret-assignment: имя переменной — не значение, и слово `DEV` в нём
   # не делает секрет заглушкой. Само сравнение по-прежнему нечувствительно к
   # регистру, поэтому `YOUR-TOKEN-HERE` остаётся заглушкой.
+  #
+  # Голый адрес без userinfo — `TOKEN_URL = 'https://host/oauth/token'` — не
+  # секрет: `@` в класс значения не входит, так что `https://user:pass@…`
+  # приходит сюда как `https://user:pass` и под исключение не попадает из-за
+  # двоеточия до первого слеша.
   if grep -aoE -- "${PATTERNS[$I]}" "$ADDED" \
     | sed -E 's/^[A-Za-z0-9_]+[[:space:]]*=[[:space:]]*["'"'"']?//' \
     | grep -avE '^process\.env\.[A-Za-z0-9_]+' \
+    | grep -avE '^https?://[A-Za-z0-9.-]+(/[A-Za-z0-9_/+.:-]*)?$' \
     | grep -avEi -- "$PLACEHOLDER" >/dev/null; then
     echo "::error::Secret-shaped value added in PR (${LABELS[$I]}). Review the changed lines without printing credentials." >&2
     FOUND=1
