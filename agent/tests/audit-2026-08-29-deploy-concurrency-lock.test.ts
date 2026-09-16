@@ -1,16 +1,22 @@
 /**
  * Аудит 2026-08-29 — выкатка в /opt/agent-team не защищена от второй выкатки.
  *
- * Катить в прод умеют два независимых пути: `deploy/deploy.sh` с Mac и
- * workflow `.github/workflows/deploy.yml` в CI. Между собой workflow уже
- * сериализуются общей `concurrency: group: deploy-vps`, а Mac про неё не знает.
- * Пересечение ломает не только rsync: каждая выкатка снимает «снапшот прода до
- * деплоя», и вторая снимает его с уже наполовину перезаписанного дерева —
- * откатываться становится некуда.
+ * Катить в прод умели два независимых пути: `deploy/deploy.sh` с Mac и
+ * воркфлоу deploy.yml в CI. Между собой воркфлоу сериализовались общей
+ * `concurrency: group: deploy-vps`, а Mac про неё не знал. Пересечение ломает
+ * не только rsync: каждая выкатка снимает «снапшот прода до деплоя», и вторая
+ * снимает его с уже наполовину перезаписанного дерева — откатываться
+ * становится некуда.
+ *
+ * Второго пути нет с публичного релиза 2026-09-01: выкатка из CI удалена, в
+ * прод ходит только deploy.sh (tests/audit-2026-09-11-predeploy-smoke-unwired
+ * .test.ts). Замок остался нужен по первой причине — два запуска одного и того
+ * же скрипта: две сессии, два воркри, повтор после Ctrl-C.
  *
  * Здесь проверяется deploy/deploy-lock.sh (атомарный mkdir на той стороне,
- * снятие протухшего замка, release только своего) и то, что ОБА пути его
- * действительно берут и отпускают.
+ * снятие протухшего замка, release только своего) и то, что путь в прод его
+ * действительно берёт и отпускает. Блок про CI ниже включается сам, если
+ * воркфлоу вернётся.
  *
  * Прод не задействован: ssh/rsync/curl/sleep подменены заглушками на PATH,
  * а «удалённый» скрипт замка выполняется локально во временном каталоге.
@@ -26,6 +32,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { writeSmokeStub } from "./helpers/deploy-smoke-stub.ts";
 import { join } from "node:path";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -258,6 +265,9 @@ function makeDeploySandbox(): DeploySandbox {
   chmodSync(join(repo, "deploy", "deploy.sh"), 0o755);
   chmodSync(join(repo, "deploy", "deploy-lock.sh"), 0o755);
 
+  // Смоук — заглушка: настоящий делает `bun install` и полный прогон тестов.
+  writeSmokeStub(repo, sb.calls);
+
   // ssh-заглушка с ветками: замок исполняем локально, остальное — сценарий.
   writeFileSync(
     join(sb.bin, "ssh"),
@@ -343,6 +353,50 @@ describe("deploy.sh — вторая выкатка не начинается, �
       expect(r.calls).not.toContain("systemctl restart");
       // чужой замок остался на месте
       expect(readFileSync(join(sb.lockDir, "token"), "utf8").trim()).toBe("other-token");
+    } finally {
+      rmSync(sb.dir, { recursive: true, force: true });
+    }
+  });
+
+  // Круг 49 (tests/audit-2026-09-11-predeploy-smoke-unwired.test.ts): смоук
+  // снова зовут, и звать его должен именно этот путь — других в прод нет.
+  slowTest("смоук проходит до замка, а не после", () => {
+    const sb = makeDeploySandbox();
+    try {
+      const r = runDeploy(sb);
+      expect(r.code).toBe(0);
+      const smoke = r.calls.indexOf("smoke ");
+      expect(smoke).toBeGreaterThan(-1);
+      // Замок берут через ssh («sh -s --» исполняет скрипт замка на той
+      // стороне); смоук обязан быть раньше — иначе чужая выкатка ждёт наших
+      // тестов.
+      expect(smoke).toBeLessThan(r.calls.indexOf("sh -s --"));
+      expect(smoke).toBeLessThan(r.calls.indexOf("rsync "));
+    } finally {
+      rmSync(sb.dir, { recursive: true, force: true });
+    }
+  });
+
+  slowTest("упавший смоук останавливает выкатку и замка не берёт", () => {
+    const sb = makeDeploySandbox();
+    try {
+      const r = runDeploy(sb, { SMOKE_RC: "1" });
+      expect(r.code).toBe(1);
+      expect(r.calls).toContain("smoke ");
+      expect(r.calls).not.toContain("rsync ");
+      expect(r.calls).not.toContain("sh -s --");
+      expect(existsSync(sb.lockDir)).toBe(false);
+    } finally {
+      rmSync(sb.dir, { recursive: true, force: true });
+    }
+  });
+
+  slowTest("DRY_RUN не гоняет смоук — выкатки-то нет", () => {
+    const sb = makeDeploySandbox();
+    try {
+      const r = runDeploy(sb, { DRY_RUN: "1" });
+      expect(r.code).toBe(0);
+      expect(r.calls).not.toContain("smoke ");
     } finally {
       rmSync(sb.dir, { recursive: true, force: true });
     }

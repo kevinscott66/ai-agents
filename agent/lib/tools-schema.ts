@@ -3,11 +3,19 @@ import { nativeTurnContext } from "./native-context.ts";
  * C5/R-A: Anthropic tool_use схема + диспатчер.
  *
  * Аудит 2026-09-11: здесь было написано «все 12 инструментов идут через единый
- * `gateOrDispatch`». Неверно дважды. Инструментов в `TOOL_NAMES` двадцать три;
- * двенадцать — это `INLINE_TOOL_NAMES` из `constants.ts`, то есть ровно тот
- * набор, который через `gateOrDispatch` как раз НЕ идёт (см. разбор у
- * `executeInlineTool` ниже: ни CALLER_RESTRICTED, ни строка permissions к ним
- * не применяются, и минутный бакет «все инструменты агента» их тоже не видит).
+ * `gateOrDispatch`». Неверно дважды. Инструментов в `TOOL_NAMES` двадцать пять
+ * (число сверяется тестом audit-2026-09-11-tool-counts: в круге 29 оно уже
+ * успело протухнуть на два, пока список рос); двенадцать — это
+ * `INLINE_TOOL_NAMES` из `constants.ts`, то есть ровно тот набор, который через
+ * `gateOrDispatch` как раз НЕ идёт: ни CALLER_RESTRICTED, ни строка permissions
+ * к ним не применяются (см. разбор инлайновой ветки в `executeTool` ниже).
+ *
+ * Минутный бакет «все инструменты агента» их тоже не видел — но это был дефект,
+ * и в том же круге он закрыт: инлайновая ветка зовёт `checkAndConsumeRateLimit`
+ * сама. Строчка про бакет осталась здесь в списке обходов на один круг дольше
+ * кода — ровно тот случай, ради которого заведён audit-2026-09-11-symbol-plus-
+ * coordinate: описание обхода живёт дольше самого обхода и зовёт закрыть дыру
+ * повторно.
  *
  * Через `gateOrDispatch` из `lib/action-dispatch.ts` идут остальные. Эта
  * функция отвечает только за:
@@ -551,7 +559,7 @@ export const TOOLS: Anthropic.Tool[] = [
         },
         status: {
           type: "string",
-          enum: ["attempted", "ok", "error", "forbidden", "pending_approval", "rate_limited"],
+          enum: ["attempted", "ok", "error", "forbidden", "pending_approval", "rate_limited", "approved"],
           description: "Фильтр по статусу (опц.). Только из списка; «неуспех» — это 'error', не 'failed'.",
         },
         limit: { type: "integer", description: "Сколько записей (1..50, дефолт 20)." },
@@ -764,12 +772,6 @@ export const TOOL_NAMES = new Set<string>([
   "SCHEDULE_POST",
 ]);
 
-/**
- * Инструменты, которые executeTool обслуживает сам (короткое замыкание до
- * gateOrDispatch): read-only справочники и запросы. Держим списком, чтобы
- * тест мог утверждать TOOLS = TOOL_NAMES ∪ INLINE_TOOL_NAMES — иначе новый
- * инструмент снова молча провалится в «unknown tool».
- */
 /**
  * Инлайновые тулзы, переживающие autonomy=locked: только чтение собственной
  * вики команды. Список намеренно крошечный — всё остальное под стоп-краном
@@ -1253,6 +1255,28 @@ export async function executeTool(
       ).n;
       const now = Date.now();
       /*
+       * Аудит 2026-09-11: фильтр по каналу отказывал молча. Сравнение — точное
+       * равенство без нормализации (`channel = ?`), а SCHEDULE_POST принимает
+       * канал в любом виде: «@delabs», «-1001234567890», «delabs». Спросив
+       * расписание «@delabs» там, где посты легли под числовым id, модель
+       * получала `{ok:true, count:0, total:0, posts:[]}` — неотличимо от
+       * «ничего не запланировано». Дальше она честно докладывала владельцу, что
+       * расписание пусто, и планировала поверх уже запланированного.
+       *
+       * Второй запрос — без фильтра, только по чату. Он и отличает «постов
+       * нет» от «есть, но под другим написанием канала», и в ответ уходит
+       * список реальных написаний: подсказка без него была бы такой же
+       * догадкой, как и сам фильтр.
+       */
+      const channelsHere = channel
+        ? (db
+            .prepare(
+              `SELECT DISTINCT channel FROM content_calendar
+               WHERE status = 'scheduled' AND chat_id = ? LIMIT 20`,
+            )
+            .all(ctx.chatId) as Array<{ channel: string }>).map((r) => r.channel)
+        : [];
+      /*
        * Аудит 2026-08-13: было `ORDER BY scheduled_at ASC LIMIT 50`, то есть
        * пятьдесят САМЫХ СТАРЫХ записей. Из статуса 'scheduled' строка не
        * уходит никогда — публикатора в проекте нет вовсе (см. комментарий у
@@ -1377,6 +1401,14 @@ export async function executeTool(
         // Строка со вчерашней датой и статусом 'scheduled' читается моделью как
         // «запланировано и уйдёт», хотя не уйдёт и не ушло: публикатора в
         // проекте нет (см. handleSchedulePost). Говорим это словами.
+        // Пустой ответ на фильтр по каналу — почти всегда расхождение в
+        // написании, а не пустое расписание. Называем это вслух и отдаём
+        // написания, которые в этом чате есть на самом деле.
+        ...(channel && total === 0 && channelsHere.length > 0
+          ? {
+              channel_note: `по каналу «${channel}» записей нет, но в этом чате запланированы посты для: ${channelsHere.join(", ")} — фильтр сверяется точной строкой, без нормализации. Повтори запрос с одним из этих написаний или без фильтра`,
+            }
+          : {}),
         ...(overdueCount > 0
           ? {
               note: "записи с overdue=true не были отправлены: автопубликации в проекте нет, время прошло. Не выдавай их за опубликованные — либо публикуй заново через PUBLISH_TO_CHANNEL (текст поста лежит в поле content), либо снимай через CANCEL_SCHEDULED_POST",
@@ -1432,7 +1464,8 @@ export async function executeTool(
     if (ctx.agentKey !== "smm" && ctx.agentKey !== "orchestrator") {
       // Строку тут НЕ пишем осознанно: до этой проверки уже отработал
       // isToolExposedToRole с тем же списком ["smm","orchestrator"]
-      // (permissions.ts:129), поэтому ветка недостижима через executeTool и
+      // (запись CANCEL_SCHEDULED_POST в permissions.ts), поэтому ветка
+      // недостижима через executeTool и
       // осталась как defense-in-depth. Журналирование отказов самого
       // exposure-гейта — вопрос общий для всех тулзов, не этой правки.
       return fmt({ ok: false, error: "forbidden: CANCEL_SCHEDULED_POST restricted to smm/orchestrator" });
@@ -1546,10 +1579,11 @@ export async function executeTool(
       inputDocuments: ctx.inputDocuments,
       triggerUserId: ctx.triggerUserId,
       requestId: ctx.requestId,
-      // T-240: без botId checkPerBotPerChatRateLimit сразу возвращает {ok:true}
-      // (rate-limits.ts:258) — то есть весь per-bot-per-chat лимит был
+      // T-240: без botId `checkPerBotPerChatRateLimit` (lib/rate-limits.ts)
+      // сразу возвращает {ok:true} — то есть весь per-bot-per-chat лимит был
       // выключен для tool-пути и падал открытым, без единой строки в логе.
-      // handoff.ts:223 старательно прокидывает botId делегата — сюда.
+      // `respondAs` в handoff.ts старательно прокидывает botId делегата —
+      // сюда.
       botId: ctx.botId,
     });
     return formatGateResult(at, res);

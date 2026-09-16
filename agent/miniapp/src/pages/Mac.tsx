@@ -77,10 +77,11 @@ export default function Mac() {
       // on the Mac) and the real execution after approval — so we drop the
       // non-execution statuses to avoid showing one run as two sessions.
       // Аудит 2026-08-10: `denied`/`completed`/`failed` тут не бывает — вокабуляр
-      // статусов ровно шесть значений (lib/audit.ts:13). Ветки под них были
+      // статусов — закрытый набор `ACTION_STATUSES` в lib/audit.ts. Ветки под них были
       // мёртвыми; работу тянули `ok` и `error`, поэтому вреда не было, но и
       // защиты, которую они изображали, тоже.
-      const NON_RUN = new Set<string>(["pending_approval", "forbidden", "rate_limited"]);
+      // `approved` — та же гейтовая строка, закрытая решением (аудит 2026-09-14).
+      const NON_RUN = new Set<string>(["pending_approval", "forbidden", "rate_limited", "approved"]);
       const macSessions: MacSession[] = actions
         .filter(action => !NON_RUN.has(action.status))
         .map(toMacSession);
@@ -203,7 +204,30 @@ export default function Mac() {
         <button type="submit" disabled={launchBusy || !project.trim() || !prompt.trim()}>{launchBusy ? "Передаём задачу…" : "Запустить сессию"}</button>
         {launchStatus && <p role="status">{launchStatus}</p>}
       </form>}
-      {/* Stop remains available even if an active run is outside this history page. */}
+      {/*
+        Аварийный стоп стоит здесь, а не в списке сессий, и не спрашивает,
+        сколько их сейчас активно.
+
+        Аудит 2026-08-28: условие было `canStop && runningCount > 0`, а
+        ненулевым `runningCount` стать не мог — строка в `agent_actions`
+        появлялась уже терминальной, после `await dispatchAction`. Кнопка не
+        рисовалась ни в одном состоянии, и вместе с ней была недостижима вся
+        ручка `/api/mac/stop` (ca58aefc).
+
+        Аудит 2026-09-11: посылка с тех пор умерла — `openInflightAudit` пишет
+        строку `attempted` ДО обращения наружу, `finalizeActionRow` доводит её
+        до `ok`/`error` через UPDATE, `toMacSession` переводит всё нетерминальное
+        в «выполняется», а `NON_RUN` на этой странице `attempted` не отсеивает.
+        То есть идущий запуск панель теперь как раз видит.
+
+        Решение от этого не меняется, но по другой причине: видимость запуска —
+        не гарантия. Строка «в полёте» пишется по принципу «не легло — работаем
+        дальше» (её отказ намеренно НЕ отменяет действие), а список тут —
+        снимок последних строк журнала, обновляемый по таймеру. Значит
+        «`runningCount` равен нулю» не означает «останавливать нечего», и гейт
+        у аварийного стопа остаётся ровно один — админский, тот же, что у самой
+        ручки (`requireAdmin` в ветке `/api/mac/stop`, lib/miniapp-server.ts).
+      */}
       {canStop && (
         <button
           onClick={() => handleStopAll(runningCount)}

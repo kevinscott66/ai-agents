@@ -22,6 +22,7 @@ import {
   type GhRunner,
   type GhRunResult,
 } from "../lib/dispatch/github.ts";
+import { TRUSTED_PR_IDENTITY } from "./helpers/pr-view-fixture.ts";
 
 const ORCH = { agentKey: "orchestrator", chatId: -1 };
 
@@ -56,7 +57,7 @@ describe("REVIEW_AND_MERGE_PR: пустой список файлов — «не
     test(`${name} — мержа нет`, async () => {
       const { runGh, calls } = fakeGh({
         "pr view": {
-          stdout: JSON.stringify({ state: "OPEN", mergeable: "MERGEABLE", ...extra }),
+          stdout: JSON.stringify({ ...TRUSTED_PR_IDENTITY, state: "OPEN", mergeable: "MERGEABLE", ...extra }),
         },
       });
       const res = await handleReviewAndMergePr({ pr_number: 101 }, ORCH, { runGh, authority: "approved-action" });
@@ -71,7 +72,7 @@ describe("REVIEW_AND_MERGE_PR: пустой список файлов — «не
   test("причина доезжает до PR комментарием, а не теряется в результате", async () => {
     const { runGh, calls } = fakeGh({
       "pr view": {
-        stdout: JSON.stringify({ state: "OPEN", mergeable: "MERGEABLE", files: [] }),
+        stdout: JSON.stringify({ ...TRUSTED_PR_IDENTITY, state: "OPEN", mergeable: "MERGEABLE", files: [] }),
       },
     });
     const res = await handleReviewAndMergePr({ pr_number: 102 }, ORCH, { runGh, authority: "approved-action" });
@@ -90,6 +91,7 @@ describe("REVIEW_AND_MERGE_PR: пустой список файлов — «не
     const { runGh, calls } = fakeGh({
       "pr view": {
         stdout: JSON.stringify({
+          ...TRUSTED_PR_IDENTITY,
           state: "OPEN",
           mergeable: "MERGEABLE",
           changedFiles: 1,
@@ -107,7 +109,7 @@ describe("REVIEW_AND_MERGE_PR: пустой список файлов — «не
     // должно остаться состояние PR, а не пустой список.
     const { runGh, calls } = fakeGh({
       "pr view": {
-        stdout: JSON.stringify({ state: "MERGED", mergeable: "UNKNOWN", files: [] }),
+        stdout: JSON.stringify({ ...TRUSTED_PR_IDENTITY, state: "MERGED", mergeable: "UNKNOWN", files: [] }),
       },
     });
     const res = await handleReviewAndMergePr({ pr_number: 104 }, ORCH, { runGh, authority: "approved-action" });
@@ -121,6 +123,7 @@ describe("REVIEW_AND_MERGE_PR: пустой список файлов — «не
     const { runGh, calls } = fakeGh({
       "pr view": {
         stdout: JSON.stringify({
+          ...TRUSTED_PR_IDENTITY,
           state: "OPEN",
           mergeable: "MERGEABLE",
           isDraft: true,

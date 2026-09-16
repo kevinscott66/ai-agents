@@ -159,11 +159,22 @@ export function getDailyUsage(
 
 /**
  * Resolve the daily input-token budget for `agentKey`.
+ *
+ * Ключ сперва приводится к владельцу (`budgetOwner`), и цепочка идёт по нему, а
+ * не по переданному: производный `design:svg-fallback` тратит потолок роли
+ * `design`, а не заводит себе второй.
+ *
  * Priority:
  *  1. budget_settings DB row (T-527, Mini App override)
- *  2. TOKEN_BUDGET_<UPPER(agentKey)> env
+ *  2. `TOKEN_BUDGET_<OWNER>` env, где OWNER — владелец в верхнем регистре и с
+ *     любым не-`[A-Z0-9]` заменённым на `_`
  *  3. TOKEN_BUDGET_DEFAULT env
- *  4. Infinity (no limit)
+ *  4. MALFORMED_ENV_BUDGET, если валидного значения нет НИ ОДНОГО, но хотя бы
+ *     одно из двух env задано мусором: оператор явно хотел лимит
+ *  5. Infinity (no limit)
+ *
+ * Мусор на шаге 2 не обрывает цепочку и не отменяет шаг 3 — иначе опечатка в
+ * ключе роли поднимала бы ей лимит выше заданного дефолта.
  */
 export function getBudget(agentKey: string): number {
   // Аудит 2026-08-12: производный ключ (`design:svg-fallback`) не совпадал ни
@@ -186,9 +197,17 @@ export function getBudget(agentKey: string): number {
   if (fallback !== null && !fallback.malformed) {
     // Аудит 2026-08-20: раньше сюда не доходили. Мусорное значение в ключе роли
     // возвращалось как «значение найдено» — и TOKEN_BUDGET_DEFAULT затирался.
-    // Оператор писал TOKEN_BUDGET_DEFAULT=1000 и опечатывался пробелом в одной
-    // роли: эта роль получала 100_000, то есть в 100 раз БОЛЬШЕ заданного
-    // дефолта. Опечатка не должна поднимать лимит.
+    // Оператор писал TOKEN_BUDGET_DEFAULT=1000, а в одной роли опечатывался
+    // (`TOKEN_BUDGET_DESIGN=1_000`): эта роль получала MALFORMED_ENV_BUDGET =
+    // 100_000, то есть в 100 раз БОЛЬШЕ заданного дефолта. Опечатка не должна
+    // поднимать лимит.
+    //
+    // Аудит 2026-09-11: в обоих абзацах примером стоял «пробел». `Number()`
+    // пробелы по краям срезает — `Number(" 500 ") === 500`, — значит
+    // `malformed` на нём не взводится ни сейчас, ни в описанном «было», и
+    // дежурный, воспроизводящий сценарий по комментарию, получал бы ровно
+    // заданное число без warn'а и заключал, что защита не работает. Настоящие
+    // триггеры: `2_000_000`, `500k`, `abc`, `-5`, `Infinity`.
     if (specific?.malformed) {
       warnBudgetEnv(
         envKey,
@@ -220,11 +239,36 @@ export function getBudget(agentKey: string): number {
 }
 
 /**
+ * Консервативный потолок на случай испорченного значения в env: не Infinity и
+ * не ноль. Обоснование — над `parseBudgetEnv` ниже, там же он и выставляется.
+ */
+const MALFORMED_ENV_BUDGET = 100_000;
+const warnedBudgetKeys = new Set<string>();
+
+interface BudgetEnvValue {
+  /** Значение, которое стоит применить, если дальше по цепочке ничего нет. */
+  value: number;
+  /** true — значение задано, но не парсится. Не «найдено», а «испорчено». */
+  malformed: boolean;
+  /** Сырое значение — для сообщения в лог. */
+  raw: string;
+}
+
+function warnBudgetEnv(envKey: string, raw: string, action: string): void {
+  if (warnedBudgetKeys.has(envKey)) return;
+  warnedBudgetKeys.add(envKey);
+  log.warn(
+    `[budget] ${envKey}=${JSON.stringify(raw)} — не число; ${action}. ` +
+      `Исправьте значение.`,
+  );
+}
+
+/**
  * Аудит 2026-08-09: испорченное значение читалось как «лимита нет».
  *
  * Было `const n = Number(raw); if (!Number.isFinite(n) || n <= 0) return
- * Infinity`. То есть TOKEN_BUDGET_DEFAULT=2_000_000 (или `500k`, или число с
- * пробелом) — NaN — молча снимал дневной потолок со всех 12 агентов, а
+ * Infinity`. То есть TOKEN_BUDGET_DEFAULT=2_000_000 (или `500k`, или `abc`)
+ * — NaN — молча снимал дневной потолок со всех 12 агентов, а
  * TOKEN_BUDGET_DEFAULT=0, самый естественный способ написать «не тратить»,
  * означал ровно противоположное. Это единственное, что стоит между агентом и
  * неограниченным счётом в Anthropic, и оно ломалось от опечатки, без единой
@@ -250,27 +294,6 @@ export function getBudget(agentKey: string): number {
  *          malformed («задано, но не число — применяй только если больше
  *          ничего нет»)
  */
-const MALFORMED_ENV_BUDGET = 100_000;
-const warnedBudgetKeys = new Set<string>();
-
-interface BudgetEnvValue {
-  /** Значение, которое стоит применить, если дальше по цепочке ничего нет. */
-  value: number;
-  /** true — значение задано, но не парсится. Не «найдено», а «испорчено». */
-  malformed: boolean;
-  /** Сырое значение — для сообщения в лог. */
-  raw: string;
-}
-
-function warnBudgetEnv(envKey: string, raw: string, action: string): void {
-  if (warnedBudgetKeys.has(envKey)) return;
-  warnedBudgetKeys.add(envKey);
-  log.warn(
-    `[budget] ${envKey}=${JSON.stringify(raw)} — не число; ${action}. ` +
-      `Исправьте значение.`,
-  );
-}
-
 function parseBudgetEnv(envKey: string): BudgetEnvValue | null {
   const raw = process.env[envKey];
   if (raw === undefined || raw.trim() === "") return null;
@@ -290,14 +313,14 @@ export function _resetBudgetEnvWarnings(): void {
  *
  * Аудит 2026-08-21: единственный писатель в этом файле, который НЕ приводил
  * ключ к владельцу. Читатели приводят все — `getBudget` ищет строку по
- * `budgetOwner(agentKey)` (:148), туда же смотрят `recordUsage`,
+ * `budgetOwner(agentKey)`, туда же смотрят `recordUsage`,
  * `getDailyUsage`, `checkBudget`, `budgetRemaining`. Значит запись по
  * производному ключу (`design:svg-fallback`) ложилась строкой, которую не
  * прочитает никто: лимит выставлен, в `GET /api/budget-settings` он виден, а
  * на расход не влияет — то есть ровно та тихая поломка потолка, ради которой
  * `budgetOwner` и заводили.
  *
- * Сейчас недостижимо: `badAgentKey` в miniapp-server.ts:302 пропускает только
+ * Сейчас недостижимо: `badAgentKey` в miniapp-server.ts пропускает только
  * ключи из CHARACTERS, а в них двоеточия нет. Но охрана стоит у вызывающего, а
  * не у функции, и следующий вызывающий её не унаследует. В проде строк в
  * `budget_settings` ноль, так что осиротить нормализацией нечего.

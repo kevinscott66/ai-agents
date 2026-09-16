@@ -52,6 +52,21 @@ describe("splitForTelegram не отдаёт пустых частей", () => {
     expect(splitForTelegram("\n\n\t ")).toEqual([]);
   });
 
+  test("теряются только пробелы — ни один непробельный символ не пропадает", () => {
+    // Аудит 2026-09-11: выбрасывание пробельного куска — объявленное
+    // исключение из правила «отправитель не переписывает текст» (см.
+    // комментарий у hardSlice). Исключение стоит держать ровно таким, каким
+    // оно объявлено, поэтому граница пинуется числами: на
+    // `"A" + " "*9000 + "B"` вход 9002, выход 5002, пропало 4000 пробелов —
+    // и ни одной буквы.
+    const s = `A${" ".repeat(9000)}B`;
+    const parts = splitForTelegram(s);
+    const strip = (t: string) => t.replace(/\s+/g, "");
+    expect(strip(parts.join(""))).toBe(strip(s));
+    expect(s.length - parts.join("").length).toBe(4000);
+    expect(parts.every((p) => p.trim().length > 0)).toBe(true);
+  });
+
   test("обычное разбиение не задето", () => {
     const long = Array.from({ length: 200 }, (_, i) => `Абзац ${i}`).join("\n\n");
     const parts = splitForTelegram(long, 400);

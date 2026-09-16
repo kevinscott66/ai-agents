@@ -164,26 +164,49 @@ export const defaultRunGh: GhRunner = async (args) => {
  *  • `.claude/settings.json` — хуки Claude Code. Файла в репо нет, и чёрный
  *    список молчал бы ровно про тот PR, который его добавит.
  *
- * Второй путь автомержа (`.github/workflows/auto-merge.yml`) с самого начала
- * устроен наоборот: `case` перечисляет безопасное, всё прочее отсекает `*)`.
- * Его шапка утверждает «То же правило продублировано в isRiskyPath()» — теперь
- * это правда не только по букве, но и по форме. Обе стороны согласованности
- * пришпилены в tests/pr-risky-paths-allowlist.test.ts; раньше проверялась одна,
- * и не та: опасно, когда чёрный список пускает то, что белый бы не пустил.
+ * Второй путь автомержа был устроен наоборот: `case` перечислял безопасное,
+ * всё прочее отсекал `*)`. Его воркфлоу удалён при публичном релизе
+ * 2026-09-01, сам `case` уцелел в `.github/scripts/automerge-filter.sh`, но не
+ * вызывается больше ничем — файла в `.github/workflows/`, который бы его
+ * запускал, нет. Аудит 2026-09-11: абзац здесь до сих пор говорил о втором
+ * пути в настоящем времени, и это была не неточность, а обещание
+ * подстраховки. Читатель, видящий «белый список воркфлоу не пустил бы», мерит
+ * риск этой функции вдвое меньшим, чем он есть: с 2026-09-01 она —
+ * ЕДИНСТВЕННЫЙ гейт автомержа. Согласованность двух списков по-прежнему
+ * пришпилена в tests/pr-risky-paths-allowlist.test.ts, но это утверждение про
+ * файл политики, а не про второй живой гейт.
  *
- * Единственное намеренное расхождение с воркфлоу — markdown рядом с кодом
- * агентов (`agent/lib/README.md`): документация, а не поведение. Аудит
- * 2026-08-12: записано это было одним предикатом `agent/**\/*.md`, который
- * оказался шире собственного объяснения и накрывал `agent/characters/` —
- * директорию, которую анти-список воркфлоу называет «никогда auto», а
- * CLAUDE.md — risky по определению. Исключение сужено до всего, что вне неё.
+ * Намеренное расхождение с тем списком — markdown рядом с кодом агентов
+ * (`agent/ONBOARDING.md`, `agent/docs/DEPLOY.md`): документация, а не
+ * поведение. Аудит 2026-08-12: записано это было одним предикатом
+ * `agent/**\/*.md`, который оказался шире собственного объяснения и накрывал
+ * `agent/characters/` — директорию, которую анти-список того же фильтра
+ * называет «никогда auto», а CLAUDE.md — risky по определению.
+ *
+ * Аудит 2026-09-11, там же: предикат был шире объяснения ВТОРОЙ раз и ровно
+ * тем же способом. Под «markdown рядом с кодом агентов» попадал весь
+ * `agent/memory/**` — командный лог, проектные страницы, логи ролей; замер на
+ * день правки: 14 файлов в `git ls-files`, ни одного исключения. То есть та
+ * самая память, про которую пункт 1 ниже говорит «читают следующие автономные
+ * прогоны, поэтому всегда через человека». Их правка вливалась в main без
+ * человека и попадала в контекст всех 12 ролей через ребилд FTS-индекса при
+ * старте. Белый список автомержа этих путей не пускал
+ * никогда (`case` там — `docs/*|README*.md` и README воркфлоу), так что
+ * расхождение всё это время было односторонним и в опасную сторону.
  */
 function isAutoMergeable(f: string): boolean {
   // 1. Documentation. Memory, task boards, and status files are consumed by
   //    future autonomous prompts, so they always require human review.
-  //    README воркфлоу — единственный безопасный путь в
-  //    `.github/`, ровно как в `case` воркфлоу.
-  if (f.startsWith("docs/")) return true;
+  //    README воркфлоу — единственный безопасный путь в `.github/`, ровно
+  //    как в `case` фильтра автомержа.
+  //
+  //    Аудит 2026-09-11: здесь стояло `f.startsWith("docs/")` — без оговорки
+  //    про расширение, то есть шелл-скрипт или воркфлоу, положенный в каталог
+  //    docs/, уходил бы в `--squash` как документация (формы путей, а не
+  //    файлы: под docs/ в `git ls-files` на день правки нет ничего). Тот же
+  //    изъян, что дважды чинили в пункте 2, третьим экземпляром — не успевший
+  //    сработать только потому, что каталог пуст.
+  if (f.startsWith("docs/") && f.endsWith(".md")) return true;
   if (/^README[^/]*\.md$/.test(f)) return true;
   if (/^\.github\/workflows\/README[^/]*\.md$/.test(f)) return true;
 
@@ -192,12 +215,21 @@ function isAutoMergeable(f: string): boolean {
   // данные): PR, вычёркивающий эти строки, трогает ровно один «безопасный»
   // файл и до правки вливался без человека обоими путями автомержа.
 
-  // 2. Markdown рядом с кодом агентов — см. шапку. Кроме `agent/characters/`:
-  //    воркфлоу отсекает эту директорию целиком («system prompts — никогда
-  //    auto»), CLAUDE.md называет её risky по определению. Расширение файла не
-  //    делает его документацией — в `agent/characters/prompts/copy/*.md`
-  //    лежит то, чем пишет роль copy (аудит 2026-08-12).
+  // 2. Markdown рядом с кодом агентов — см. шапку. Два изъятия, и оба про
+  //    одно: расширение файла не делает его документацией.
+  //
+  //    `agent/characters/` — фильтр автомержа отсекает эту директорию целиком
+  //    («system prompts — никогда auto»), CLAUDE.md называет её risky по
+  //    определению: в `agent/characters/prompts/copy/*.md` лежит то, чем
+  //    пишет роль copy (аудит 2026-08-12).
+  //
+  //    `agent/memory/` — то же самое этажом ниже и ровно то, что пункт 1
+  //    называет «всегда через человека»: страницы вики уходят в контекст
+  //    ролей через wiki_fts, и правка лога команды — это правка того, что
+  //    следующий автономный прогон примет за собственную память
+  //    (аудит 2026-09-11).
   if (f.startsWith("agent/characters/")) return false;
+  if (f.startsWith("agent/memory/")) return false;
   if (f.startsWith("agent/") && f.endsWith(".md")) return true;
 
   return false;
@@ -215,13 +247,16 @@ export function isRiskyPath(f: string): boolean {
  * Метки, которыми человек говорит «не вливать», не закрывая PR.
  *
  * Аудит 2026-08-21: набор сверялся точным именем, а метка, которой автономный
- * цикл помечает КАЖДЫЙ свой PR (`deploy/agents-loop.sh:76` —
- * `--label needs-human-review`), длиннее той, что лежала в наборе. Замер на
+ * цикл помечает КАЖДЫЙ свой PR (`--add-label needs-human-review` в
+ * deploy/vps-autonomous/autonomous-cycle.sh), длиннее той, что лежала в
+ * наборе. Прежняя редакция этого абзаца слала за той же меткой в
+ * `deploy/agents-loop.sh` — файл с тех пор стал надгробием на десять строк,
+ * и слова `needs-human` в нём нет вовсе. Замер на
  * docs-only PR в белом списке путей: `needs-human` — skipped, а
  * `needs-human-review` — `pr merge` вызван, action=merged. То есть
  * единственная метка, которая тут реально ставится, гейт не останавливала.
  *
- * Второй автомерж это уже прошёл: `.github/scripts/automerge-filter.sh:75-79`
+ * Фильтр автомержа это уже прошёл: jq в `.github/scripts/automerge-filter.sh`
  * сравнивает `startswith("needs-human")` — правку 2026-08-12 просто не
  * перенесли сюда, хотя комментарий обещал общий список. Держим то же правило:
  * точное имя для трёх меток и префикс для семейства `needs-human*`.
@@ -237,8 +272,9 @@ export function isBlockingLabel(name: string): boolean {
 /**
  * Метка семейства `needs-human*` — просьба к человеку, а не запрет боту смотреть.
  *
- * Аудит 2026-08-28: `deploy/vps-autonomous/autonomous-cycle.sh:540` вешает
- * `needs-human-review` на КАЖДЫЙ свой PR сразу после `gh pr create`, а
+ * Аудит 2026-08-28: `gh pr edit --add-label needs-human-review` в
+ * deploy/vps-autonomous/autonomous-cycle.sh вешает метку на КАЖДЫЙ свой PR
+ * сразу после `gh pr create`, а
  * `listRecentOpenPrs` пропускает в review-mode только ветки `agent/*` — то есть
  * ровно эти PR и никакие другие. Гейт блокирующих меток стоит до чеклиста,
  * поэтому control-loop на каждом своём PR возвращал `{action:"skipped"}` без
@@ -260,7 +296,83 @@ export function isHumanReviewLabel(name: string): boolean {
 }
 
 /**
+ * Кому позволено вливаться автоматически.
+ *
+ * Аудит 2026-09-11, круг 50: единственная в системе проверка личности автора
+ * жила в файле, который ничего не исполняет. Пункт 3 шапки
+ * `.github/scripts/automerge-filter.sh` закрыл эту дыру 2026-08-29 — «форк
+ * отсекается, а автор обязан быть в аллоу-листе» — и поставил личность
+ * «раньше всех прочих проверок». Воркфлоу, звавший тот скрипт, удалён при
+ * публичном релизе 2026-09-01, а живой путь (`validatePrChecklist` ниже) не
+ * запрашивал у gh ни `author`, ни `isCrossRepository` и личность не смотрел
+ * нигде.
+ *
+ * Что это значило на публичном репозитории: посторонний форкает, шлёт PR,
+ * правящий один `README.md`, и весь чеклист отвечает «зелено» — open, не
+ * черновик, без меток, без конфликта, один файл, не risky. На пути к
+ * `gh pr merge --squash` оставалось требование зелёного CI, то есть ровно та
+ * «настройка GitHub, а не наш код», которую аудит 2026-08-29 признал
+ * недостаточной: у первого PR нового контрибьютора воркфлоу ждут ручного
+ * одобрения, у второго — уже нет.
+ *
+ * Человек в цепочке есть: мерж требует потреблённого одобрения. Но карточка
+ * одобрения (PREVIEW_BY_ACTION.REVIEW_AND_MERGE_PR в lib/approvals.ts)
+ * печатает номер PR и причину, которую пишет модель, — ни автора, ни ветки,
+ * ни того, форк это или нет. Гейт личности не может быть делегирован тому,
+ * кому личность не показывают, поэтому он машинный и здесь.
+ *
+ * Список — из той же переменной и с тем же значением по умолчанию, что у
+ * записанной политики; согласованность пришпилена в
+ * tests/audit-2026-09-11-automerge-author-gate.test.ts.
+ */
+const DEFAULT_AUTOMERGE_AUTHOR = "kevinscott66";
+
+export function automergeAllowedAuthors(
+  env: Record<string, string | undefined> = process.env,
+): string[] {
+  // Пустая или пробельная переменная означает «не задано» — как `KEY=` в
+  // EnvironmentFile, где значение приходит пустой строкой, а не отсутствует.
+  const list = (env.AUTOMERGE_ALLOWED_AUTHORS ?? "")
+    .split(",")
+    .map((a) => a.trim())
+    .filter(Boolean);
+  return list.length ? list : [DEFAULT_AUTOMERGE_AUTHOR];
+}
+
+/**
+ * Причина, по которой PR не рассматривается автоматически из-за того, КЕМ он
+ * прислан, — или `undefined`, если с личностью всё в порядке.
+ *
+ * Fail-closed в обе стороны: пропавшее поле — это «неизвестно», а не «не
+ * форк» и не «автор неважен». Расхождение с политикой намеренное и в строгую
+ * сторону: jq там сравнивает `.isCrossRepository == "true"` и на отсутствующем
+ * поле пускает дальше; здесь оба поля запрашиваем мы сами, и их отсутствие
+ * означает «gh ответил не тем, о чём просили», а по такому ответу автомержить
+ * нельзя.
+ */
+export function untrustedPrReason(
+  pr: { author?: { login?: string } | null; isCrossRepository?: boolean },
+  env: Record<string, string | undefined> = process.env,
+): string | undefined {
+  if (pr.isCrossRepository !== false) {
+    return pr.isCrossRepository === true
+      ? "PR пришёл из форка — чужую ветку автомерж не вливает"
+      : "gh не сказал, из форка ли PR (поле isCrossRepository) — автомерж невозможен";
+  }
+  const login = typeof pr.author?.login === "string" ? pr.author.login.trim() : "";
+  if (!login) {
+    return "gh не вернул автора PR — личность не подтверждена, автомерж невозможен";
+  }
+  if (!automergeAllowedAuthors(env).includes(login)) {
+    return `автор PR не в списке доверенных (${login})`;
+  }
+  return undefined;
+}
+
+/**
  * Validates a PR against the pre-push checklist:
+ *  - PR прислан не из форка и автор в списке доверенных (см.
+ *    {@link untrustedPrReason}) — личность раньше всех прочих проверок;
  *  - PR is OPEN, не черновик и без блокирующих меток;
  *  - PR is OPEN and not CONFLICTING;
  *  - the whole diff is visible (gh truncates `files` at 100);
@@ -298,7 +410,9 @@ async function validatePrChecklist(
     // списка files — см. проверку ниже.
     // isDraft/labels — сигналы человека «не вливать»; воркфлоу их спрашивал
     // с самого начала, этот путь — нет (аудит 2026-08-12).
-    "--json", "files,state,mergeable,changedFiles,isDraft,labels,headRefOid",
+    // author/isCrossRepository — личность автора; записанная политика просит
+    // их с 2026-08-29, живой путь не просил вовсе (аудит 2026-09-11).
+    "--json", "files,state,mergeable,changedFiles,isDraft,labels,headRefOid,author,isCrossRepository",
   ]);
   if (view.exitCode !== 0) {
     issues.push(
@@ -315,6 +429,8 @@ async function validatePrChecklist(
     isDraft?: boolean;
     labels?: { name?: string }[];
     headRefOid?: string;
+    author?: { login?: string } | null;
+    isCrossRepository?: boolean;
   };
   try {
     prData = JSON.parse(view.stdout);
@@ -324,6 +440,16 @@ async function validatePrChecklist(
   }
 
   const headSha = typeof prData.headRefOid === "string" ? prData.headRefOid : undefined;
+
+  // Личность — раньше всех прочих проверок, ровно как в записанной политике:
+  // про чужой PR полезнее узнать, что он чужой, чем что он черновик. Ответ
+  // тот же, что у политики на форк и незнакомого автора, — SKIP: ни мержа, ни
+  // комментария. Комментарий от имени проекта на PR постороннего — не сигнал
+  // человеку, а выдача бота наружу.
+  const untrusted = untrustedPrReason(prData);
+  if (untrusted) {
+    return { passed: false, issues, filesChanged, risky: false, blocked: untrusted, headSha };
+  }
 
   if (prData.state !== "OPEN") {
     issues.push(`PR #${prNumber} is not open (state: ${prData.state ?? "unknown"})`);
@@ -362,6 +488,21 @@ async function validatePrChecklist(
 
   if (prData.mergeable === "CONFLICTING") {
     issues.push("PR has merge conflicts");
+  } else if (prData.mergeable !== "MERGEABLE") {
+    // Аудит 2026-09-11: отвергался только CONFLICTING, а `UNKNOWN` (GitHub
+    // ещё считает мерджабельность — первые секунды после пуша) и пропавшее
+    // поле проходили дальше как «конфликтов нет». Политика на этом месте
+    // требует строго MERGEABLE и скипает всё остальное; держим то же правило.
+    // Это именно skip, а не замечание: сказать автору нечего, ответ будет
+    // другим сам собой, и следующий прогон вернётся к этому PR.
+    return {
+      passed: false,
+      issues,
+      filesChanged,
+      risky: false,
+      blocked: `GitHub ещё не вычислил мерджабельность PR (mergeable: ${prData.mergeable ?? "поля нет"})`,
+      headSha,
+    };
   }
 
   filesChanged = (prData.files ?? []).map((f) => f.path);
@@ -389,9 +530,9 @@ async function validatePrChecklist(
   // и молчит, когда того поля нет (старый gh, урезанный JSON) или оно равно
   // нулю. Проверка нужна отдельная и до него.
   //
-  // Соседний путь автомержа это правило уже знает: `.github/workflows`
+  // Фильтр автомержа это правило уже знает: `.github/scripts/automerge-filter.sh`
   // отвечает `SKIP <n> no_files` — «пустой список это «неизвестно», а не
-  // «безопасно»». Шапка этого файла утверждает, что оба пути согласованы; по
+  // «безопасно»». Шапка этого файла утверждает, что оба списка согласованы; по
   // этому пункту не были.
   if (filesChanged.length === 0) {
     issues.push(
@@ -427,7 +568,14 @@ async function validatePrChecklist(
   return { passed: issues.length === 0, issues, filesChanged, risky, headSha };
 }
 
-/** Post a comment on the PR; swallow errors (commenting is best-effort). */
+/**
+ * Post a comment on the PR. Never throws — a failed comment must not abort the
+ * review — but the outcome is NOT swallowed: it comes back as the return
+ * value, and three of the four call sites branch on it, reporting
+ * `comment_failed` / `validation_failed` instead of claiming the PR was
+ * commented. The fourth (merge failed) drops it on purpose: that branch
+ * already returns an error, and a missing comment adds nothing to it.
+ */
 async function comment(prNumber: number, body: string, runGh: GhRunner): Promise<boolean> {
   const res = await runGh(["pr", "comment", String(prNumber), "--repo", REPO, "--body", body]);
   return res.exitCode === 0;

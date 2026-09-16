@@ -10,7 +10,15 @@
 import { describe, test, expect } from "bun:test";
 import { isByDesignRefusal, joinDelegationErrors } from "../lib/diagnostic.ts";
 
-/** Ровно те тексты, которые выдаёт DELEGATE_TO_ROLE (action-dispatch.ts:812-871). */
+/**
+ * Ровно те тексты, которые выдаёт ветка `case "DELEGATE_TO_ROLE"` в
+ * action-dispatch.ts.
+ *
+ * Аудит 2026-09-11: здесь стоял диапазон строк action-dispatch.ts, и он
+ * промахивался на три сотни строк — показывал на SPLIT_TASK, а не на отказы
+ * делегирования, которые этот файл копирует. Номер не подгоняем и не повторяем
+ * в надгробии: называем ветку.
+ */
 const cycle = (r: string, chain: string[]) =>
   `${r}: delegation cycle: '${r}' is already in chain [${chain.join("→")}]`;
 const cyclePath = (r: string, chain: string[]) =>

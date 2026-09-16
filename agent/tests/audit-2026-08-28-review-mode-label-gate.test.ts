@@ -6,7 +6,8 @@
  * 1. `listRecentOpenPrs` пропускает дальше только ветки `agent/*` — то есть
  *    ровно те PR, которые открывает автономный цикл. А цикл сразу после
  *    `gh pr create` вешает на каждый свой PR метку `needs-human-review`
- *    (`deploy/vps-autonomous/autonomous-cycle.sh:540`). Гейт блокирующих меток
+ *    (`gh pr edit --add-label` в `deploy/vps-autonomous/autonomous-cycle.sh`).
+ *    Гейт блокирующих меток
  *    в `validatePrChecklist` стоит ДО чеклиста, поэтому каждый такой PR
  *    возвращал `{action:"skipped"}` без единого комментария. Режим, написанный
  *    ради «сначала разбери открытые PR, потом бери новую задачу», не давал
@@ -17,7 +18,7 @@
  *    поэтому пункт 1 и не бросался в глаза.
  *
  * 3. `agent.ts --mode review` выходил с кодом 0 безусловно. Обещание
- *    fail-closed из `autonomous-cycle.sh:270-275` держалось только на первом
+ *    fail-closed из шапки `autonomous-cycle.sh` держалось только на первом
  *    `gh pr list`: истёкший PAT валил каждый per-PR вызов, а цикл шёл дальше
  *    брать новую задачу.
  *
@@ -40,6 +41,7 @@ import {
 } from "../orchestrator/review-mode.ts";
 import type { GhRunner, GhRunResult, GithubResult } from "../lib/dispatch/github.ts";
 import type { ReviewedPr } from "../orchestrator/review-mode.ts";
+import { TRUSTED_PR_IDENTITY } from "./helpers/pr-view-fixture.ts";
 
 const CTX = { agentKey: "orchestrator", chatId: 0 };
 const NOW = Date.parse("2026-08-28T12:00:00Z");
@@ -55,6 +57,7 @@ interface PrView {
 /** Зелёный docs-only PR: в белом списке путей, готов к автомержу. */
 function safePr(extra: PrView = {}): PrView {
   return {
+    ...TRUSTED_PR_IDENTITY,
     state: "OPEN",
     mergeable: "MERGEABLE",
     files: [{ path: "docs/plan.md" }],

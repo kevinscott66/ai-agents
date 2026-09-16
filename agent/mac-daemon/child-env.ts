@@ -14,7 +14,6 @@ const CHILD_ENV_ALLOW_EXACT = new Set([
   "LANG",
   "TERM",
   "TMPDIR",
-  "PWD",
 ]);
 
 /**
@@ -39,8 +38,27 @@ export function resolveClaudeBin(
   return raw?.trim() ? raw : "claude";
 }
 
+/**
+ * Отфильтрованное окружение дочернего `claude`.
+ *
+ * `cwd` — каталог, в котором прогон РЕАЛЬНО запускается (`Bun.spawn({cwd})`).
+ *
+ * Аудит 2026-09-11: `PWD` стояло в списке разрешённых и наследовалось от
+ * демона как есть. Демон запускается через launchd из своего каталога, а
+ * ребёнку задаётся `cwd: allowedProject` — то есть ребёнок получал `PWD`,
+ * указывающий НЕ туда, где он работает, и, как правило, вообще за пределы
+ * `MAC_PROJECT_ROOTS`. Всё, что внутри прогона читает `$PWD` вместо
+ * `getcwd()` — а это любая шелл-строка, которую соберёт сама модель, — видело
+ * чужой путь. Аллоулист каталогов и есть здесь граница безопасности, и
+ * переменная, тихо называющая путь за ней, эту границу размывает.
+ *
+ * Поэтому `PWD` не наследуется, а ВЫВОДИТСЯ из `cwd`. Без `cwd` переменной
+ * нет вовсе: пустое значение хуже отсутствующего — `getcwd()` даёт правду, а
+ * `PWD=""` даёт молчаливую ложь.
+ */
 export function sanitizeChildEnv(
   src: Record<string, string | undefined>,
+  cwd?: string,
 ): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(src)) {
@@ -48,5 +66,6 @@ export function sanitizeChildEnv(
       out[key] = value;
     }
   }
+  if (cwd) out.PWD = cwd;
   return out;
 }

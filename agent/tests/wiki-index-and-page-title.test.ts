@@ -173,6 +173,61 @@ describe("normalizeOp: поле принимается только непуст
     ).toBeNull();
   });
 
+  /**
+   * Аудит 2026-09-11, круг 30: докблок `normalizeOp` подавал список алиасов
+   * закрытым («допускаем … как алиасы»), а код принимал ещё два, которых в
+   * списке не было вовсе — `name` как заголовок и `line` как тело страницы.
+   * Ни один из двух не был покрыт фикстурой, то есть их можно было удалить
+   * «как лишние», и CI бы этого не заметил. Теперь список полон, а каждый его
+   * пункт закрыт проверкой ниже.
+   */
+  test("заголовок принимается и под именем `name`", () => {
+    expect(upsert({ name: "Заголовок из name" })).toMatchObject({
+      title: "Заголовок из name",
+    });
+    // `title` сильнее: он назван первым в докблоке и первым в коде.
+    expect(upsert({ title: "Из title", name: "Из name" })).toMatchObject({
+      title: "Из title",
+    });
+  });
+
+  test("тело страницы принимается и под именем `line`", () => {
+    expect(
+      normalizeOp({ op: "upsert_team_page", slug: "projects/x", line: "тело из line" }),
+    ).toEqual({
+      op: "upsert_team_page",
+      slug: "projects/x",
+      title: "projects/x",
+      content: "тело из line",
+    });
+  });
+
+  test("текст лога принимается и под именем `content`", () => {
+    // Обратная половина того же креста: страница читает `line`, лог — `content`.
+    expect(normalizeOp({ op: "team_log", content: "решение принято" })).toEqual({
+      op: "team_log",
+      line: "решение принято",
+    });
+  });
+
+  test("слаг принимается и под именем `page`", () => {
+    expect(
+      normalizeOp({ op: "upsert_team_page", page: "projects/y", content: "тело" }),
+    ).toMatchObject({ op: "upsert_team_page", slug: "projects/y" });
+  });
+
+  test("без title и без name заголовком становится слаг, а не строка «null»", () => {
+    // Фолбэк на слаг происходит ОДИН раз и выше по функции; на месте записи
+    // второго `?? slug` больше нет, и эта проверка — то, что его держало.
+    expect(upsert({})).toMatchObject({ title: "projects/x" });
+    expect(normalizeOp({ op: "upsert_private_page", slug: "s", body: "тело" })).toEqual({
+      op: "upsert_private_page",
+      slug: "s",
+      title: "s",
+      content: "тело",
+    });
+  });
+
   test("пустая строка лога не дописывается", () => {
     expect(normalizeOp({ op: "team_log", line: "" })).toBeNull();
     expect(normalizeOp({ op: "private_log", line: "   " })).toBeNull();

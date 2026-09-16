@@ -1,7 +1,14 @@
 /**
  * Дирижёр — Bot API режим (telegraf + Anthropic SDK напрямую).
  * Этап 1: bare-bones smoke test без eliza-runtime.
- * Eliza-память/actions/plugins подключим, когда базовый цикл будет стабильно работать.
+ *
+ * Аудит 2026-09-11, круг 51: следующей строкой здесь стояло обещание
+ * «Eliza-память/actions/plugins подключим, когда базовый цикл будет стабильно
+ * работать». Базовый цикл работает с весны, зависимости eliza в package.json
+ * нет и никогда не появлялось, а память, действия и инструменты жили своим
+ * путём — lib/memory.ts, lib/permissions.ts, lib/tools-schema.ts. Обещание
+ * снято как невыполняемое: оно не описывало план, а мешало читателю понять,
+ * что подключать уже нечего.
  */
 import { Telegraf } from "telegraf";
 import Anthropic from "@anthropic-ai/sdk";

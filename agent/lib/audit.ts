@@ -7,6 +7,7 @@
 import { db } from "./db.ts";
 import type { ActionType } from "./permissions.ts";
 import { emit as busEmit } from "./events-bus.ts";
+import { scrubSecretString, scrubSecretsDeep } from "./log.ts";
 
 export type { ActionType };
 
@@ -17,6 +18,7 @@ export const ACTION_STATUSES = [
   "forbidden",
   "pending_approval",
   "rate_limited",
+  "approved",
 ] as const;
 
 export type ActionStatus = (typeof ACTION_STATUSES)[number];
@@ -134,7 +136,7 @@ export function rowToAction(row: AgentActionRow): AgentAction {
 export interface LogActionInput {
   agentKey: string;
   taskId?: string | null;
-  chatId?: number | string | null;
+  chatId?: number | null;
   tgMessageId?: number | null;
   actionType: ActionType;
   payload?: unknown;
@@ -197,6 +199,32 @@ export interface InsertedAction {
  */
 const TERMINAL_STATUSES: ReadonlySet<string> = new Set(["ok", "error"]);
 
+/**
+ * Скраб на границе записи в `agent_actions`.
+ *
+ * Аудит 2026-09-11, круг 51: здесь скраба не было вовсе, и чистота колонок
+ * `error`/`payload`/`result` держалась на дисциплине каждого вызывающего.
+ * Трое её уже не соблюдали, и все трое — одного рода: сообщение чужой
+ * библиотеки вклеивалось в строку как есть. `tgDeleteMessage` отдаёт
+ * исключение telegraf, а telegraf на сетевом сбое говорит «request to
+ * https://api.telegram.org/bot<ТОКЕН>/deleteMessage failed» — то есть токен
+ * бота уезжал в SQLite на диске, оттуда в /api/actions админу и в контекст
+ * модели через GET_LOGS. Ровно этот сценарий дословно описан у
+ * `getErrorMessage` (lib/errors.ts), но там защита опциональна: её надо не
+ * забыть позвать.
+ *
+ * Поэтому чистим здесь, а не по вызывающим: запись в таблицу — точка, мимо
+ * которой не проходит ни один из них, и новый вызывающий получает защиту, не
+ * зная о ней. Довод тот же, которым обоснован сам `getErrorMessage`.
+ *
+ * `payload` и `result` идут через `scrubSecretsDeep`: это структуры, и секрет
+ * в них бывает не только строкой в тексте, но и значением под говорящим
+ * ключом.
+ */
+function scrubbedError(e: string | null | undefined): string | null {
+  return e === undefined || e === null ? null : scrubSecretString(e);
+}
+
 /** Insert only; callers that open a larger transaction emit after commit. */
 export function insertActionRow(
   actionType: string,
@@ -204,12 +232,19 @@ export function insertActionRow(
 ): InsertedAction {
   const id = crypto.randomUUID();
   const now = Date.now();
-  const chatId =
-    input.chatId == null
-      ? null
-      : typeof input.chatId === "string"
-        ? Number(input.chatId)
-        : input.chatId;
+  // Аудит 2026-09-11: тут стояло приведение `typeof input.chatId === "string"
+  // ? Number(input.chatId) : …` под тип `number | string | null`. Строку в
+  // chatId не передавал ни один вызывающий — все идут от `DispatchCtx.chatId:
+  // number` или от `user.id`, уже проверенного `Number.isSafeInteger` в
+  // miniapp-auth. Ветка была мёртвой И незащищённой: `Number("abc")` — NaN,
+  // проверки нет, а драйвер bun:sqlite кладёт NaN в колонку как NULL. То есть
+  // первая же строка аудита с непарсящимся чатом стала бы невидимой для
+  // чат-скоупных фильтров (`chat_id = ?` в listActions и /api/actions) — тихо,
+  // без ошибки. Вместо проверки убран сам тип: строка сюда больше не
+  // представима, и tsc скажет об этом на вызывающей стороне, а не SQLite
+  // молчанием. Предикат для разбора недоверенного ввода в проекте свой —
+  // `strictChatId` (lib/http-utils.ts), и применяют его ДО аудита.
+  const chatId = input.chatId ?? null;
   db.prepare(
     `INSERT INTO agent_actions(
       id, agent_key, task_id, chat_id, tg_message_id, action_type, payload, status, result, error, created_at, request_id
@@ -221,10 +256,10 @@ export function insertActionRow(
     chatId,
     input.tgMessageId ?? null,
     actionType,
-    input.payload === undefined ? null : JSON.stringify(input.payload),
+    input.payload === undefined ? null : JSON.stringify(scrubSecretsDeep(input.payload)),
     input.status,
-    input.result === undefined ? null : JSON.stringify(input.result),
-    input.error ?? null,
+    input.result === undefined ? null : JSON.stringify(scrubSecretsDeep(input.result)),
+    scrubbedError(input.error),
     now,
     input.requestId ?? null,
   );
@@ -295,8 +330,8 @@ export function finalizeActionRow(
     )
     .get(
       input.status,
-      input.result === undefined ? null : JSON.stringify(input.result),
-      input.error ?? null,
+      input.result === undefined ? null : JSON.stringify(scrubSecretsDeep(input.result)),
+      scrubbedError(input.error),
       input.taskId ?? null,
       id,
     ) as
@@ -327,13 +362,15 @@ export function finalizeActionRow(
  * `finalizeActionRow` выше и `expireStaleAttempts` в db-maint.ts — оба сужены
  * до `attempted`. Отказ и протухание меняли только таблицу `approvals`. То
  * есть после «Reject» строка ДЕЙСТВИЯ навсегда оставалась «ждёт аппрув»: и в
- * `/audit`, и в ленте Mini App (`labels.ts:50`), и в GET_LOGS, который читает
+ * `/audit`, и в ленте Mini App (`ACTION_STATUS_LABELS` в
+ * miniapp/src/lib/labels.ts), и в GET_LOGS, который читает
  * сама модель. Роль, переспросившая журнал «одобрили мою публикацию?», видела
  * ожидание вместо состоявшегося отказа, а человек — очередь, которой в
- * `/approvals` уже нет. Докблок `action-dispatch.ts:1717` описывает только
- * вариант с крашем между двумя коммитами и прямо говорит, что санитайзера по
+ * `/approvals` уже нет. Комментарий в той ветке описывал только вариант с
+ * крашем между двумя коммитами и прямо говорил, что санитайзера по
  * `pending_approval` нет вовсе; отказ же — обычный будний день, без всякого
- * краша.
+ * краша. Санитар — эта самая функция; оговорку в ту ветку дописали тем же
+ * аудитом.
  *
  * `forbidden` — не новое слово, а ровно то, что в этом вокабуляре значит
  * «наружу не ушло, потому что не разрешили»: тем же статусом пишет свои отказы
@@ -342,10 +379,11 @@ export function finalizeActionRow(
  * отдельным PR; ни один счётчик (`alerting.ts` — `rate_limited`, `digest.ts` —
  * `error`) на `forbidden` не смотрит, так что метрики правка не двигает.
  *
- * Одобрение сюда не заходит: у него последствие уже записано СВОЕЙ строкой —
- * `executeApproved` идёт через `dispatchAndAudit`, а тот заводит пару
- * `attempted` → `ok`/`error` с тем же `request_id`. Перевести здесь и её
- * значило бы посчитать одно действие дважды в том же статусе.
+ * Одобрение, дошедшее до диспатча, сюда не заходит: у него последствие уже
+ * записано СВОЕЙ строкой — `executeApproved` идёт через `dispatchAndAudit`, а
+ * тот заводит пару `attempted` → `ok`/`error`. Перевести в исход и первую
+ * значило бы посчитать одно действие дважды. Её закрывает
+ * `settleApprovedActionRow` ниже — решением, а не исходом.
  *
  * Событие в шину не поднимаем: `forbidden` не терминален в смысле
  * TERMINAL_STATUSES (гейт пишет свои отказы молча), а открытая вкладка про
@@ -360,7 +398,55 @@ export function closeGatedActionRow(actionId: string, error: string): boolean {
       `UPDATE agent_actions SET status='forbidden', error=?
        WHERE id=? AND status='pending_approval'`,
     )
-    .run(error.slice(0, 2000), actionId);
+    // Скраб ПЕРЕД обрезкой, а не после: обрезанный секрет перестаёт совпадать
+    // с правилом, и наружу уходит его начало нетронутым (см. `scrubbedHead`
+    // в lib/log.ts — тот же помощник, та же каверза).
+    .run(scrubSecretString(error).slice(0, 2000), actionId);
+  return res.changes > 0;
+}
+
+/**
+ * Одобрено и отдано на исполнение: строку гейта закрываем решением.
+ *
+ * Аудит 2026-09-14. `closeGatedActionRow` закрывал отказ, протухание и отказы
+ * `executeApproved` до диспатча, а самый частый исход — одобрение, дошедшее
+ * до `dispatchAndAudit`, — оставлял первую строку в `pending_approval`
+ * навсегда. Замер: после успешного исполнения в журнале две строки,
+ * `pending_approval` и `ok`. Каждое одобренное действие копилось «ждёт
+ * аппрув» в `/audit`, в ленте Mini App, в GET_LOGS у самой модели и в ряду
+ * `agent_actions_recent{status="pending_approval"}` метрики.
+ *
+ * Зовётся ДО `dispatchAndAudit`, сразу за последним отказом: решение к этому
+ * моменту окончательное, а долгий вызов, прерванный рестартом, иначе оставил
+ * бы строку открытой — санитара по `pending_approval` у одобренной заявки нет.
+ *
+ * Почему не `ok`/`error`: исход уже записан строкой исполнения, вторая копия
+ * удвоила бы счётчики (`digest.ts` считает `error`, лента — `ok`). Почему не
+ * `forbidden`: действие как раз разрешили, и вкладка «запрещено» соврала бы
+ * обратное. `approved` — пара к `forbidden`: «решение принято, наружу пошло,
+ * чем кончилось — в строке исполнения». Ни один счётчик исходов на него не
+ * смотрит; в TERMINAL_STATUSES его нет по той же причине, что и `forbidden`
+ * (событие о решении шлёт `decideApproval`).
+ *
+ * Две строки одного действия связаны `request_id`: `gateOrDispatch` заводит
+ * `ctx.requestId` до записи гейтовой строки, заявка хранит его, а
+ * `executeApproved` передаёт его в `dispatchAndAudit`. Поэтому крах МЕЖДУ этой
+ * функцией и исполнением различим постфактум: строка `approved` без строки
+ * исполнения с тем же `request_id` и `action_type`. Пара полей, а не один
+ * `request_id`: он общий на весь ход роли, и за ход действий бывает несколько.
+ * (Первая редакция этого абзаца утверждала обратное — по замеру на тестовом
+ * хелпере, который пишет гейтовую строку в обход `gateOrDispatch`.)
+ *
+ * `WHERE status='pending_approval'` — тот же приём, что у соседей: уже
+ * закрытую строку (отказ, протухание) не перепишет.
+ */
+export function settleApprovedActionRow(actionId: string): boolean {
+  const res = db
+    .prepare(
+      `UPDATE agent_actions SET status='approved'
+       WHERE id=? AND status='pending_approval'`,
+    )
+    .run(actionId);
   return res.changes > 0;
 }
 

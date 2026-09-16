@@ -29,8 +29,8 @@ export interface AvailabilityDeps {
   getHealth?: (agentKey: string) => HealthSnapshot | undefined;
   /**
    * Override the «агент остановлен» lookup (tests). Раньше поле звалось
-   * `isPaused` — и имя было точным описанием бага: спрашивали про одну колонку
-   * из двух.
+   * isPaused — и имя было точным описанием бага: спрашивали про одну колонку
+   * из двух. (Без обратных кавычек намеренно: такого поля больше нет.)
    */
   isStopped?: (agentKey: string) => boolean;
 }

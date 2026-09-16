@@ -130,7 +130,7 @@ describe("--dry-run действительно проверяет и ничег�
       // План должен быть виден: какой цвет активен и куда поедет staging.
       expect(r.out).toContain("agent-team-blue");
       expect(r.out).toContain("agent-team-green");
-      expect(r.out).toContain("8788");
+      expect(r.out).toContain("8789");
     } finally {
       rmSync(sb.dir, { recursive: true, force: true });
     }

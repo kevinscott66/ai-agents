@@ -106,6 +106,27 @@ describe("PR secret hygiene gate", () => {
     }
   });
 
+  slowTest("allows a bare endpoint URL assigned to a *TOKEN_URL name", () => {
+    const repo = repoWithRange(`const TOKEN_URL = 'https://auth.vendor.example.org/oauth/token';\nconst SESSION_ENDPOINT = "https://api.vendor.io/v1/sessions";\n`);
+    try {
+      expect(scan(repo.dir, repo.base, repo.head).status).toBe(0);
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  slowTest("still rejects a URL that carries credentials in userinfo", () => {
+    const secret = "Zq8" + "r".repeat(20);
+    const repo = repoWithRange(`DATABASE_PASSWORD_URL=https://admin:${secret}@db.internal/app\n`);
+    try {
+      const result = scan(repo.dir, repo.base, repo.head);
+      expect(result.status).toBe(1);
+      expect(`${result.stdout}${result.stderr}`).not.toContain(secret);
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
   slowTest("rejects credential-shaped additions without echoing the value", () => {
     const token = "1234567890:" + "A".repeat(35);
     const repo = repoWithRange(`TG_TOKEN=${token}\n`);

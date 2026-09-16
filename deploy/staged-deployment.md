@@ -25,7 +25,7 @@ The deployment workflow will:
 
 1. Detect which service is currently active (blue/green)
 2. Deploy code to the inactive service
-3. Start the inactive service on alternate port (8788)
+3. Start the inactive service on alternate port (8789 — 8788 belongs to the Mac bridge)
 4. Health check the staging service
 5. If healthy: stop active service, reconfigure staging to production port (8787), rename services
 6. If unhealthy: stop staging service, keep production running

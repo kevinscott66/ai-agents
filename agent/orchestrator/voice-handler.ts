@@ -4,8 +4,16 @@
  * Discrete `bot.on("voice")` registration. Closes only over the bot, its
  * CharacterDef, the resolved RunningBot, and the chat allowlist — everything
  * else (recordMessage/transcribeVoice/log) is a module import, so the
- * handler is a pure, side-effect-free-to-extract block. Behaviour is unchanged
- * from the inline version (T-109 Whisper transcription flow).
+ * handler is a pure, side-effect-free-to-extract block (T-109 Whisper
+ * transcription flow).
+ *
+ * Аудит 2026-09-11: здесь было «Behaviour is unchanged from the inline
+ * version». С выноса добавлены три гейта, и каждый по собственному признанию
+ * в коде поведение МЕНЯЛ: стоп-гейт («оркестратор молчал в тексте и отвечал
+ * голосом, продолжая тратить»), анти-дуп (аудит 2026-08-28), лимит ingest
+ * («на этом пути счётчик не тратился вообще»). Читатель, разбирающий «почему
+ * голосовое не обработалось», принимал файл за прозрачную обёртку и шёл
+ * проверять Whisper и Telegram, не заглянув в три ранних `return` внутри.
  */
 import { Telegraf, type Context } from "telegraf";
 import type { CharacterDef } from "../characters/index.ts";
@@ -18,6 +26,7 @@ import { getErrorMessage } from "../lib/errors.ts";
 import { agentStopReason } from "../lib/permissions.ts";
 import { checkAndConsumeIngestLimit } from "../lib/rate-limits.ts";
 import { shouldProcessTrigger } from "../lib/trigger-anti-dup.ts";
+import { cutToCodeUnits } from "../lib/text-cut.ts";
 
 /**
  * Потолок на скачивание ogg из Telegram.
@@ -257,7 +266,10 @@ export function registerVoiceHandler(
             await ctx.reply("Агент: речь распознана, но выполнить запрос не удалось. Проверь статус задачи перед повтором.");
           }
         } else {
-          await ctx.reply(`🎤 Распознано: "${transcribedText.slice(0, 100)}${transcribedText.length > 100 ? "..." : ""}"`);
+          // Аудит 2026-09-11: срез по единицам UTF-16 оставлял одинокий суррогат
+          // от эмодзи на сотой позиции; правило живёт в lib/text-cut.ts.
+          const shown = cutToCodeUnits(transcribedText, 100);
+          await ctx.reply(`🎤 Распознано: "${shown}${shown.length < transcribedText.length ? "..." : ""}"`);
         }
       } catch (error) {
         // `log.error` вторым аргументом ждёт LogData, а не Error: голый Error

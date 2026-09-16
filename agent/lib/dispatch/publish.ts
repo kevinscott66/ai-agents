@@ -37,9 +37,9 @@ export type PublishDispatchResult =
   | { ok: true; result: unknown }
   // `sideEffect` — «провал, но что-то уже видно снаружи»; см. HandlerResult в
   // dispatch/helpers.ts. `gateOrDispatch` (action-dispatch.ts) читает именно
-  // его и по нему НЕ возвращает слоты rate-limit. Номера строк тут стояли
-  // (helpers.ts:72, action-dispatch.ts:1680) и оба уехали — ссылаемся на
-  // символы, как в action-dispatch.ts рядом с ActionResult.
+  // его и по нему НЕ возвращает слоты rate-limit. Номера строк тут стояли и
+  // оба уехали — ссылаемся на символы, как в action-dispatch.ts рядом с
+  // ActionResult.
   | { ok: false; error: string; sideEffect?: boolean };
 
 const RU_MONTHS = [
@@ -186,7 +186,7 @@ export async function handlePublishToChannel(
     // публикация с картинкой. В логе VPS запись есть, у модели — нет: она
     // отчитывалась «пост с обложкой опубликован», обложку никто не чинил, и
     // следующий пост падал так же. Ровно как `truncated` ниже и
-    // `fallback_from`/`fallback_reason` в media.ts:188 — расхождение
+    // `fallback_from`/`fallback_reason` в media.ts — расхождение
     // «просили / получилось» обязано доехать до вызывающего.
     let coverDropped: string | undefined;
     // Аудит 2026-08-28: цепочка обложки ниже смотрела на `photoUrl` только в

@@ -4,13 +4,13 @@
  *
  * `executeApproved` (lib/commands.ts) на любой `!res.ok` безусловно звал
  * `refundRateLimit` + `refundChatRateLimits` — с комментарием «Как в
- * gateOrDispatch». В gateOrDispatch (`action-dispatch.ts:1686`) при этом
+ * gateOrDispatch». В самом `gateOrDispatch` (action-dispatch.ts) при этом
  * стоит `if (res.sideEffect) refundNeeded = false;`: провал, уже оставивший
  * след снаружи, не рефандится. Аудит 2026-08-21 закрыл эту дыру на прямом
  * пути агента и не заметил вторую копию логики за очередью одобрений.
  *
  * `sendChunked` бросает `PartialSendError` ПОСЛЕ доставки частей 1..k,
- * `partialSendFailure` (`dispatch/telegram.ts:234`) честно ставит
+ * `partialSendFailure` (`dispatch/telegram.ts`) честно ставит
  * `sideEffect: true` — но здесь этот флаг никто не читал. Каждое такое
  * одобрение клало в чат k сообщений и не тратило ни одного слота.
  *
