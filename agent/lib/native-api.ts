@@ -1,5 +1,5 @@
 import { voiceApi } from './native-voice.ts';
-import { compactNativeKnowledge, knowledgePrompt, knowledgeState } from "./native-knowledge-runtime.ts";
+import { compactNativeKnowledge, knowledgePrompt, knowledgeState, scopedKnowledgeReader } from "./native-knowledge-runtime.ts";
 import { attachmentId, parseUpload, locationValue, readMediaJson, type NativeMediaInput } from './native-media.ts';
 import { nativeAccess, type NativeAccess } from './native-access.ts';
 import { isAssistantOwner as permitted } from './assistant-auth.ts';
@@ -175,7 +175,7 @@ export async function nativeApi(req: Request, injectedStore?: NativeAccess): Pro
         if(process.env.NATIVE_APP_ENABLED!=='true'||!live||live.userId!==identity.userId||!permitted(identity.userId)||store.get(id,identity.device)?.status!=='running')throw new Error('native_turn_inactive');
         store.append(id,answer,agentKey);
       };
-      void Promise.resolve().then(() => nativeTurnContext.run({userId:identity.userId,turnId:id,conversationId:store.turnConversation(id)!,knowledge:knowledgePrompt(store,identity.userId,store.turnConversation(id)!),reply:async (agentKey,answer)=>{deliver(answer,agentKey);return {message_id:-Date.now(),date:Math.floor(Date.now()/1000)};},mediaSink:store.artifactSink(id,identity.userId,identity.device,store.turnConversation(id)!),linkApproval: approvalId => store.linkApproval(approvalId,id,identity.userId)}, () => run(identity.userId, text, answer => deliver(answer), typeof conversationId === 'string' ? store.history(conversationId,identity.userId)!.messages.slice(-40) : undefined,store.media.input(ids,identity.userId,location)))).then(() => {
+      void Promise.resolve().then(() => nativeTurnContext.run({userId:identity.userId,turnId:id,conversationId:store.turnConversation(id)!,knowledge:knowledgePrompt(store,identity.userId,store.turnConversation(id)!,text),readKnowledge:scopedKnowledgeReader(store,identity.userId,store.turnConversation(id)!),reply:async (agentKey,answer)=>{deliver(answer,agentKey);return {message_id:-Date.now(),date:Math.floor(Date.now()/1000)};},mediaSink:store.artifactSink(id,identity.userId,identity.device,store.turnConversation(id)!),linkApproval: approvalId => store.linkApproval(approvalId,id,identity.userId)}, () => run(identity.userId, text, answer => deliver(answer), typeof conversationId === 'string' ? store.history(conversationId,identity.userId)!.messages.slice(-40) : undefined,store.media.input(ids,identity.userId,location)))).then(() => {
         if (!store.get(id, identity.device)?.replies.length) store.append(id, 'Агент не вернул ответ. Проверь состояние роли и лимиты.');
         store.finish(id, 'done');
         const dialog=store.turnConversation(id);
