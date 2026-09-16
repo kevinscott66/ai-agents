@@ -1,6 +1,6 @@
 import Foundation
 
-/// Pure preparation for spoken replies; never sends text to a remote service.
+/// Pure preparation for spoken replies. The text itself is only cleaned here.
 enum SpeechText {
     static func normalize(_ source: String) -> String {
         var text = String(source.prefix(24_000)).replacingOccurrences(of: "\r\n", with: "\n")
@@ -49,6 +49,11 @@ import SwiftUI
     private var queuedTexts: [String] = []
     private var ownsPlayback = false
     private var interruptionObserver: NSObjectProtocol?
+    /// Paired server whose neural voice is shared with voice conversations; the device voice is the fallback.
+    var server: String?
+    private var serverTask: Task<Void, Never>?
+    private var player: AVAudioPlayer?
+    private var playback = UUID()
 
     private override init() {
         voiceIdentifier = UserDefaults.standard.string(forKey: Self.identifierPreference) ?? ""
@@ -115,20 +120,11 @@ import SwiftUI
     }
     private func startPlayback(_ text: String) {
         error = nil
-        reloadVoices()
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playback, mode: .spokenAudio, options: .duckOthers)
             try session.setActive(true)
             ownsPlayback = true
-            let utterance = AVSpeechUtterance(string: text)
-            utterance.voice = selectedVoice
-            utterance.rate = rate
-            utterance.pitchMultiplier = 1
-            utterance.volume = 1
-            utteranceID = ObjectIdentifier(utterance)
-            isSpeaking = true
-            synthesizer.speak(utterance)
         } catch {
             queuedTexts = []
             utteranceID = nil
@@ -136,11 +132,72 @@ import SwiftUI
             isPaused = false
             releasePlayback()
             self.error = "Не удалось включить озвучивание. \(error.localizedDescription)"
+            return
+        }
+        isSpeaking = true
+        if let server, let token = Credentials.read(server: server) {
+            playFromServer(text, server: server, token: token)
+        } else {
+            speakOnDevice(text)
+        }
+    }
+    private func speakOnDevice(_ text: String) {
+        reloadVoices()
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.voice = selectedVoice
+        utterance.rate = rate
+        utterance.pitchMultiplier = 1
+        utterance.volume = 1
+        utteranceID = ObjectIdentifier(utterance)
+        synthesizer.speak(utterance)
+    }
+    /// Same server voice as the voice conversation, played chunk by chunk.
+    private func playFromServer(_ text: String, server: String, token: String) {
+        let id = UUID()
+        playback = id
+        serverTask = Task { [weak self] in
+            guard let self else { return }
+            let api = AgentAPI(server: server)
+            var played = false
+            do {
+                for chunk in VoiceConversationPolicy.chunks(text) {
+                    let audio = try await api.speechAudio(chunk, expectedToken: token)
+                    guard self.playback == id else { return }
+                    let output = try AVAudioPlayer(data: audio)
+                    guard output.prepareToPlay(), output.play() else { throw AgentError.message("Не удалось воспроизвести ответ") }
+                    self.player = output
+                    played = true
+                    while self.playback == id, output.isPlaying || self.isPaused {
+                        try await Task.sleep(for: .milliseconds(100))
+                    }
+                    self.player = nil
+                    guard self.playback == id else { return }
+                }
+                self.serverTask = nil
+                self.advance(completed: true)
+            } catch is CancellationError {
+            } catch {
+                guard self.playback == id else { return }
+                self.player = nil
+                self.serverTask = nil
+                if played {
+                    self.error = "Озвучивание прервано: \(error.localizedDescription)"
+                    self.advance(completed: false)
+                } else {
+                    // Server voice unavailable: still read the reply with the device voice.
+                    self.speakOnDevice(text)
+                }
+            }
         }
     }
     func stop() {
         queuedTexts = []
         utteranceID = nil
+        playback = UUID()
+        serverTask?.cancel()
+        serverTask = nil
+        player?.stop()
+        player = nil
         synthesizer.stopSpeaking(at: .immediate)
         isSpeaking = false
         isPaused = false
@@ -148,6 +205,15 @@ import SwiftUI
     }
     func togglePause() {
         guard isSpeaking else { return }
+        if let player {
+            if isPaused {
+                if player.play() { isPaused = false }
+            } else {
+                player.pause()
+                isPaused = true
+            }
+            return
+        }
         if isPaused {
             if synthesizer.continueSpeaking() { isPaused = false }
         } else if synthesizer.pauseSpeaking(at: .immediate) { isPaused = true }
@@ -163,6 +229,9 @@ import SwiftUI
     private func finished(_ id: ObjectIdentifier, completed: Bool) {
         guard utteranceID == id else { return }
         utteranceID = nil
+        advance(completed: completed)
+    }
+    private func advance(completed: Bool) {
         if completed, !queuedTexts.isEmpty {
             startPlayback(queuedTexts.removeFirst())
             return
@@ -188,9 +257,9 @@ import SwiftUI
         Form {
             Section("Озвучивание ответов") {
                 Toggle("Озвучивать новые ответы автоматически", isOn: $automaticallySpeak)
-                Text("История при открытии диалога не озвучивается. Голос создаётся на устройстве.").font(.footnote).foregroundStyle(.secondary)
+                Text("История при открытии диалога не озвучивается. Голос тот же, что в голосовом разговоре; без связи с сервером используется голос устройства.").font(.footnote).foregroundStyle(.secondary)
             }
-            Section("Голос") {
+            Section("Голос устройства (запасной)") {
                 Picker("Русский голос", selection: $voice.voiceIdentifier) {
                     Text("Автоматически").tag("")
                     ForEach(voice.availableVoices, id: \.identifier) { item in

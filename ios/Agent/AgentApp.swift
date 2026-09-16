@@ -333,7 +333,8 @@ struct RootView: View {
             if !conversationVoice, VoiceOutput.autoSpeak, scenePhase == .active, let reply = model.newReplyForSpeech { voice.stop(); speech.enqueue(reply.text) }
         }
         .onChange(of: model.attachmentGeneration) { _, _ in cancelMediaPreparation(); locator.cancel() }
-        .onChange(of: server) { _, _ in conversationVoice = false; cancelMediaPreparation(); locator.cancel(); voice.stop(); model.stopSpeech() }
+        .onAppear { speech.server = server }
+        .onChange(of: server) { _, value in speech.server = value; conversationVoice = false; cancelMediaPreparation(); locator.cancel(); voice.stop(); model.stopSpeech() }
         .onChange(of: menu) { _, opened in if opened { voice.stop(); model.stopSpeech() } }
         .onChange(of: actions) { _, opened in if opened { voice.stop(); model.stopSpeech() } }
         .onChange(of: settings) { _, opened in if opened { voice.stop(); model.stopSpeech() } }
