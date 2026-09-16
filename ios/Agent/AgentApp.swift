@@ -12,7 +12,7 @@ struct ChatLine: Identifiable, Codable {
 @MainActor final class ChatModel: ObservableObject {
     @Published var lines: [ChatLine] = []
     @Published var busy = false
-    @Published var pending = UserDefaults.standard.string(forKey: "pendingTurn") != nil
+    @Published var pending = UserDefaults.standard.string(forKey: "pendingTurn") != nil && UserDefaults.standard.string(forKey: "pendingServer") != nil
     @Published var error: String?
     @Published var draft = ""
     @Published var attachments: [AttachmentDraft] = []
@@ -166,8 +166,9 @@ struct ChatLine: Identifiable, Codable {
         return true
     }
     func resume() {
-        guard !busy, let pendingServer = UserDefaults.standard.string(forKey: "pendingServer"),
-              let id = UserDefaults.standard.string(forKey: "pendingTurn") else { return }
+        guard !busy else { return }
+        guard let pendingServer = UserDefaults.standard.string(forKey: "pendingServer"),
+              let id = UserDefaults.standard.string(forKey: "pendingTurn") else { clearPending(); return }
         bind(server: pendingServer)
         guard let token = boundToken else { error = "Подключите устройство в настройках"; return }
         conversationId = UserDefaults.standard.string(forKey:"pendingConversation")
@@ -375,7 +376,7 @@ struct RootView: View {
                             guard model.send(server: server) else { throw AgentError.message(model.error ?? "Не удалось отправить запрос") }
                         }) } label: { Label("Панель команды", systemImage: "rectangle.grid.2x2") }
                         NavigationLink { ActionsView { choose($0); menu = false } } label: { Label("Все действия", systemImage: "square.grid.2x2") }
-                        NavigationLink { SettingsView(server: $server, connectionLocked: !server.isEmpty && (model.busy || model.pending)) } label: { Label("Подключение", systemImage: "slider.horizontal.3") }
+                        NavigationLink { SettingsView(server: $server, connectionLocked: !server.isEmpty && model.busy) } label: { Label("Подключение", systemImage: "slider.horizontal.3") }
                     }
                     Section("Диалоги") {
                         if let error = model.historyError { Text(error).font(.caption).foregroundStyle(.secondary) }
@@ -405,7 +406,7 @@ struct RootView: View {
                 .presentationDetents([.large]).presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $settings) {
-            NavigationStack { SettingsView(server: $server, connectionLocked: !server.isEmpty && (model.busy || model.pending)).toolbar { ToolbarItem(placement: .confirmationAction) { Button("Готово") { settings = false } } } }
+            NavigationStack { SettingsView(server: $server, connectionLocked: !server.isEmpty && model.busy).toolbar { ToolbarItem(placement: .confirmationAction) { Button("Готово") { settings = false } } } }
                 .presentationDragIndicator(.visible)
         }
         .alert("Сбросить ожидание?", isPresented: $abandon) {
