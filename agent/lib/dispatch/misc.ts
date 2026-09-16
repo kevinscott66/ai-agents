@@ -13,6 +13,8 @@ import { InvalidSlugError, ReservedSlugError } from "../memory.ts";
 import type { UserbotHandle } from "../userbot.ts";
 import type { PayloadByType } from "../action-payload.ts";
 import { pinnedChatId, pinnedChatNote, type HandlerResult } from "./helpers.ts";
+import { cancelReminder, createReminder, formatMsk, isoMsk } from "../reminders.ts";
+import { log } from "../log.ts";
 
 export type MiscHandlerResult = HandlerResult;
 
@@ -269,4 +271,54 @@ export function handleSchedulePost(
       note: "запись в календаре: автопубликации нет, в назначенное время пост нужно отправить через PUBLISH_TO_CHANNEL",
     },
   };
+}
+
+/**
+ * CREATE_REMINDER. Чат доставки — всегда чат-источник: `payload.chatId`
+ * (если модель его подсунула) игнорируется и только журналируется. Окно
+ * времени проверяется ещё раз внутри createReminder: между buildPayload и
+ * исполнением мог пройти апрув.
+ */
+export function handleCreateReminder(
+  payload: PayloadByType["CREATE_REMINDER"],
+  ctx: MiscHandlerContext,
+): MiscHandlerResult {
+  const chatId = pinnedChatId(payload.chatId, ctx.chatId, "CREATE_REMINDER");
+  const res = createReminder({
+    chatId,
+    agentKey: ctx.agentKey,
+    text: payload.text,
+    remindAt: payload.remindAt,
+  });
+  if (!res.ok) return { ok: false, error: res.error };
+  const r = res.reminder;
+  const note = pinnedChatNote(payload.chatId, ctx.chatId);
+  return {
+    ok: true,
+    result: {
+      id: r.id,
+      at: isoMsk(r.remind_at),
+      at_msk: formatMsk(r.remind_at),
+      status: r.status,
+      note: note ?? "напоминание придёт в этот чат в указанное время",
+    },
+  };
+}
+
+/** CANCEL_REMINDER — только напоминания своего чата. */
+export function handleCancelReminder(
+  payload: PayloadByType["CANCEL_REMINDER"],
+  ctx: MiscHandlerContext,
+): MiscHandlerResult {
+  const chatId = pinnedChatId(payload.chatId, ctx.chatId, "CANCEL_REMINDER");
+  const res = cancelReminder(payload.id, chatId);
+  if (res.ok) return { ok: true, result: { id: res.id, status: "cancelled" } };
+  if (res.cause === "other_chat") {
+    log.warn("[reminders] cancel of another chat's reminder refused", {
+      agentKey: ctx.agentKey,
+      chatId,
+      id: payload.id,
+    });
+  }
+  return { ok: false, error: res.error };
 }

@@ -12,6 +12,7 @@ import { closeAgentPromptProposals } from "./dispatch/agent-prompt.ts";
 import { crossChatRequested } from "./dispatch/helpers.ts";
 import { closeGatedActionRow } from "./audit.ts";
 import { ruDateTime } from "./delabs-text.ts";
+import { formatMsk } from "./reminder-time.ts";
 
 /**
  * `failed` — человек одобрил, но исполнение упало (см. markApprovalFailed).
@@ -529,6 +530,14 @@ const PREVIEW_BY_ACTION: Record<
       str(p, "channel"),
       str(p, "content") || str(p, "text"),
     ]),
+  // Время первым: без него карточка «одобрить напоминание» не говорит, когда
+  // оно придёт. Мс переводим в МСК — тем же форматом, что и в самом сообщении.
+  CREATE_REMINDER: (p) =>
+    join([
+      typeof p.remindAt === "number" ? `${formatMsk(p.remindAt)} МСК` : "",
+      str(p, "text"),
+    ]),
+  CANCEL_REMINDER: (p) => join([`отменить напоминание ${str(p, "id")}`]),
   // Аудит 2026-08-29: у DELETE/PIN/FORWARD в payload'е строк нет вовсе —
   // только числа и boolean'ы, а общий путь ниже берёт лишь строковые поля. То
   // есть карточка печаталась одной головой: «<uuid> orchestrator

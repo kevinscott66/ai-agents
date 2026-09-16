@@ -90,6 +90,9 @@ const BLOCKED_TABLES = [
   // `sqlite_dbpage` в сборке нет; предпосылку держит тест
   // audit-2026-09-14-query-db-dbstat.
   "dbstat",
+  // Тексты напоминаний — переписка конкретного чата; читаются только через
+  // LIST_REMINDERS, суженный до своего чата.
+  "reminders",
 ];
 
 const ALLOWED_PREFIX =

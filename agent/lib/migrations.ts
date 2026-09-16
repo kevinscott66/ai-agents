@@ -1509,6 +1509,52 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    // Напоминания в чат (CREATE_REMINDER / LIST_REMINDERS / CANCEL_REMINDER,
+    // доставка — lib/reminders.ts). Время в мс, как у `content_calendar`.
+    //
+    // 'sending' — промежуточный статус атомарного захвата: доставщик переводит
+    // строку scheduled → sending одним UPDATE и шлёт, только если захватил сам.
+    // Рестарт посреди отправки оставляет 'sending', и такая строка больше не
+    // отправляется — лучше честный 'failed', чем дубль.
+    //
+    // Права: разрешено всем ролям без апрува. Напоминание уходит только в чат,
+    // где его попросили (пиннинг в хендлере), — по последствиям это отложенный
+    // ответ в тот же чат, а не новый адресат. Режим manual по-прежнему
+    // спрашивает подтверждение, locked — отказывает.
+    name: "057_reminders",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS reminders (
+          id TEXT PRIMARY KEY,
+          chat_id INTEGER NOT NULL,
+          agent_key TEXT NOT NULL,
+          text TEXT NOT NULL,
+          remind_at INTEGER NOT NULL,
+          status TEXT NOT NULL DEFAULT 'scheduled'
+            CHECK (status IN ('scheduled','sending','sent','cancelled','failed')),
+          attempts INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          claimed_at INTEGER,
+          sent_at INTEGER,
+          error TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_reminders_due
+          ON reminders(status, remind_at);
+        CREATE INDEX IF NOT EXISTS idx_reminders_chat
+          ON reminders(chat_id, status);
+      `);
+      const ins = db.prepare(
+        `INSERT OR IGNORE INTO permissions(agent_key, action_type, allowed, requires_approval)
+         VALUES (?, ?, 1, 0)`,
+      );
+      for (const c of CHARACTERS) {
+        ins.run(c.key, "CREATE_REMINDER");
+        ins.run(c.key, "CANCEL_REMINDER");
+      }
+    },
+  },
 ];
 
 /**

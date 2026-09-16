@@ -143,6 +143,14 @@ struct Credentials {
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let data = item as? Data else { return nil }
         return String(data: data, encoding: .utf8)
     }
+    /// Servers this iPhone already holds a device key for; OpenFlux settings share the service but not the https:// account.
+    static func pairedServers() -> [String] {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "tech.dobropalm.agent",
+            kSecMatchLimit as String: kSecMatchLimitAll, kSecReturnAttributes as String: true]
+        var items: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &items) == errSecSuccess, let list = items as? [[String: Any]] else { return [] }
+        return list.compactMap { $0[kSecAttrAccount as String] as? String }.filter { $0.hasPrefix("https://") }.sorted()
+    }
     static func delete(server: String) {
         SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "tech.dobropalm.agent", kSecAttrAccount as String: server] as CFDictionary)
     }

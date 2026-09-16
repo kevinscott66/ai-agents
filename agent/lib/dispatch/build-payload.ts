@@ -14,6 +14,11 @@ import {
   buildGenerateSvgImagePayload,
   enumField,
 } from "./media.ts";
+import {
+  checkReminderWindow,
+  parseReminderAt,
+  REMINDER_TEXT_MAX,
+} from "../reminder-time.ts";
 
 const ROLE_KEYS = CHARACTERS.map((c) => c.key);
 const ROLE_KEYS_SET = new Set<string>(ROLE_KEYS);
@@ -854,6 +859,34 @@ export function buildPayload<T extends ActionType>(
       }
 
       const payload: PayloadFor<"SCHEDULE_POST"> = { channel, content, scheduledAt };
+      return { ok: true, payload: payload as PayloadFor<T> };
+    }
+    case "CREATE_REMINDER": {
+      const textField = proseField(i.text, "text");
+      if (!textField.ok) return textField;
+      const text = textField.value.trim();
+      if (!text) return { ok: false, error: "text is required" };
+      if (text.length > REMINDER_TEXT_MAX) {
+        return { ok: false, error: `text is too long (max ${REMINDER_TEXT_MAX} chars)` };
+      }
+      const at = parseReminderAt(i.at);
+      if (!at.ok) return at;
+      const win = checkReminderWindow(at.at, Date.now());
+      if (!win.ok) return win;
+      const payload: PayloadFor<"CREATE_REMINDER"> = {
+        chatId,
+        text,
+        remindAt: at.at,
+      };
+      return { ok: true, payload: payload as PayloadFor<T> };
+    }
+    case "CANCEL_REMINDER": {
+      const id = typeof i.id === "string" ? i.id.trim() : "";
+      if (!id) return { ok: false, error: "id is required (see LIST_REMINDERS)" };
+      const payload: PayloadFor<"CANCEL_REMINDER"> = {
+        chatId,
+        id,
+      };
       return { ok: true, payload: payload as PayloadFor<T> };
     }
     case "MAC_STOP": {

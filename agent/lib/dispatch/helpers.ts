@@ -48,6 +48,10 @@ export const CHAT_PINNED_ACTIONS = new Set<string>([
   "LIST_RECENT_MESSAGES",
   "CREATE_TASK",
   "SPLIT_TASK",
+  // Напоминание уходит позже и без человека в цикле, поэтому адресат — только
+  // чат, где его попросили. Отмена тоже в пределах своего чата.
+  "CREATE_REMINDER",
+  "CANCEL_REMINDER",
 ]);
 
 /**

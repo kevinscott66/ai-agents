@@ -188,4 +188,5 @@ export const INLINE_TOOL_NAMES = new Set<string>([
   "GET_LOGS",
   "LIST_SCHEDULED_POSTS",
   "CANCEL_SCHEDULED_POST",
+  "LIST_REMINDERS",
 ]);
