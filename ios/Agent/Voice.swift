@@ -62,3 +62,51 @@ import SwiftUI
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 }
+
+/// Озвучивает ответы чата тем же серверным голосом, что и голосовой разговор.
+@MainActor final class ReplySpeaker: NSObject, AVAudioPlayerDelegate {
+    private var player: AVAudioPlayer?
+    private var finished: CheckedContinuation<Void, Never>?
+    private var task: Task<Void, Never>?
+    func speak(_ text: String, server: String, token: String, failed: @escaping (String) -> Void) {
+        stop()
+        task = Task {
+            do {
+                for chunk in AgentAPI.speechChunks(text) {
+                    let audio = try await AgentAPI(server: server).speech(chunk, expectedToken: token)
+                    try Task.checkCancellation()
+                    try await play(audio)
+                    try Task.checkCancellation()
+                }
+            } catch is CancellationError {
+            } catch {
+                if !Task.isCancelled { failed(error.localizedDescription) }
+            }
+            if !Task.isCancelled { release() }
+        }
+    }
+    private func play(_ audio: Data) async throws {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playback, mode: .spokenAudio)
+        try session.setActive(true)
+        let player = try AVAudioPlayer(data: audio)
+        player.delegate = self
+        self.player = player
+        await withCheckedContinuation { continuation in
+            finished = continuation
+            if Task.isCancelled || !player.play() { resume() }
+        }
+    }
+    private func resume() { let continuation = finished; finished = nil; continuation?.resume() }
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) { Task { @MainActor in self.resume() } }
+    nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) { Task { @MainActor in self.resume() } }
+    private func release() {
+        player?.stop(); player = nil
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+    func stop() {
+        task?.cancel(); task = nil
+        resume()
+        release()
+    }
+}

@@ -28,6 +28,14 @@ struct ByteFixture: AsyncSequence, AsyncIteratorProtocol {
             rejects { _ = try Pairing(token: invalid, userId: "1").validatedToken() }
         }
         precondition(AgentAPI.conversationTitle(String(repeating: "😀", count: 60)) == String(repeating: "😀", count: 50))
+        // Озвучка: куски склеиваются обратно без потерь, каждый влезает в серверный лимит UTF-16, режется по пробелу.
+        let spoken = String(repeating: "Проверка голоса агента. ", count: 400) + String(repeating: "😀", count: 3_000)
+        let chunks = AgentAPI.speechChunks(spoken)
+        precondition(chunks.joined() == spoken && chunks.count > 2)
+        precondition(chunks.allSatisfy { !$0.isEmpty && $0.utf16.count <= AgentAPI.speechTextLimit / 2 })
+        precondition(chunks[0].last == " ")
+        precondition(AgentAPI.speechChunks("коротко") == ["коротко"] && AgentAPI.speechChunks("").isEmpty)
+        precondition(AgentAPI.speechChunks(String(repeating: "я", count: 10), limit: 4).joined() == String(repeating: "я", count: 10))
         precondition(AgentAPI.conversationTitle(String(repeating: "a", count: 99) + "😀").utf16.count == 99)
         precondition(AgentAPI.conversationTitle(String(repeating: "a", count: 101)).utf16.count == 100)
         for (status, reason) in [(409,"busy"),(409,"conflict"),(503,"lead_unavailable"),(401,"unauthorized")] {

@@ -9,7 +9,8 @@ project knowledge and action confirmations stay on the existing execution path.
 ## Audio
 
 The server calls OpenAI's speech endpoint with `gpt-4o-mini-tts` and `marin`, and
-transcribes recordings with `gpt-4o-mini-transcribe`. Russian language context and
+transcribes recordings with `gpt-4o-mini-transcribe`. The iPhone chat's "speak answer" button uses the same
+speech endpoint, so a replayed text reply sounds like the voice conversation. Russian language context and
 punctuation guidance improve readability without requesting paraphrasing. Speech
 recognition is probabilistic: a transcript can still contain an error.
 
