@@ -11,6 +11,7 @@ import { inferenceProvider } from "./inference-provider.ts";
  *
  * ВАЖНО: квота подписки общая с интерактивным Claude Code владельца.
  */
+import { roleModel, type Effort } from "./role-models.ts";
 import { z } from "zod";
 import { query, tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 // INLINE_TOOL_NAMES берётся из листа constants.ts, а не отсюда: спред по нему
@@ -739,6 +740,18 @@ export function sdkModelOverride(): string | undefined {
 }
 
 /**
+ * Модель и effort хода роли на пути подписки. Роль из таблицы (role-models.ts)
+ * получает свою модель; ключ вне таблицы — прежнее ANTHROPIC_LARGE_MODEL_SDK
+ * или дефолт CLI. В таблице только алиасы CLI (opus/sonnet), неизвестное CLI
+ * имя роняет ход — см. комментарий выше.
+ */
+export function sdkRoleOptions(agentKey: string | undefined): { model?: string; effort?: Effort } {
+  const role = roleModel(agentKey, "sdk");
+  const model = role.model ?? sdkModelOverride();
+  return { ...(model ? { model } : {}), ...(role.effort ? { effort: role.effort } : {}) };
+}
+
+/**
  * Потолок ходов внутри одного вызова SDK.
  *
  * Разбор повторяет tool-loop.ts намеренно (импорт оттуда — цикл: tool-loop сам
@@ -1043,7 +1056,7 @@ export async function runViaAgentSdk(opts: RunWithToolsOpts): Promise<string> {
         settingSources: SETTING_SOURCES,
         hooks: sdkHooks(),
         maxTurns: sdkMaxTurns(),
-        ...(sdkModelOverride() ? { model: sdkModelOverride() } : {}),
+        ...sdkRoleOptions(opts.agentKey),
         // НЕ bypassPermissions: CLI запрещает его под root (VPS-сервис бежит
         // от root → "exited with code 1"). Наши MCP-тулзы явно в allowedTools,
         // так что default-режим пропускает их без промптов.

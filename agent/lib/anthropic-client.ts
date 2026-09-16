@@ -512,7 +512,7 @@ export async function callAnthropic(
     try {
       const response = await callCodex(params, (input, output) => {
         if (agentKey) recordUsage(agentKey, input, output);
-      });
+      }, agentKey);
       return response;
     } finally { release(); }
   }
