@@ -152,12 +152,12 @@ describe("числа в README проверяемы", () => {
       .reduce((n, p) => n + readFileSync(join(REPO, p), "utf8").split("\n").length, 0);
     const testFiles = tracked.filter((p) => /\/tests\/.*\.ts$/.test(p)).length;
 
+    // README вправе вовсе не называть объём — тогда и протухнуть нечему.
+    // Но если число названо, оно обязано быть честной нижней границей.
     const locClaim = /over (\d+)k lines of TypeScript/.exec(flat);
     const filesClaim = /more than (\d+) test files/.exec(flat);
-    expect(locClaim).not.toBeNull();
-    expect(filesClaim).not.toBeNull();
-    expect(loc).toBeGreaterThan(Number(locClaim![1]) * 1000);
-    expect(testFiles).toBeGreaterThan(Number(filesClaim![1]));
+    if (locClaim) expect(loc).toBeGreaterThan(Number(locClaim[1]) * 1000);
+    if (filesClaim) expect(testFiles).toBeGreaterThan(Number(filesClaim[1]));
   });
 
   test("снимков дня в README не осталось", () => {

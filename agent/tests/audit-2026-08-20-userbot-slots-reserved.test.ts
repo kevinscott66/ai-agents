@@ -16,7 +16,7 @@
  *
  * Одновременность ходов здесь не гипотеза: telegraf разбирает пачку из
  * getUpdates через `Promise.all`, а веер по ролям в message-handler идёт без
- * `await` (то же обоснование записано в `agent-sdk-runtime.ts:99` и
+ * `await` (то же обоснование записано в `agent-sdk-runtime.ts:117` и
  * `rate-limits.ts`). Ключ ведра — `userbot:<characterId>:chat:<chatId>`;
  * owner-voice ограничен оркестратором, значит у конкурирующих ходов он один.
  *

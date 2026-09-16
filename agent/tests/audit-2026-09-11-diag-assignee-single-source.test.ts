@@ -61,9 +61,10 @@ describe("имя исполнителя diag-задач записано ров�
 
   test("цикла, которым оправдывали копии, нет", () => {
     // tasks.ts не тянет ни self-diag.ts, ни fix-chain.ts — значит импорт
-    // обратно безопасен, и это проверяется, а не объявляется.
+    // обратно безопасен, и это проверяется, а не объявляется. task-events.ts
+    // тянет только events-bus.ts, а тот — errors.ts и log.ts: цикла нет и там.
     const imports = [...TASKS.matchAll(/from "\.\/([a-z0-9-]+)\.ts"/g)].map((m) => m[1]);
-    expect(imports.sort()).toEqual(["db", "errors", "log", "task-fsm"]);
+    expect(imports.sort()).toEqual(["db", "errors", "log", "task-events", "task-fsm"]);
   });
 
   test("докблок называет прежнюю прозу прежней, а не повторяет её", () => {
