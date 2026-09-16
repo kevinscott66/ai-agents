@@ -9,6 +9,7 @@ import type { Database } from "bun:sqlite";
 import { emitAlert } from "./alerting.ts";
 import { db } from "./db.ts";
 import { log } from "./log.ts";
+import { invalidateTask } from "./task-events.ts";
 
 export const ROLE_PROVIDERS = ["internal", "claude", "codex"] as const;
 export type RoleProvider = (typeof ROLE_PROVIDERS)[number];
@@ -294,6 +295,7 @@ export function enqueueRoleTask(
 
   const item = queueItemById(id, database);
   if (!item) throw new Error("role queue insert did not commit");
+  invalidateTask("task.created", id);
   return item;
 }
 
@@ -454,6 +456,8 @@ export function claimNextRoleTask(
       });
     }
   }
+  for (const recoveredTask of recovered) invalidateTask("task.updated", recoveredTask.taskId);
+  if (claimedId) invalidateTask("task.updated", claimedId);
   return claimedId ? getRoleQueueItem(claimedId, database) : null;
 }
 
@@ -564,6 +568,7 @@ export function completeRoleTask(
     database.prepare(`UPDATE tasks SET status='done', output=?, error=NULL, updated_at=? WHERE id=? AND status='running'`).run(encoded, now, taskId);
   });
   tx.immediate();
+  invalidateTask("task.updated", taskId);
 }
 
 export function failRoleTask(
@@ -592,6 +597,7 @@ export function failRoleTask(
     }
   });
   tx.immediate();
+  invalidateTask("task.updated", taskId);
 }
 
 /**

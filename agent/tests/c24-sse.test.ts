@@ -157,6 +157,24 @@ describe("REST -> bus wiring", () => {
     expect(seen.length).toBeGreaterThanOrEqual(1);
     const payload = seen[0].payload as any;
     expect(payload).toBeTruthy();
-    expect(payload.chat_id).toBe(-42);
+    const created = await r.json() as { task: { id: string } };
+    expect(payload).toEqual({ id: created.task.id });
+    // The same record must appear in the board and reflect its terminal state.
+    for (const status of ["running", "done"]) {
+      const changed = await fetch(`${base}/api/tasks/${created.task.id}/status`, {
+        method: "POST",
+        headers: { "x-telegram-init-data": freshInitData(), "content-type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      expect(changed.status).toBe(200);
+      await changed.arrayBuffer();
+    }
+    const board = await fetch(`${base}/api/tasks?status=done`, {
+      headers: { "x-telegram-init-data": freshInitData() },
+    });
+    expect(board.status).toBe(200);
+    const result = await board.json() as { tasks: { id: string; status: string }[] };
+    expect(result.tasks.find(task => task.id === created.task.id)?.status).toBe("done");
+
   });
 });

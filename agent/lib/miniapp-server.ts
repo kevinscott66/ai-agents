@@ -1575,7 +1575,6 @@ export function startMiniappServer(
                 ? { type: body.type }
                 : undefined,
         });
-        busEmit("task.created", { id: t.id, chat_id: t.chat_id, status: t.status });
         return json({ task: t }, 201);
       } catch (e: any) {
         return json({ error: e?.message ?? String(e) }, 400);
@@ -1607,7 +1606,6 @@ export function startMiniappServer(
           output: body.output,
           error: body.error,
         });
-        busEmit("task.updated", { id: t.id, status: t.status });
         return json({ task: t });
       } catch (e: any) {
         const msg = e?.message ?? String(e);

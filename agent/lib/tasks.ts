@@ -18,6 +18,7 @@ import { TASK_TRANSITIONS, type TaskStatus } from "./task-fsm.ts";
 import { getErrorMessage } from "./errors.ts";
 import { db } from "./db.ts";
 import { log } from "./log.ts";
+import { invalidateTask } from "./task-events.ts";
 
 export type { TaskStatus };
 
@@ -380,6 +381,8 @@ export function createTask(input: CreateTaskInput): Task {
 
   const task = getTask(id);
   if (!task) throw new Error("failed to create task");
+  invalidateTask("task.created", task.id);
+  for (const ancestor of reopenChain) invalidateTask("task.updated", ancestor.id);
   return task;
 }
 
@@ -449,6 +452,7 @@ export function assignTask(id: string, assignedTo: string): Task {
   }
   const updated = getTask(id);
   if (!updated) throw new Error("failed to assign task");
+  invalidateTask("task.updated", updated.id);
   return updated;
 }
 
@@ -561,6 +565,7 @@ export function updateTaskStatus(
       });
     }
   }
+  invalidateTask("task.updated", updated.id);
   return updated;
 }
 
@@ -729,6 +734,7 @@ function forceTerminalStatus(
       const res = db.prepare(sql).run(...([...vals, expected] as never[]));
       if (res.changes !== 1) throw new StaleTaskStatus(expected);
     })();
+    invalidateTask("task.updated", task.id);
   } catch (e) {
     if (!(e instanceof StaleTaskStatus)) throw e;
     log.warn("[tasks] статус изменился под реконсилятором — запись отменена", {

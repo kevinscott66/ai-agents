@@ -1,4 +1,4 @@
-import { useNativeRefresh } from "../lib/native-refresh";
+import { startTaskRefresh, browserTaskRefresh } from "../lib/task-refresh";
 import { useEffect, useState } from "react";
 import { api, formatApiError } from "../lib/api";
 import type { Task, TaskStatus } from "../lib/types";
@@ -147,7 +147,7 @@ export default function Tasks() {
   const beginLoad = useLatestRun();
   const coalescer = useCoalescer();
 
-  useNativeRefresh(load);
+  useEffect(() => startTaskRefresh(load, browserTaskRefresh), [status, assignee, selectedId]);
 
   async function load() {
     const isCurrent = beginLoad();
@@ -160,8 +160,13 @@ export default function Tasks() {
         limit: 100,
       });
       if (!isCurrent()) return;
+      // A detail request may fail independently; keep the fresh board visible.
       setTasks(r.tasks);
       setTruncated(Boolean(r.truncated));
+      const detail = selectedId && !r.tasks.some(task => task.id === selectedId)
+        ? (await api.task(selectedId)).task : null;
+      if (!isCurrent()) return;
+      if (detail) setSelectedSnapshot(detail);
     } catch (e: any) {
       if (isCurrent()) setErr(formatApiError(e));
     } finally {
@@ -185,7 +190,7 @@ export default function Tasks() {
 
   useEffect(() => {
     load();
-  }, [status, assignee]);
+  }, [status, assignee, selectedId]);
 
   // Задачи меняют все 12 агентов, и за один ход команды событий прилетает
   // пачка. Схлопываем: смена фильтра грузит сразу, поток событий — не чаще
@@ -209,7 +214,7 @@ export default function Tasks() {
       unsubs.forEach((u) => u());
       coalescer.cancel();
     };
-  }, [status, assignee]);
+  }, [status, assignee, selectedId]);
 
   function setBusy(id: string, b: boolean) {
     setBusyIds((m) => ({ ...m, [id]: b }));
@@ -270,7 +275,7 @@ export default function Tasks() {
     }
     setNSubmitting(true);
     try {
-      await api.createTask({
+      const created = await api.createTask({
         title: nTitle.trim(),
         chat_id: chatNum,
         assignee: nAssignee || undefined,
@@ -281,7 +286,9 @@ export default function Tasks() {
       setShowNew(false);
       setNTitle("");
       setNInput("");
-      load();
+      setStatus("");
+      setAssignee("");
+      openTask(created.task);
     } catch (e: any) {
       haptic("error");
       toast(formatApiError(e), "error");
@@ -396,6 +403,7 @@ export default function Tasks() {
         <div className="modal-overlay" onClick={closeTask}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h2>{selected.title}</h2>
+            <ErrorBox message={err} onRetry={() => load()} />
             <div className="meta" style={{ marginBottom: 10 }}>
               <span className={`badge ${selected.status}`}>
                 {label(TASK_STATUS_LABELS, selected.status)}
@@ -455,6 +463,7 @@ export default function Tasks() {
         <div className="modal-overlay" onClick={() => setShowNew(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h2>Новая задача</h2>
+            <p className="meta">Создание добавляет задачу в план. Чтобы агент начал исполнение, поручите её лиду в чате.</p>
             <div className="section-title">Название</div>
             <input
               type="text"
