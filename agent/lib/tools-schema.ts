@@ -904,7 +904,8 @@ export async function executeTool(
   if (nativeMemory && ["SEARCH_WIKI", "READ_WIKI", "WRITE_WIKI"].includes(name)) {
     if (nativeMemory.userId !== String(ctx.chatId)) return JSON.stringify({error:"native_owner_mismatch"});
     if (name === "WRITE_WIKI") return JSON.stringify({error:"Память диалога обновляется автоматически после ответа. Общая память проекта меняется только после подтверждения владельца в разделе Память диалога."});
-    return JSON.stringify({scope:"current_conversation_and_approved_project",content:nativeMemory.knowledge ?? "Память этого диалога пока пуста."});
+    const query=String(i.query ?? i.slug ?? '').slice(0,2000);
+    return JSON.stringify({scope:"current_conversation_and_approved_project",content:nativeMemory.readKnowledge?.(query) ?? nativeMemory.knowledge ?? "Память этого диалога пока пуста."});
   }
   if (name === "SEARCH_WIKI") {
     const query = String(i.query ?? "").trim();
