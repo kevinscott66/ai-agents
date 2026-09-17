@@ -28,6 +28,7 @@ import { probeClaudeAuth } from "./auth-preflight.ts";
 import { spawnWithFallback, type ProviderMetadata } from "./provider-fallback.ts";
 import { codexCommand } from "./codex-command.ts";
 import { runAssistantOperation, assistantErrorCode } from "./assistant.ts";
+import { runMacControl, controlErrorCode } from "./macctl.ts";
 import { createDaemonHandshake } from "./auth-handshake.ts";
 import { createAuthGate } from "./auth-gate.ts";
 import { createSocketLifecycle } from "./reconnect.ts";
@@ -494,6 +495,22 @@ function connect(): void {
           sendResult(ws, msg.id, false, undefined, assistantErrorCode(error));
         }).finally(() => { assistantControllers.delete(msg.id); });
         return;
+      case "control": {
+        // Тот же замок, что у помощника: EventKit и osascript по одному за раз.
+        if (assistantControllers.size) {
+          sendResult(ws, msg.id, false, undefined, "assistant_busy");
+          return;
+        }
+        const controller = new AbortController();
+        assistantControllers.set(msg.id, controller);
+        runMacControl(msg.control, undefined, undefined, controller.signal).then(output => {
+          sendChunk(ws, msg.id, "stdout", output);
+          sendResult(ws, msg.id, true, 0);
+        }).catch(error => {
+          sendResult(ws, msg.id, false, undefined, controlErrorCode(error));
+        }).finally(() => { assistantControllers.delete(msg.id); });
+        return;
+      }
       case "run":
         handleRun(ws, msg).catch((e) => {
           console.error("[daemon] handleRun error:", e);

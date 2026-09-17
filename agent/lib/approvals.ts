@@ -13,6 +13,8 @@ import { crossChatRequested } from "./dispatch/helpers.ts";
 import { closeGatedActionRow } from "./audit.ts";
 import { ruDateTime } from "./delabs-text.ts";
 import { formatMsk } from "./reminder-time.ts";
+import { describeMacControl, parseMacControl } from "./mac-control.ts";
+import { approvalCategories, CATEGORY_LABEL } from "./approval-policy.ts";
 
 /**
  * `failed` — человек одобрил, но исполнение упало (см. markApprovalFailed).
@@ -507,6 +509,19 @@ const PREVIEW_BY_ACTION: Record<
       str(p, "project") && `project=${str(p, "project")}`,
       str(p, "prompt"),
     ]),
+  // Карточка называет команду словами и, если она попала под политику
+  // владельца, — почему спрашивают. Время — по Москве, как у напоминаний.
+  MAC_CONTROL: (p) => {
+    const { _userId, _delegated, ...raw } = p;
+    const control = parseMacControl(raw);
+    if (!control) return "некорректная команда Mac";
+    const why = approvalCategories("MAC_CONTROL", p).map((c) => CATEGORY_LABEL[c]);
+    return join([
+      describeMacControl(control, (ms) => `${formatMsk(ms)} МСК`),
+      why.length ? `политика владельца: ${why.join(", ")}` : "",
+      _delegated === true ? "вызов пришёл делегированием" : "",
+    ]);
+  },
   SPAWN_ROLE: (p) =>
     join([
       `новая роль «${str(p, "name") || "?"}»`,

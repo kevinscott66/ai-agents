@@ -7,6 +7,7 @@
  */
 import type { ActionType } from "./permissions.ts";
 import type { TaskStatus } from "./tasks.ts";
+import type { MacControl } from "./mac-control.ts";
 
 export interface SendMessagePayload {
   chatId?: number;
@@ -246,6 +247,12 @@ export interface WriteWikiPayload {
   content: string;
 }
 
+/**
+ * Команда из закрытого списка lib/mac-control.ts. `_userId`/`_delegated`
+ * дописывает tool-loop так же, как у MAC_RUN_CLAUDE.
+ */
+export type MacControlPayload = MacControl & { _userId?: string; _delegated?: boolean };
+
 export interface MacRunClaudePayload {
   allowFallback?: boolean;
   provider?: "claude" | "codex";
@@ -417,6 +424,7 @@ export type PayloadByType = {
    * мёртвый аварийный тормоз (уже случалось, SEC-audit LOW-2).
    */
   MAC_STOP: { _userId?: string; _delegated?: boolean };
+  MAC_CONTROL: MacControlPayload;
   SCHEDULE_POST: SchedulePostPayload;
   CREATE_REMINDER: CreateReminderPayload;
   CANCEL_REMINDER: CancelReminderPayload;

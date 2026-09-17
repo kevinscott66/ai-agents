@@ -11,7 +11,10 @@ import {
   isMacOnline as realIsMacOnline,
   isUserAllowed as realIsUserAllowed,
   stopMac as realStopMac,
+  sendControlToMac as realSendControlToMac,
 } from "../mac-bridge.ts";
+import { parseMacControl, parseMacReminders, type MacControl } from "../mac-control.ts";
+import { checkReminderWindow } from "../reminder-time.ts";
 import { TELEGRAM_MESSAGE_TAIL_LIMIT } from "../constants.ts";
 import { log } from "../log.ts";
 import type { PayloadByType } from "../action-payload.ts";
@@ -51,6 +54,8 @@ export type MacBridge = {
     error?: string;
   }>;
   stopMac: () => Promise<{ ok: boolean; error?: string }>;
+  /** Необязателен ради старых тестовых заглушек; по умолчанию — настоящий мост. */
+  sendControlToMac?: (control: MacControl, userId: string | undefined, chatId: number) => Promise<{ ok: boolean; stdout: string; error?: string }>;
   isUserAllowed: (userId: string | undefined | null) => boolean;
 };
 
@@ -454,5 +459,44 @@ export async function handleMacStop(
   } catch (e) {
     const msg = getErrorMessage(e);
     return { ok: false, error: msg };
+  }
+}
+
+/**
+ * MAC_CONTROL: команда из закрытого списка на Mac владельца.
+ *
+ * Проверки повторяются здесь, хотя buildPayload их уже сделал: между ним и
+ * исполнением может лежать подтверждение, а payload из approval-очереди
+ * читается из БД. Мост (sendControlToMac) отдельно требует владельца из
+ * MAC_USER_IDS и его личный чат, демон ещё раз разбирает команду строго.
+ */
+export async function handleMacControl(
+  payload: PayloadByType["MAC_CONTROL"],
+  ctx: MacHandlerContext,
+): Promise<MacHandlerResult> {
+  const { _userId, _delegated, ...raw } = payload;
+  const control = parseMacControl(raw);
+  if (!control) return { ok: false, error: "invalid_mac_control" };
+  const now = Date.now();
+  const times = control.command === "reminder_add" ? (control.dueAt ? [control.dueAt] : [])
+    : control.command === "event_add" ? [control.startAt] : [];
+  for (const at of times) {
+    const win = checkReminderWindow(at, now);
+    if (!win.ok) return { ok: false, error: win.error };
+  }
+  const isUserAllowed = ctx.macBridge?.isUserAllowed ?? realIsUserAllowed;
+  if (!isUserAllowed(_userId)) return { ok: false, error: "forbidden" };
+  const send = ctx.macBridge?.sendControlToMac ?? realSendControlToMac;
+  try {
+    const res = await send(control, _userId, ctx.chatId);
+    if (!res.ok) return { ok: false, error: res.error ?? "control_failed" };
+    if (control.command === "reminders") return { ok: true, result: parseMacReminders(res.stdout) };
+    return { ok: true, result: { done: control.command } };
+  } catch (e) {
+    const error = getErrorMessage(e);
+    // Кадр мог дойти до Mac: после таймаута или обрыва команда, возможно, уже
+    // выполнена (экран заблокирован, событие создано). Повторять её нельзя.
+    const delivered = error.startsWith("mac_timeout") || macFailureLeavesRunAlive(error);
+    return delivered ? { ok: false, error, sideEffect: true } : { ok: false, error };
   }
 }

@@ -139,3 +139,30 @@ A synchronous task-spawn `ENOENT` also permits fallback only when the executable
 Fallback is disabled in bypass mode. Codex → Claude is blocked (`fallbackBlocked: permission_mismatch`) because Claude's permission modes cannot preserve Codex's filesystem/network sandbox. A separately requested Claude session remains possible under the normal approval flow.
 
 Verification: local installed Claude accepted the readiness command and produced the structured `authentication_unavailable` classification with sanitized daemon environment; no raw provider output was logged. Quota/billing cases are covered with isolated subprocess fixtures, not a live exhausted account.
+
+## Управление Mac (MAC_CONTROL)
+
+Закрытый список команд без Claude CLI: `lock`, `sleep`, `volume`, `mute`, `unmute`,
+`open_app`, `reminders`, `reminder_add`, `event_add`, `shutdown`, `restart`.
+Сервер и демон разбирают команду одним строгим разбором (`lib/mac-control.ts`);
+исполнитель `macctl.ts` превращает её в фиксированный argv без оболочки.
+Команда принимается только из лички владельца, только от оркестратора;
+выключение и перезагрузка всегда идут через подтверждение в чате
+(`docs/approval-policy.md`).
+
+Всё выключено по умолчанию. Включает владелец в окружении демона:
+
+- `MAC_CONTROL_ENABLED=true` — сам выключатель;
+- `MAC_APPS=alias=bundle.id,...` — единственный способ назвать приложение для `open_app`;
+- `MAC_CALENDAR_ENABLED=true` — напоминания и события (помощник EventKit).
+
+Разрешения macOS выдаёт только владелец, руками:
+
+1. `sh build-calendar.sh`, затем `bin/agent-calendar authorize` и
+   `bin/agent-calendar authorize-reminders` — диалоги «Календари» и «Напоминания».
+2. Громкость, выключение и перезагрузка через `osascript` попросят
+   «Автоматизация → System Events» при первом вызове; без него демон вернёт
+   `automation_access_required`.
+
+Проверка вручную: `bun macctl.ts '{"command":"volume","level":30}'`.
+Наружу уходят только фиксированные коды ошибок, stderr не пересылается.
