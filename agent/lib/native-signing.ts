@@ -38,7 +38,7 @@ const STATUS: Record<SignedActionError, number> = {
   key_invalid: 400, payload_invalid: 400, signature_invalid: 400, code_invalid: 400,
   key_unknown: 404, nonce_unknown: 404,
   key_not_pending: 409, code_expired: 409, no_active_key: 409, nonce_used: 409, expired: 409,
-  key_revoked: 409, payload_mismatch: 409, price_deviation: 409, limit_amount: 409, limit_daily: 409,
+  key_revoked: 409, payload_mismatch: 409, price_deviation: 409, price_unchecked: 409, limit_amount: 409, limit_daily: 409,
   code_attempts: 429, registration_limit: 429,
 };
 
