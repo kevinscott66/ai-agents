@@ -46,12 +46,15 @@ export const marketUrlFor = (id: string) => marketProductUrl(id);
 export function marketShopPage(page: any): ShopPage {
   const { bodyText, goto, text, totalNear, screenshot, probe, stateFromBody } = pageKit(page);
   const offer = () => page.locator(MARKET_TESTID.productOffer).first();
+  // Счётчик на карточке — input: текста в нём нет, количество лежит в value.
   const qtyNow = async (): Promise<number> => {
     const value = page.locator(MARKET_TESTID.qtyValue).first();
     if (!(await visible(value))) return 0;
-    const raw = String((await value.innerText().catch(() => "")) ?? "").trim();
+    const raw = String((await value.inputValue().catch(() => "")) ?? "").trim();
     return /^\d{1,3}$/.test(raw) ? Number(raw) : -1;
   };
+  const qtyButton = (name: RegExp) =>
+    page.locator(MARKET_TESTID.qtyCounter).first().getByRole("button", { name }).first();
   const dialogOpen = () => visible(page.getByRole("dialog").first(), 1_500);
   const payLocator = () => page.getByRole("button", { name: MARKET_TEXT.pay }).first();
 
@@ -129,7 +132,7 @@ export function marketShopPage(page: any): ShopPage {
         current = await qtyNow();
       }
       for (let i = 0; i < QTY_CLICKS_MAX && current >= 0 && current !== qty; i++) {
-        const button = page.locator(current < qty ? MARKET_TESTID.qtyPlus : MARKET_TESTID.qtyMinus).first();
+        const button = qtyButton(current < qty ? MARKET_TEXT.qtyPlus : MARKET_TEXT.qtyMinus);
         if (!(await visible(button))) break;
         await button.click();
         await wait(500);
@@ -146,7 +149,8 @@ export function marketShopPage(page: any): ShopPage {
         const doc = (globalThis as any).document;
         return [...doc.querySelectorAll(sel.cartItem)].slice(0, 60).map((row: any) => ({
           href: row.querySelector(sel.cartItemLink)?.getAttribute("href") ?? null,
-          qty: String(row.querySelector(sel.cartItemQty)?.innerText ?? row.querySelector(sel.cartItemQty)?.value ?? ""),
+          // Количество в корзине — тоже input: value, и только потом текст.
+          qty: String(row.querySelector(sel.cartItemQty)?.value || row.querySelector(sel.cartItemQty)?.innerText || ""),
           price: String(row.querySelector(sel.cartItemPrice)?.innerText ?? ""),
         }));
       }, MARKET_TESTID);
