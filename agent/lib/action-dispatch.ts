@@ -78,6 +78,7 @@ import {
   type MacHandlerContext,
   type MacBridge,
 } from "./dispatch/mac.ts";
+import { handleCloudflareDns } from "./dispatch/cloudflare.ts";
 import {
   handleWriteWiki,
   handleListRecentMessages,
@@ -981,6 +982,10 @@ export async function dispatchAction<T extends ActionType>(
       case "USERBOT_SEND_DM": {
         const p = payload as PayloadByType["USERBOT_SEND_DM"];
         return await handleUserbotSendDm(p, ctx as TelegramHandlerContext);
+      }
+      case "CLOUDFLARE_DNS": {
+        const p = payload as PayloadByType["CLOUDFLARE_DNS"];
+        return await handleCloudflareDns(p, ctx);
       }
       case "MAC_CONTROL": {
         const p = payload as PayloadByType["MAC_CONTROL"];

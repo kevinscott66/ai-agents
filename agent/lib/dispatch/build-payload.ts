@@ -20,6 +20,7 @@ import {
   REMINDER_TEXT_MAX,
 } from "../reminder-time.ts";
 import { dmTextError, normalizeDmUsername } from "../userbot-dm.ts";
+import { buildDnsChange, parseDnsProtected, parseDnsZones } from "../cloudflare-dns.ts";
 import { MAC_CONTROL_COMMANDS, MAC_TITLE_MAX, parseMacControl, validMacTitle } from "../mac-control.ts";
 
 const ROLE_KEYS = CHARACTERS.map((c) => c.key);
@@ -936,6 +937,17 @@ export function buildPayload<T extends ActionType>(
       const textError = dmTextError(i.text);
       if (textError) return { ok: false, error: textError };
       const payload: PayloadFor<"USERBOT_SEND_DM"> = { username, text: i.text as string };
+      return { ok: true, payload: payload as PayloadFor<T> };
+    }
+    case "CLOUDFLARE_DNS": {
+      // Зона выводится из имени по CLOUDFLARE_DNS_ZONES: модель не называет её сама.
+      const built = buildDnsChange(
+        i,
+        parseDnsZones(process.env.CLOUDFLARE_DNS_ZONES),
+        parseDnsProtected(process.env.CLOUDFLARE_DNS_PROTECTED),
+      );
+      if (!built.ok) return { ok: false, error: built.error };
+      const payload: PayloadFor<"CLOUDFLARE_DNS"> = built.change;
       return { ok: true, payload: payload as PayloadFor<T> };
     }
     case "MAC_STOP": {

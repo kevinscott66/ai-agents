@@ -59,6 +59,9 @@ const RULES: Record<string, { perAgent?: BucketRule; global?: BucketRule }> = {
   // Личные сообщения от аккаунта владельца: каждое одобряется руками, но
   // цикл заявок не должен заваливать очередь и аккаунт. 20 в час.
   USERBOT_SEND_DM: { perAgent: { windowMs: HOUR_MS, max: 20 } },
+  // DNS: заявки одобряются руками, но зона — не место для цикла ретраев.
+  CLOUDFLARE_DNS: { perAgent: { windowMs: HOUR_MS, max: 10 } },
+  CLOUDFLARE_DNS_LIST: { perAgent: { windowMs: MINUTE_MS, max: 10 } },
 };
 
 const ALL_AGENT_TOOLS_RULE: BucketRule = { windowMs: MINUTE_MS, max: 60 };

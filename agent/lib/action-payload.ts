@@ -9,6 +9,7 @@ import type { ActionType } from "./permissions.ts";
 import type { TaskStatus } from "./tasks.ts";
 import type { MacControl } from "./mac-control.ts";
 import type { UserbotDm } from "./userbot-dm.ts";
+import type { DnsChange } from "./cloudflare-dns.ts";
 
 export interface SendMessagePayload {
   chatId?: number;
@@ -261,6 +262,12 @@ export type MacControlPayload = MacControl & { _userId?: string; _delegated?: bo
  */
 export type UserbotSendDmPayload = UserbotDm & { _userId?: string; _delegated?: boolean };
 
+/**
+ * CLOUDFLARE_DNS: заявка, собранная buildDnsChange (lib/cloudflare-dns.ts);
+ * `_userId`/`_delegated` дописывает tool-loop, как у USERBOT_SEND_DM.
+ */
+export type CloudflareDnsPayload = DnsChange & { _userId?: string; _delegated?: boolean };
+
 export interface MacRunClaudePayload {
   allowFallback?: boolean;
   provider?: "claude" | "codex";
@@ -434,6 +441,7 @@ export type PayloadByType = {
   MAC_STOP: { _userId?: string; _delegated?: boolean };
   MAC_CONTROL: MacControlPayload;
   USERBOT_SEND_DM: UserbotSendDmPayload;
+  CLOUDFLARE_DNS: CloudflareDnsPayload;
   SCHEDULE_POST: SchedulePostPayload;
   CREATE_REMINDER: CreateReminderPayload;
   CANCEL_REMINDER: CancelReminderPayload;
