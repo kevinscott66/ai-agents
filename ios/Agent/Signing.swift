@@ -50,16 +50,26 @@ struct SignedActionPayload: Equatable {
     }
 
     var title: String {
-        let services = ["yandex_go": "Яндекс Go"]
-        let actions = ["order_taxi": "Заказ такси"]
+        let services = ["yandex_go": "Яндекс Go", "yandex_delivery": "Яндекс Доставка", "yandex_lavka": "Яндекс Лавка", "yandex_eda": "Яндекс Еда", "yandex_market": "Яндекс Маркет"]
+        let actions = ["order_taxi": "Заказ такси", "order_delivery": "Курьер", "order_food": "Заказ", "market_purchase": "Покупка"]
         return "\(actions[action] ?? action) · \(services[service] ?? service)"
     }
     /// Все параметры, без исключений: подпись покрывает каждый.
     var rows: [(label: String, value: String)] {
-        let labels = ["from": "Откуда", "to": "Куда", "tariff": "Тариф", "comment": "Комментарий", "payment": "Оплата"]
-        let order = ["from", "to", "tariff", "payment", "comment"]
-        let keys = params.keys.sorted { (order.firstIndex(of: $0) ?? order.count, $0) < (order.firstIndex(of: $1) ?? order.count, $1) }
-        return keys.map { (labels[$0] ?? $0, params[$0]!) }
+        let labels = ["from": "Откуда", "to": "Куда", "tariff": "Тариф", "comment": "Комментарий", "payment": "Оплата",
+                      "store": "Магазин", "place": "Ресторан", "address": "Адрес", "delivery_rub": "Доставка, ₽", "delivery_max_rub": "Доставка до, ₽"]
+        let order = ["store", "place", "address", "from", "to", "tariff", "payment", "delivery_rub", "delivery_max_rub", "comment"]
+        // item_01, item_02… — строки корзины: после адреса, до доставки, по номеру.
+        func rank(_ key: String) -> Int {
+            if let i = order.firstIndex(of: key) { return i < 3 ? i : i + 1 }
+            return key.hasPrefix("item_") ? 3 : order.count + 1
+        }
+        func label(_ key: String) -> String {
+            if key.hasPrefix("item_"), let n = Int(key.dropFirst(5)) { return "Товар \(n)" }
+            return labels[key] ?? key
+        }
+        let keys = params.keys.sorted { (rank($0), $0) < (rank($1), $1) }
+        return keys.map { (label($0), params[$0]!) }
     }
 }
 

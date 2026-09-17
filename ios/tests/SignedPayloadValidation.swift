@@ -11,6 +11,10 @@ import CryptoKit
         precondition(parsed.amountRub == 450 && parsed.maxFinalRub == 517 && parsed.expiresAt == 1789627818)
         precondition(parsed.rows.map(\.label) == ["Откуда", "Куда", "Тариф"] && parsed.rows[0].value == "ул. \"Красная\", 1")
         precondition(parsed.title == "Заказ такси · Яндекс Go")
+        let market = #"{"action":"market_purchase","amount_rub":2400,"expires_at":1789627818,"issued_at":1789627698,"key_id":"K","kind":"paid_action","max_final_rub":2760,"nonce":"N","params":{"address":"Дом","delivery_max_rub":1000,"item_01":"А × 2","item_02":"Б × 1","item_10":"В × 1","store":"Маркет"},"service":"yandex_market","v":1}"#
+        let shop = try SignedActionPayload.parse(market, nonce: "N", expectedKey: "K")
+        precondition(shop.title == "Покупка · Яндекс Маркет", shop.title)
+        precondition(shop.rows.map(\.label) == ["Магазин", "Адрес", "Товар 1", "Товар 2", "Товар 10", "Доставка до, ₽"], "\(shop.rows.map(\.label))")
         rejects(valid, nonce: "other")
         rejects(valid, key: "other")
         rejects(valid.replacingOccurrences(of: ",", with: ", "))
