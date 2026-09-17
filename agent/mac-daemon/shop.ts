@@ -32,8 +32,6 @@
  *   bun mac-daemon/shop.ts eda-quote "ресторан" "блюдо" …
  *   bun mac-daemon/shop.ts market-quote "зарядка usb-c" …
  */
-import { isAbsolute } from "node:path";
-import { lstatSync, mkdirSync } from "node:fs";
 import {
   MARKET_PRODUCT_ID,
   SHOP_CANDIDATES_MAX,
@@ -57,6 +55,7 @@ import {
   type ShopRequest,
   type ShopService,
 } from "../lib/shop.ts";
+import { ensureLoginProfileDir, printOutcome, profileDirProblem, runCli, runnerErrorCode, waitForEnter } from "./runner-kit.ts";
 import { SHOP_STATE_POLL } from "./shop-selectors.ts";
 
 export interface ShopEnv {
@@ -166,16 +165,9 @@ class PriceChanged extends ShopError {
  * и остальных.
  */
 export function checkShopProfile(dir: string | undefined, uid: number | undefined = process.getuid?.()): string {
-  if (!dir || !isAbsolute(dir)) throw new ShopError("profile_missing");
-  let st;
-  try {
-    st = lstatSync(dir);
-  } catch {
-    throw new ShopError("profile_missing");
-  }
-  if (!st.isDirectory()) throw new ShopError("profile_missing");
-  if ((uid !== undefined && st.uid !== uid) || (st.mode & 0o077) !== 0) throw new ShopError("profile_insecure");
-  return dir;
+  const problem = profileDirProblem(dir, uid);
+  if (problem) throw new ShopError(problem);
+  return dir!;
 }
 
 /** Отказы, к которым полезен скриншот: владелец видит, на чём встали. */
@@ -475,10 +467,7 @@ export class ShopRunner {
 }
 
 export function shopErrorCode(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  if (message === "invalid_shop_request") return message;
-  if (message === "assistant_cancelled" || (error instanceof Error && error.name === "AbortError")) return "assistant_cancelled";
-  return "shop_failed";
+  return runnerErrorCode(error, "invalid_shop_request", "shop_failed");
 }
 
 let runner: ShopRunner | null = null;
@@ -500,7 +489,7 @@ async function cli(args: string[]) {
   const [command, ...rest] = args;
   if (command === "login" || command === "probe") {
     const dir = env.SHOP_PROFILE_DIR;
-    if (command === "login" && dir && isAbsolute(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+    ensureLoginProfileDir(command, dir);
     const profile = checkShopProfile(dir);
     const { launchPlaywrightShop } = await import("./shop-playwright.ts");
     const browser = await launchPlaywrightShop(env, profile, { headless: false });
@@ -508,10 +497,10 @@ async function cli(args: string[]) {
     await page.openHome({ service: rest[0] === "eda" || rest[0] === "market" ? rest[0] : "lavka" });
     if (command === "login") {
       console.log("Войди в Яндекс, выбери адрес доставки и проверь карту в открывшемся окне сам. Когда закончишь — нажми Enter здесь.");
-      await new Promise<void>((resolve) => process.stdin.once("data", () => resolve()));
+      await waitForEnter();
     } else {
       console.log("Открой в окне нужную страницу (корзина, оформление, заказ) и нажми Enter здесь.");
-      await new Promise<void>((resolve) => process.stdin.once("data", () => resolve()));
+      await waitForEnter();
       console.log(`guard: ${await page.guard()}`);
       console.log(await page.probe());
     }
@@ -530,15 +519,12 @@ async function cli(args: string[]) {
       ? { op: "quote", service: "eda", place: place!, queries: queries as string[] }
       : { op: "quote", service: command === "market-quote" ? "market" : "lavka", queries: queries as string[] });
     await local.close();
-    console.log(JSON.stringify(out.ok ? out : { ...out, screenshot: out.screenshot ? `<${out.screenshot.length} base64>` : undefined }, null, 2));
+    printOutcome(out);
     return;
   }
   throw new Error("usage: bun mac-daemon/shop.ts login [eda|market] | probe [eda|market] | quote \"молоко\" | eda-quote \"ресторан\" \"блюдо\" | market-quote \"товар\"");
 }
 
 if (import.meta.main) {
-  cli(process.argv.slice(2)).then(() => process.exit(0)).catch((e) => {
-    console.error(e instanceof ShopError ? e.code : e instanceof Error ? e.message : String(e));
-    process.exit(1);
-  });
+  runCli(() => cli(process.argv.slice(2)), (e) => (e instanceof ShopError ? e.code : null));
 }

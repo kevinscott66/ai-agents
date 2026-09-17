@@ -32,38 +32,29 @@ import {
   lavkaSearchUrl,
 } from "./shop-selectors.ts";
 import type { CartRow, SearchCard, ShopBrowser, ShopEnv, ShopPage } from "./shop.ts";
+import {
+  ariaProbe,
+  bodyText as pageBodyText,
+  hostMatches,
+  jpegScreenshot,
+  launchProfileChrome,
+  NAV_TIMEOUT_MS,
+  UI_TIMEOUT_MS,
+  visible,
+  wait,
+} from "./playwright-kit.ts";
 
-const PLAYWRIGHT = "playwright-core";
-export const NAV_TIMEOUT_MS = 30_000;
-export const UI_TIMEOUT_MS = 8_000;
-const BODY_TEXT_MAX = 20_000;
+// Адаптеры Еды и Маркета берут эти приёмы отсюда.
+export { hostMatches, NAV_TIMEOUT_MS, UI_TIMEOUT_MS, visible, wait };
+
 export const QTY_CLICKS_MAX = 40;
 
-export const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
 export async function launchPlaywrightShop(env: ShopEnv, profileDir: string, opts: { headless?: boolean } = {}): Promise<ShopBrowser> {
-  let pw: any;
-  try {
-    pw = await import(PLAYWRIGHT);
-  } catch {
-    throw new Error("browser_unavailable");
-  }
-  let context: any;
-  try {
-    context = await pw.chromium.launchPersistentContext(profileDir, {
-      channel: env.SHOP_BROWSER_CHANNEL || "chrome",
-      headless: opts.headless ?? env.SHOP_HEADLESS === "true",
-      viewport: { width: 1280, height: 800 },
-      locale: "ru-RU",
-      timezoneId: "Europe/Moscow",
-      acceptDownloads: false,
-    });
-  } catch {
-    throw new Error("browser_unavailable");
-  }
-  const raw = context.pages()[0] ?? (await context.newPage());
-  raw.setDefaultTimeout(UI_TIMEOUT_MS);
-  raw.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
+  const { context, page: raw } = await launchProfileChrome(profileDir, {
+    channel: env.SHOP_BROWSER_CHANNEL || "chrome",
+    headless: opts.headless ?? env.SHOP_HEADLESS === "true",
+    viewport: { width: 1280, height: 800 },
+  });
   const { edaShopPage } = await import("./eda-playwright.ts");
   const { marketShopPage } = await import("./market-playwright.ts");
   const page = routeShopPage({ lavka: playwrightShopPage(raw), eda: edaShopPage(raw), market: marketShopPage(raw) });
@@ -100,24 +91,6 @@ export function routeShopPage(pages: Record<ShopService, ShopPage>): ShopPage {
   };
 }
 
-export function hostMatches(url: string, hosts: RegExp[]): boolean {
-  try {
-    const u = new URL(url);
-    return u.protocol === "https:" && hosts.some((h) => h.test(u.hostname));
-  } catch {
-    return false;
-  }
-}
-
-export async function visible(locator: any, timeout = 0): Promise<boolean> {
-  try {
-    if (timeout) await locator.waitFor({ state: "visible", timeout });
-    return await locator.isVisible();
-  } catch {
-    return false;
-  }
-}
-
 /** `/good/<slug>?…` → slug, если он похож на идентификатор товара. */
 export function productIdFromHref(href: unknown): string | null {
   if (typeof href !== "string") return null;
@@ -134,13 +107,7 @@ export function productIdFromHref(href: unknown): string | null {
 
 /** Общие приёмы работы со страницей для адаптеров Лавки, Еды и Маркета. */
 export function pageKit(page: any) {
-  const bodyText = async (): Promise<string> => {
-    try {
-      return String(await page.locator("body").innerText({ timeout: UI_TIMEOUT_MS })).slice(0, BODY_TEXT_MAX);
-    } catch {
-      return "";
-    }
-  };
+  const bodyText = () => pageBodyText(page);
   const goto = async (url: string) => {
     await page.goto(url, { waitUntil: "domcontentloaded" });
     await page.waitForLoadState("load", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
@@ -164,25 +131,8 @@ export function pageKit(page: any) {
     const m = String(row?.innerText ?? "").match(/\d[\d \u00a0\u202f]*(?:[,.]\d{1,2})?\s?₽/g);
     return m ? m[m.length - 1] : null;
   }, label.source);
-  const screenshot = async (): Promise<string | null> => {
-    for (const quality of [45, 30, 18]) {
-      try {
-        const buf: Uint8Array = await page.screenshot({ type: "jpeg", quality, scale: "css", timeout: UI_TIMEOUT_MS });
-        const b64 = Buffer.from(buf).toString("base64");
-        if (b64.length <= SHOP_SCREENSHOT_B64_MAX) return b64;
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  };
-  const probe = async (): Promise<string> => {
-    try {
-      return String(await page.locator("body").ariaSnapshot({ timeout: UI_TIMEOUT_MS }));
-    } catch (e) {
-      return `probe failed: ${e instanceof Error ? e.message : String(e)}`;
-    }
-  };
+  const screenshot = () => jpegScreenshot(page, SHOP_SCREENSHOT_B64_MAX);
+  const probe = () => ariaProbe(page);
   /** Состояние заказа по тексту страницы; порядок правил важен. */
   const stateFromBody = async (rules: ReadonlyArray<[ShopOrderState, RegExp]>): Promise<ShopOrderState> => {
     const body = await bodyText();

@@ -21,67 +21,31 @@ import {
 } from "./delivery-selectors.ts";
 import type { DeliveryBrowser, DeliveryEnv, DeliveryPage, DeliveryTariffRow } from "./delivery.ts";
 import { parseTariffCard } from "./taxi.ts";
-
-const PLAYWRIGHT = "playwright-core";
-const NAV_TIMEOUT_MS = 30_000;
-const UI_TIMEOUT_MS = 8_000;
-const BODY_TEXT_MAX = 20_000;
-
-const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+import {
+  ariaProbe,
+  bodyText as pageBodyText,
+  hostMatches,
+  jpegScreenshot,
+  launchProfileChrome,
+  NAV_TIMEOUT_MS,
+  readTariffCards,
+  UI_TIMEOUT_MS,
+  visible,
+  wait,
+} from "./playwright-kit.ts";
 
 export async function launchPlaywrightDelivery(env: DeliveryEnv, profileDir: string, opts: { headless?: boolean } = {}): Promise<DeliveryBrowser> {
-  let pw: any;
-  try {
-    pw = await import(PLAYWRIGHT);
-  } catch {
-    throw new Error("browser_unavailable");
-  }
-  let context: any;
-  try {
-    context = await pw.chromium.launchPersistentContext(profileDir, {
-      channel: env.DELIVERY_BROWSER_CHANNEL || "chrome",
-      headless: opts.headless ?? env.DELIVERY_HEADLESS === "true",
-      viewport: { width: 1024, height: 720 },
-      locale: "ru-RU",
-      timezoneId: "Europe/Moscow",
-      acceptDownloads: false,
-    });
-  } catch {
-    throw new Error("browser_unavailable");
-  }
-  const raw = context.pages()[0] ?? (await context.newPage());
-  raw.setDefaultTimeout(UI_TIMEOUT_MS);
-  raw.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
+  const { context, page: raw } = await launchProfileChrome(profileDir, {
+    channel: env.DELIVERY_BROWSER_CHANNEL || "chrome",
+    headless: opts.headless ?? env.DELIVERY_HEADLESS === "true",
+    viewport: { width: 1024, height: 720 },
+  });
   const page = playwrightDeliveryPage(raw);
   return { page: () => page, close: () => context.close() };
 }
 
-function hostMatches(url: string, hosts: RegExp[]): boolean {
-  try {
-    const u = new URL(url);
-    return u.protocol === "https:" && hosts.some((h) => h.test(u.hostname));
-  } catch {
-    return false;
-  }
-}
-
-async function visible(locator: any, timeout = 0): Promise<boolean> {
-  try {
-    if (timeout) await locator.waitFor({ state: "visible", timeout });
-    return await locator.isVisible();
-  } catch {
-    return false;
-  }
-}
-
 export function playwrightDeliveryPage(page: any): DeliveryPage {
-  const bodyText = async (): Promise<string> => {
-    try {
-      return String(await page.locator("body").innerText({ timeout: UI_TIMEOUT_MS })).slice(0, BODY_TEXT_MAX);
-    } catch {
-      return "";
-    }
-  };
+  const bodyText = () => pageBodyText(page);
   const field = (name: RegExp) =>
     page.getByRole("textbox", { name }).or(page.getByPlaceholder(name)).first();
   const orderLocator = () => page.getByRole("button", { name: DELIVERY_TEXT.order }).first();
@@ -135,25 +99,7 @@ export function playwrightDeliveryPage(page: any): DeliveryPage {
     },
     async tariffs() {
       const labels = DELIVERY_TARIFF_KEYS.map((k) => [k, DELIVERY_TARIFFS[k]]);
-      const cards: Array<{ tariff: string; text: string; selected: boolean }> = await page.evaluate((pairs: string[][]) => {
-        const doc = (globalThis as any).document;
-        const out: Array<{ tariff: string; text: string; selected: boolean }> = [];
-        const isSelected = (el: any) =>
-          el.getAttribute("aria-selected") === "true" || el.getAttribute("aria-checked") === "true" ||
-          el.getAttribute("aria-pressed") === "true" || /(?:^|[\s_-])(?:selected|active|checked)(?:$|[\s_-])/i.test(String(el.className ?? ""));
-        for (const [tariff, label] of pairs) {
-          const leaf = [...doc.querySelectorAll("body *")].find((el: any) =>
-            el.children.length === 0 && String(el.textContent ?? "").trim() === label && el.getClientRects().length > 0);
-          if (!leaf) continue;
-          let card: any = leaf;
-          for (let i = 0; i < 4 && card && !String(card.innerText ?? "").includes("₽"); i++) card = card.parentElement;
-          if (!card || !String(card.innerText ?? "").includes("₽")) continue;
-          let selected = false;
-          for (let el: any = leaf, i = 0; el && i < 6; el = el.parentElement, i++) selected ||= isSelected(el);
-          out.push({ tariff, text: String(card.innerText).slice(0, 200), selected });
-        }
-        return out;
-      }, labels);
+      const cards = await readTariffCards(page, labels);
       return cards
         .filter((c) => (DELIVERY_TARIFF_KEYS as string[]).includes(c.tariff))
         .map((c): DeliveryTariffRow => ({ tariff: c.tariff as DeliveryTariff, selected: c.selected === true, ...parseTariffCard(c.text) }));
@@ -207,24 +153,7 @@ export function playwrightDeliveryPage(page: any): DeliveryPage {
       if (await visible(confirm, 3_000)) await confirm.click();
       return "clicked";
     },
-    async screenshot() {
-      for (const quality of [45, 30, 18]) {
-        try {
-          const buf: Uint8Array = await page.screenshot({ type: "jpeg", quality, scale: "css", timeout: UI_TIMEOUT_MS });
-          const b64 = Buffer.from(buf).toString("base64");
-          if (b64.length <= TAXI_SCREENSHOT_B64_MAX) return b64;
-        } catch {
-          return null;
-        }
-      }
-      return null;
-    },
-    async probe() {
-      try {
-        return String(await page.locator("body").ariaSnapshot({ timeout: UI_TIMEOUT_MS }));
-      } catch (e) {
-        return `probe failed: ${e instanceof Error ? e.message : String(e)}`;
-      }
-    },
+    screenshot: () => jpegScreenshot(page, TAXI_SCREENSHOT_B64_MAX),
+    probe: () => ariaProbe(page),
   };
 }

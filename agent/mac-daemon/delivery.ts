@@ -22,7 +22,6 @@
  *   bun mac-daemon/delivery.ts quote "откуда" "куда"
  */
 import { isAbsolute, resolve } from "node:path";
-import { mkdirSync } from "node:fs";
 import {
   DELIVERY_SESSION_TTL_MS,
   normalizeDeliveryAddress,
@@ -35,7 +34,7 @@ import {
   type DeliveryTariff,
 } from "../lib/delivery.ts";
 import { DELIVERY_STATE_POLL } from "./delivery-selectors.ts";
-import { checkTaxiProfile, TaxiError } from "./taxi.ts";
+import { ensureLoginProfileDir, printOutcome, profileDirProblem, runCli, runnerErrorCode, waitForEnter } from "./runner-kit.ts";
 
 export interface DeliveryEnv {
   DELIVERY_ENABLED?: string;
@@ -99,13 +98,9 @@ class PriceChanged extends DeliveryError {
  * два Chrome на одном профиле не живут, а вход в разные аккаунты смешается.
  */
 export function checkDeliveryProfile(env: DeliveryEnv, uid: number | undefined = process.getuid?.()): string {
-  let dir: string;
-  try {
-    dir = checkTaxiProfile(env.DELIVERY_PROFILE_DIR, uid);
-  } catch (e) {
-    if (e instanceof TaxiError && (e.code === "profile_missing" || e.code === "profile_insecure")) throw new DeliveryError(e.code);
-    throw e;
-  }
+  const problem = profileDirProblem(env.DELIVERY_PROFILE_DIR, uid);
+  if (problem) throw new DeliveryError(problem);
+  const dir = env.DELIVERY_PROFILE_DIR!;
   const taxi = env.TAXI_PROFILE_DIR;
   if (taxi && isAbsolute(taxi) && resolve(taxi) === resolve(dir)) throw new DeliveryError("profile_shared");
   return dir;
@@ -318,10 +313,7 @@ export class DeliveryRunner {
 }
 
 export function deliveryErrorCode(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  if (message === "invalid_delivery_request") return message;
-  if (message === "assistant_cancelled" || (error instanceof Error && error.name === "AbortError")) return "assistant_cancelled";
-  return "delivery_failed";
+  return runnerErrorCode(error, "invalid_delivery_request", "delivery_failed");
 }
 
 let runner: DeliveryRunner | null = null;
@@ -343,7 +335,7 @@ async function cli(args: string[]) {
   const [command, ...rest] = args;
   if (command === "login" || command === "probe") {
     const dir = env.DELIVERY_PROFILE_DIR;
-    if (command === "login" && dir && isAbsolute(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+    ensureLoginProfileDir(command, dir);
     const profile = checkDeliveryProfile(env);
     const { launchPlaywrightDelivery } = await import("./delivery-playwright.ts");
     const browser = await launchPlaywrightDelivery(env, profile, { headless: false });
@@ -351,7 +343,7 @@ async function cli(args: string[]) {
     await page.open();
     if (command === "login") {
       console.log("Войди в Яндекс Go в открывшемся окне сам. Когда закончишь — нажми Enter здесь.");
-      await new Promise<void>((done) => process.stdin.once("data", () => done()));
+      await waitForEnter();
     } else {
       console.log(`guard: ${await page.guard()}`);
       console.log(`contact_required: ${await page.contactRequired()}`);
@@ -366,15 +358,12 @@ async function cli(args: string[]) {
     const local = new DeliveryRunner({ ...env, DELIVERY_ENABLED: "true" }, { launch: async (e, d) => (await import("./delivery-playwright.ts")).launchPlaywrightDelivery(e, d, { headless: false }) });
     const out = await local.run({ op: "quote", from, to });
     await local.close();
-    console.log(JSON.stringify(out.ok ? out : { ...out, screenshot: out.screenshot ? `<${out.screenshot.length} base64>` : undefined }, null, 2));
+    printOutcome(out);
     return;
   }
   throw new Error("usage: bun mac-daemon/delivery.ts login | probe | quote \"откуда\" \"куда\"");
 }
 
 if (import.meta.main) {
-  cli(process.argv.slice(2)).then(() => process.exit(0)).catch((e) => {
-    console.error(e instanceof DeliveryError ? e.code : e instanceof Error ? e.message : String(e));
-    process.exit(1);
-  });
+  runCli(() => cli(process.argv.slice(2)), (e) => (e instanceof DeliveryError ? e.code : null));
 }

@@ -17,8 +17,6 @@
  *   bun mac-daemon/taxi.ts probe               — дерево доступности страницы
  *   bun mac-daemon/taxi.ts quote "откуда" "куда"
  */
-import { isAbsolute } from "node:path";
-import { lstatSync, mkdirSync } from "node:fs";
 import {
   TAXI_SESSION_TTL_MS,
   normalizeTaxiAddress,
@@ -34,6 +32,7 @@ import {
   type TaxiTariff,
 } from "../lib/taxi.ts";
 import { TAXI_ETA_TEXT, TAXI_PRICE_TEXT, TAXI_STATE_POLL } from "./taxi-selectors.ts";
+import { ensureLoginProfileDir, printOutcome, profileDirProblem, runCli, runnerErrorCode, waitForEnter } from "./runner-kit.ts";
 
 export interface TaxiEnv {
   TAXI_ENABLED?: string;
@@ -95,16 +94,9 @@ export function parseTariffCard(text: string): { price_rub: number | null; eta_m
  * и остальных.
  */
 export function checkTaxiProfile(dir: string | undefined, uid: number | undefined = process.getuid?.()): string {
-  if (!dir || !isAbsolute(dir)) throw new TaxiError("profile_missing");
-  let st;
-  try {
-    st = lstatSync(dir);
-  } catch {
-    throw new TaxiError("profile_missing");
-  }
-  if (!st.isDirectory()) throw new TaxiError("profile_missing");
-  if ((uid !== undefined && st.uid !== uid) || (st.mode & 0o077) !== 0) throw new TaxiError("profile_insecure");
-  return dir;
+  const problem = profileDirProblem(dir, uid);
+  if (problem) throw new TaxiError(problem);
+  return dir!;
 }
 
 /** Отказы, к которым полезен скриншот: владелец видит, на чём встали. */
@@ -323,10 +315,7 @@ class PriceChanged extends TaxiError {
 }
 
 export function taxiErrorCode(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  if (message === "invalid_taxi_request") return message;
-  if (message === "assistant_cancelled" || (error instanceof Error && error.name === "AbortError")) return "assistant_cancelled";
-  return "taxi_failed";
+  return runnerErrorCode(error, "invalid_taxi_request", "taxi_failed");
 }
 
 let runner: TaxiRunner | null = null;
@@ -348,7 +337,7 @@ async function cli(args: string[]) {
   const [command, ...rest] = args;
   if (command === "login" || command === "probe") {
     const dir = env.TAXI_PROFILE_DIR;
-    if (command === "login" && dir && isAbsolute(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+    ensureLoginProfileDir(command, dir);
     const profile = checkTaxiProfile(dir);
     const { launchPlaywrightTaxi } = await import("./taxi-playwright.ts");
     const browser = await launchPlaywrightTaxi(env, profile, { headless: false });
@@ -356,7 +345,7 @@ async function cli(args: string[]) {
     await page.open();
     if (command === "login") {
       console.log("Войди в Яндекс Go в открывшемся окне сам. Когда закончишь — нажми Enter здесь.");
-      await new Promise<void>((resolve) => process.stdin.once("data", () => resolve()));
+      await waitForEnter();
     } else {
       console.log(`guard: ${await page.guard()}`);
       console.log(await page.probe());
@@ -370,15 +359,12 @@ async function cli(args: string[]) {
     const local = new TaxiRunner({ ...env, TAXI_ENABLED: "true" }, { launch: async (e, d) => (await import("./taxi-playwright.ts")).launchPlaywrightTaxi(e, d, { headless: false }) });
     const out = await local.run({ op: "quote", from, to });
     await local.close();
-    console.log(JSON.stringify(out.ok ? out : { ...out, screenshot: out.screenshot ? `<${out.screenshot.length} base64>` : undefined }, null, 2));
+    printOutcome(out);
     return;
   }
   throw new Error("usage: bun mac-daemon/taxi.ts login | probe | quote \"откуда\" \"куда\"");
 }
 
 if (import.meta.main) {
-  cli(process.argv.slice(2)).then(() => process.exit(0)).catch((e) => {
-    console.error(e instanceof TaxiError ? e.code : e instanceof Error ? e.message : String(e));
-    process.exit(1);
-  });
+  runCli(() => cli(process.argv.slice(2)), (e) => (e instanceof TaxiError ? e.code : null));
 }
