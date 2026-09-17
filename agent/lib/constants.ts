@@ -190,4 +190,6 @@ export const INLINE_TOOL_NAMES = new Set<string>([
   "CANCEL_SCHEDULED_POST",
   "LIST_REMINDERS",
   "CLOUDFLARE_DNS_LIST",
+  "TAXI_QUOTE",
+  "TAXI_STATUS",
 ]);

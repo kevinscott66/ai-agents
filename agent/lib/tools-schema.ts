@@ -3,9 +3,9 @@ import { nativeTurnContext } from "./native-context.ts";
  * C5/R-A: Anthropic tool_use схема + диспатчер.
  *
  * Аудит 2026-09-11: здесь было написано «все 12 инструментов идут через единый
- * `gateOrDispatch`». Неверно дважды. Инструментов в `TOOL_NAMES` тридцать
+ * `gateOrDispatch`». Неверно дважды. Инструментов в `TOOL_NAMES` тридцать два
  * (число сверяется тестом audit-2026-09-11-tool-counts: в круге 29 оно уже
- * успело протухнуть на два, пока список рос); четырнадцать — это
+ * успело протухнуть на два, пока список рос); шестнадцать — это
  * `INLINE_TOOL_NAMES` из `constants.ts`, то есть ровно тот набор, который через
  * `gateOrDispatch` как раз НЕ идёт: ни CALLER_RESTRICTED, ни строка permissions
  * к ним не применяются (см. разбор инлайновой ветки в `executeTool` ниже).
@@ -26,6 +26,7 @@ import { nativeTurnContext } from "./native-context.ts";
 import { getErrorMessage } from "./errors.ts";
 import { INLINE_TOOL_NAMES } from "./constants.ts";
 import { listCloudflareDns } from "./dispatch/cloudflare.ts";
+import { quoteTaxi, taxiStatus } from "./dispatch/taxi.ts";
 import Anthropic from "@anthropic-ai/sdk";
 import type { Telegram } from "telegraf";
 import type { ActionType } from "./permissions.ts";
@@ -705,6 +706,46 @@ export const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "TAXI_QUOTE",
+    description:
+      "Расчёт такси через Яндекс Go в браузере на Mac владельца: цены и время подачи по тарифам. Ничего не заказывает. Только когда владелец сам попросил в своём личном чате. Адреса — как назвал владелец (город, улица, дом); если адрес неоднозначен, уточни у него, не угадывай. Расчёт действует 10 минут.",
+    input_schema: {
+      type: "object",
+      properties: {
+        from: { type: "string", description: "Откуда: адрес одной строкой." },
+        to: { type: "string", description: "Куда: адрес одной строкой." },
+      },
+      required: ["from", "to"],
+    },
+  },
+  {
+    name: "ORDER_TAXI",
+    description:
+      "Заказать такси по свежему расчёту TAXI_QUOTE: те же from и to, выбранный владельцем tariff и price_rub этого тарифа из расчёта. Тариф и цену называет владелец — сам не выбирай. Заказ ждёт подтверждения в чате, затем подписи Face ID на телефоне; результат придёт отдельным сообщением. Пока он не пришёл, не говори «заказано». Лимиты: сумма и число заказов в день ограничены сервером, цена на странице не может вырасти больше чем на 15%.",
+    input_schema: {
+      type: "object",
+      properties: {
+        from: { type: "string", description: "Откуда — ровно как в TAXI_QUOTE." },
+        to: { type: "string", description: "Куда — ровно как в TAXI_QUOTE." },
+        tariff: { type: "string", enum: ["econom", "comfort", "comfortplus", "business", "minivan"] },
+        price_rub: { type: "number", description: "Цена выбранного тарифа из TAXI_QUOTE, целые рубли." },
+      },
+      required: ["from", "to", "tariff", "price_rub"],
+    },
+  },
+  {
+    name: "TAXI_STATUS",
+    description:
+      "Read-only: состояние текущего заказа такси в Яндекс Go на Mac владельца — ищем машину, водитель назначен, на месте, в пути; номер машины и время подачи, если видны. Только для владельца в его личном чате.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "TAXI_CANCEL",
+    description:
+      "Отменить текущий заказ такси в Яндекс Go. Только когда владелец сам попросил. Отмена может быть платной, поэтому ждёт подтверждения владельца. Сначала проверь TAXI_STATUS: если заказа нет, отменять нечего.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
     name: "GENERATE_SVG_IMAGE",
     description:
       "Напиши валидный SVG (width/height в px, тёмные тексты на светлом фоне или наоборот, viewBox), бэкенд отрендерит его в PNG и отправит как фото. Размер SVG ≤ 200KB. Полезно для постеров, баннеров, схем, инфографики, мокапов UI.",
@@ -868,6 +909,8 @@ export const TOOL_NAMES = new Set<string>([
   "MAC_CONTROL",
   "USERBOT_SEND_DM",
   "CLOUDFLARE_DNS",
+  "ORDER_TAXI",
+  "TAXI_CANCEL",
   // 2026-08-02: инструмент был объявлен в TOOLS, получил payload-валидатор и
   // case в диспатчере — но не попал сюда, поэтому executeTool отбивал его на
   // `unknown tool` ДО gateOrDispatch: ни строки в agent_actions, ни ошибки в
@@ -1528,6 +1571,12 @@ export async function executeTool(
   if (name === "CLOUDFLARE_DNS_LIST") {
     return fmt(await listCloudflareDns(i, ctx));
   }
+  if (name === "TAXI_QUOTE") {
+    return fmt(await quoteTaxi(i, ctx));
+  }
+  if (name === "TAXI_STATUS") {
+    return fmt(await taxiStatus(ctx));
+  }
   if (name === "LIST_REMINDERS") {
     // Нативный клиент — не Telegram-чат, напоминаний у него нет.
     if (nativeTurnContext.getStore()) {
@@ -1683,8 +1732,11 @@ export async function executeTool(
   // apply the MAC_USER_IDS whitelist check. SEC-audit LOW-2: MAC_STOP also needs
   // it — without injection isUserAllowed(undefined) was always false, so the
   // emergency kill-switch was dead (failed closed). Inject for both.
-  // USERBOT_SEND_DM и CLOUDFLARE_DNS: хендлер по _userId сверяет, что просил владелец из своей лички.
-  if (at === "MAC_RUN_CLAUDE" || at === "MAC_STOP" || at === "MAC_CONTROL" || at === "USERBOT_SEND_DM" || at === "CLOUDFLARE_DNS") {
+  // USERBOT_SEND_DM, CLOUDFLARE_DNS и такси: хендлер по _userId сверяет, что просил владелец из своей лички.
+  if (
+    at === "MAC_RUN_CLAUDE" || at === "MAC_STOP" || at === "MAC_CONTROL" || at === "USERBOT_SEND_DM" ||
+    at === "CLOUDFLARE_DNS" || at === "ORDER_TAXI" || at === "TAXI_CANCEL"
+  ) {
     const p = built.payload as { _userId?: string; _delegated?: boolean };
     p._userId = ctx.triggerUserId;
     // Аудит 2026-08-13: делегат теперь видит triggerUserId (раньше терял его и

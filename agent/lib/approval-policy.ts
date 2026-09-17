@@ -46,6 +46,7 @@ export const ACTION_CATEGORY: Readonly<Record<string, ApprovalCategory>> = Objec
   // Зарезервировано: шаг 8 (DNS) и платные действия (такси, еда, курьер, покупки).
   CLOUDFLARE_DNS: "dns",
   ORDER_TAXI: "money",
+  TAXI_CANCEL: "money",
   ORDER_FOOD: "money",
   ORDER_DELIVERY: "money",
   MARKET_PURCHASE: "money",

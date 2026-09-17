@@ -5,5 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "bun run daemon.ts"
+  },
+  "dependencies": {
+    "playwright-core": "1.62.1"
   }
 }

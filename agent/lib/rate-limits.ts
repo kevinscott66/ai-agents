@@ -62,6 +62,11 @@ const RULES: Record<string, { perAgent?: BucketRule; global?: BucketRule }> = {
   // DNS: заявки одобряются руками, но зона — не место для цикла ретраев.
   CLOUDFLARE_DNS: { perAgent: { windowMs: HOUR_MS, max: 10 } },
   CLOUDFLARE_DNS_LIST: { perAgent: { windowMs: MINUTE_MS, max: 10 } },
+  // Такси: заказы упираются в дневной лимит гейта, а браузер на Mac один.
+  ORDER_TAXI: { perAgent: { windowMs: HOUR_MS, max: 10 } },
+  TAXI_CANCEL: { perAgent: { windowMs: HOUR_MS, max: 10 } },
+  TAXI_QUOTE: { perAgent: { windowMs: MINUTE_MS, max: 4 } },
+  TAXI_STATUS: { perAgent: { windowMs: MINUTE_MS, max: 6 } },
 };
 
 const ALL_AGENT_TOOLS_RULE: BucketRule = { windowMs: MINUTE_MS, max: 60 };

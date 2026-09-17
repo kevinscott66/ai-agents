@@ -273,6 +273,18 @@ export class SignedActions {
     refuse("price_deviation");
   }
 
+  /**
+   * Исполнитель остановился до необратимого шага (капча, вход, цена на
+   * странице выше подписанной): действие не состоялось и в дневной лимит не
+   * идёт. Повтор — только новой заявкой и новой подписью.
+   */
+  abort(nonce: string, now = Date.now()): void {
+    const changed = this.db.query("UPDATE signed_actions SET status='aborted', finished=? WHERE nonce=? AND status='executing'").run(now, nonce);
+    if (changed.changes) return;
+    this.row(nonce); // неизвестный nonce — nonce_unknown
+    refuse("nonce_used");
+  }
+
   /** Успех засчитывается только после пройденной сверки цены: исполнитель мог её пропустить. */
   complete(nonce: string, ok: boolean, now = Date.now()): void {
     const changed = this.db.query("UPDATE signed_actions SET status=?, finished=? WHERE nonce=? AND status='executing' AND (? OR final_rub IS NOT NULL)")

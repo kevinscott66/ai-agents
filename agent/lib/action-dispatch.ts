@@ -79,6 +79,7 @@ import {
   type MacBridge,
 } from "./dispatch/mac.ts";
 import { handleCloudflareDns } from "./dispatch/cloudflare.ts";
+import { handleOrderTaxi, handleTaxiCancel } from "./dispatch/taxi.ts";
 import {
   handleWriteWiki,
   handleListRecentMessages,
@@ -986,6 +987,14 @@ export async function dispatchAction<T extends ActionType>(
       case "CLOUDFLARE_DNS": {
         const p = payload as PayloadByType["CLOUDFLARE_DNS"];
         return await handleCloudflareDns(p, ctx);
+      }
+      case "ORDER_TAXI": {
+        const p = payload as PayloadByType["ORDER_TAXI"];
+        return await handleOrderTaxi(p, ctx);
+      }
+      case "TAXI_CANCEL": {
+        const p = payload as PayloadByType["TAXI_CANCEL"];
+        return await handleTaxiCancel(p, ctx);
       }
       case "MAC_CONTROL": {
         const p = payload as PayloadByType["MAC_CONTROL"];

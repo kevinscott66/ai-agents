@@ -16,6 +16,8 @@ import { formatMsk } from "./reminder-time.ts";
 import { describeMacControl, parseMacControl } from "./mac-control.ts";
 import { describeUserbotDm, parseUserbotDm } from "./userbot-dm.ts";
 import { describeDnsChange, parseDnsChange } from "./cloudflare-dns.ts";
+import { describeTaxiPayload } from "./taxi.ts";
+import { limitsFromEnv } from "./signed-actions.ts";
 import { approvalCategories, CATEGORY_LABEL } from "./approval-policy.ts";
 
 /**
@@ -534,6 +536,9 @@ const PREVIEW_BY_ACTION: Record<
     const change = parseDnsChange(p);
     return change ? describeDnsChange(change) : "некорректное изменение DNS";
   },
+  // Маршрут, тариф, цена и потолок списания — то же, что подпишет телефон.
+  ORDER_TAXI: (p) => describeTaxiPayload(p, limitsFromEnv().deviationPct),
+  TAXI_CANCEL: () => "отменить текущий заказ такси (отмена может быть платной)",
   SPAWN_ROLE: (p) =>
     join([
       `новая роль «${str(p, "name") || "?"}»`,
@@ -664,7 +669,8 @@ export function approvalPreview(
   if (!flat) return "";
   // Сообщение от имени владельца не обрезаем: одобрять половину текста нельзя.
   // Изменение DNS тоже: TXT до 2048 символов одобряется целиком.
-  if (actionType === "USERBOT_SEND_DM" || actionType === "CLOUDFLARE_DNS") return flat;
+  // Заказ такси — тоже: адреса одобряются целиком.
+  if (actionType === "USERBOT_SEND_DM" || actionType === "CLOUDFLARE_DNS" || actionType === "ORDER_TAXI") return flat;
   return flat.length > limit ? `${flat.slice(0, limit - 1)}…` : flat;
 }
 
