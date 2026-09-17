@@ -134,6 +134,7 @@ function fakePage(init: Partial<{ guard: TaxiGuard; rows: TariffRow[]; button: n
     route: init.route ?? true,
     stateAfterClick: "searching" as TaxiOrderState,
     clicks: [] as string[],
+    choice: false,
   };
   const page: TaxiPage = {
     open: async () => {},
@@ -146,6 +147,7 @@ function fakePage(init: Partial<{ guard: TaxiGuard; rows: TariffRow[]; button: n
       s.rows = s.rows.map((r) => ({ ...r, selected: r.tariff === t }));
     },
     orderButton: async () => (s.button === null ? null : { label: `Заказать ${s.button} ₽`, price_rub: s.button }),
+    choiceRequired: async () => s.choice,
     clickOrder: async () => { s.clicks.push("order"); s.state = s.stateAfterClick; },
     orderState: async () => ({ state: s.state, driver: null }),
     cancelOrder: async () => { s.clicks.push("cancel"); s.state = "cancelled"; return "clicked"; },
@@ -254,6 +256,18 @@ describe("mac runner", () => {
     page.orderButton = async () => ({ label: "Заказать", price_rub: null });
     expect((await r.run({ ...prepare, tariff: "econom" }) as { code: string }).code).toBe("price_unreadable");
     expect(s.clicks).toEqual([]);
+    await r.close();
+  });
+
+  test("a tariff that demands a seat is named as such, not as a missing button", async () => {
+    const { s, page } = fakePage({
+      button: null,
+      rows: [{ tariff: "child" as TaxiTariff, price_rub: 900, eta_min: 6, selected: false }],
+    });
+    s.choice = true;
+    const r = runner(page);
+    expect((await r.run({ ...prepare, tariff: "child" }) as { code: string }).code).toBe("tariff_needs_choice");
+    expect(s.clicks).toEqual(["tariff:child"]);
     await r.close();
   });
 

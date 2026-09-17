@@ -60,6 +60,8 @@ export interface TaxiPage {
   tariffs(): Promise<TariffRow[]>;
   selectTariff(tariff: TaxiTariff): Promise<void>;
   orderButton(): Promise<{ label: string; price_rub: number | null } | null>;
+  /** Вместо «Заказать» страница просит доуточнить заказ — например выбрать кресло. */
+  choiceRequired(): Promise<boolean>;
   clickOrder(): Promise<void>;
   orderState(): Promise<{ state: TaxiOrderState; driver: TaxiDriver | null }>;
   cancelOrder(): Promise<"clicked" | "unavailable">;
@@ -102,7 +104,7 @@ export function checkTaxiProfile(dir: string | undefined, uid: number | undefine
 /** Отказы, к которым полезен скриншот: владелец видит, на чём встали. */
 const SCREENSHOT_CODES: readonly TaxiFailCode[] = [
   "login_required", "captcha", "unexpected_page", "address_not_found", "tariff_unavailable",
-  "price_unreadable", "price_changed", "order_button_missing",
+  "tariff_needs_choice", "price_unreadable", "price_changed", "order_button_missing",
 ];
 
 const ENDED: readonly TaxiOrderState[] = ["none", "finished", "cancelled"];
@@ -287,7 +289,8 @@ export class TaxiRunner {
     const row = (await page.tariffs()).find((r) => r.tariff === tariff);
     if (!row?.selected) throw new TaxiError("tariff_unavailable");
     const button = await page.orderButton();
-    if (!button) throw new TaxiError("order_button_missing");
+    // «Детский» требует выбрать кресло: заказать одним нажатием нельзя, и это не поломка.
+    if (!button) throw new TaxiError(await page.choiceRequired() ? "tariff_needs_choice" : "order_button_missing");
     const prices = [row.price_rub, button.price_rub].filter((p): p is number => p !== null);
     if (!prices.length) throw new TaxiError("price_unreadable");
     return Math.max(...prices);

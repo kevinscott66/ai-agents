@@ -79,6 +79,8 @@ export function playwrightTaxiPage(page: any): TaxiPage {
 
   return {
     async open() {
+      // Фоновое окно Chrome тормозит таймеры, и цена так и остаётся «от …».
+      await page.bringToFront().catch(() => {});
       await page.goto(TAXI_START_URL, { waitUntil: "domcontentloaded" });
       await page.waitForLoadState("load", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
     },
@@ -124,6 +126,9 @@ export function playwrightTaxiPage(page: any): TaxiPage {
       if (!(await visible(button, UI_TIMEOUT_MS))) return null;
       const label = String(await button.innerText()).replace(/\s+/g, " ").trim().slice(0, 80);
       return { label, ...parseTariffCard(label) };
+    },
+    async choiceRequired() {
+      return await visible(page.getByRole("button", { name: TAXI_TEXT.choice }).first(), 2_000);
     },
     async clickOrder() {
       await orderLocator().click();
