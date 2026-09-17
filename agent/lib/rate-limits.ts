@@ -68,6 +68,7 @@ const RULES: Record<string, { perAgent?: BucketRule; global?: BucketRule }> = {
   TAXI_QUOTE: { perAgent: { windowMs: MINUTE_MS, max: 4 } },
   TAXI_STATUS: { perAgent: { windowMs: MINUTE_MS, max: 6 } },
   ORDER_FOOD: { perAgent: { windowMs: HOUR_MS, max: 10 } },
+  MARKET_PURCHASE: { perAgent: { windowMs: HOUR_MS, max: 10 } },
   SHOP_QUOTE: { perAgent: { windowMs: MINUTE_MS, max: 4 } },
   SHOP_STATUS: { perAgent: { windowMs: MINUTE_MS, max: 6 } },
 };

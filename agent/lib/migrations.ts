@@ -1623,6 +1623,17 @@ export const MIGRATIONS: Migration[] = [
       for (const c of CHARACTERS) ins.run(c.key, c.key === "orchestrator" ? 1 : 0);
     },
   },
+  {
+    // Шаг 10c: MARKET_PURCHASE — тот же путь, что ORDER_FOOD.
+    name: "063_seed_market",
+    up: (db) => {
+      const ins = db.prepare(
+        `INSERT OR IGNORE INTO permissions(agent_key, action_type, allowed, requires_approval)
+         VALUES (?, 'MARKET_PURCHASE', ?, 1)`,
+      );
+      for (const c of CHARACTERS) ins.run(c.key, c.key === "orchestrator" ? 1 : 0);
+    },
+  },
 ];
 
 /**

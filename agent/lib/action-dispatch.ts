@@ -80,7 +80,7 @@ import {
 } from "./dispatch/mac.ts";
 import { handleCloudflareDns } from "./dispatch/cloudflare.ts";
 import { handleOrderTaxi, handleTaxiCancel } from "./dispatch/taxi.ts";
-import { handleOrderFood } from "./dispatch/shop.ts";
+import { handleMarketPurchase, handleOrderFood } from "./dispatch/shop.ts";
 import {
   handleWriteWiki,
   handleListRecentMessages,
@@ -1000,6 +1000,10 @@ export async function dispatchAction<T extends ActionType>(
       case "ORDER_FOOD": {
         const p = payload as PayloadByType["ORDER_FOOD"];
         return await handleOrderFood(p, ctx);
+      }
+      case "MARKET_PURCHASE": {
+        const p = payload as PayloadByType["MARKET_PURCHASE"];
+        return await handleMarketPurchase(p, ctx);
       }
       case "MAC_CONTROL": {
         const p = payload as PayloadByType["MAC_CONTROL"];

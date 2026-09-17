@@ -1,11 +1,12 @@
 /**
- * Покупки в Яндекс Лавке и Яндекс Еде через браузер на Mac владельца — шаги 10a и 10b плана.
+ * Покупки в Яндекс Лавке, Яндекс Еде и Яндекс Маркете через браузер на Mac
+ * владельца — шаги 10a, 10b и 10c плана.
  *
  * Модуль без побочек: его импортируют и сервер (разбор ввода модели, карточка,
  * разбор ответа Mac), и демон (строгий повторный разбор кадра, разбор цены со
  * страницы). Один источник на сервисы, коды отказов и форму ответов.
  *
- * Деньги уходят только так: SHOP_QUOTE → ORDER_FOOD (карточка в чате) →
+ * Деньги уходят только так: SHOP_QUOTE → ORDER_FOOD или MARKET_PURCHASE (карточка в чате) →
  * подпись на телефоне (lib/signed-actions.ts) → claim → prepare на Mac
  * (корзина собирается из подписанных позиций) → checkFinal по итогу со
  * страницы → confirm на Mac (одно нажатие «Оплатить») → complete. Капчу агент
@@ -17,14 +18,26 @@ import { createHash } from "node:crypto";
 export const SHOP_SERVICES = {
   lavka: "Яндекс Лавка",
   eda: "Яндекс Еда",
+  market: "Яндекс Маркет",
 } as const;
 export type ShopService = keyof typeof SHOP_SERVICES;
 export const SHOP_SERVICE_KEYS = Object.keys(SHOP_SERVICES) as ShopService[];
 /** Имя сервиса в подписанном payload (то, что видит телефон). */
-export const SHOP_GATE_SERVICE: Record<ShopService, string> = { lavka: "yandex_lavka", eda: "yandex_eda" };
+export const SHOP_GATE_SERVICE: Record<ShopService, string> = { lavka: "yandex_lavka", eda: "yandex_eda", market: "yandex_market" };
 /** В Еде заказ — из одного ресторана: его надо найти до блюд. */
 export const shopNeedsPlace = (service: ShopService) => service === "eda";
 export const SHOP_GATE_ACTION = "order_food";
+export const MARKET_GATE_ACTION = "market_purchase";
+/** Действие в подписанном payload: еда и продукты — order_food, Маркет — market_purchase. */
+export const shopGateAction = (service: ShopService) => (service === "market" ? MARKET_GATE_ACTION : SHOP_GATE_ACTION);
+/** Тип заявки в чате: Маркет — MARKET_PURCHASE, Лавка и Еда — ORDER_FOOD. */
+export const shopOrderType = (service: ShopService) => (service === "market" ? "MARKET_PURCHASE" : "ORDER_FOOD");
+/**
+ * Маркет показывает доставку только на оформлении. В MARKET_PURCHASE
+ * delivery_rub — сколько владелец готов заплатить за доставку; итог со
+ * страницы всё равно сверяется с подписанным потолком.
+ */
+export const MARKET_DELIVERY_MAX = 1_000;
 
 export const SHOP_QUERY_MAX = 80;
 export const SHOP_ITEMS_MAX = 10;
@@ -45,6 +58,8 @@ const SESSION = /^[A-Za-z0-9_-]{16,64}$/;
 export const SHOP_PRODUCT_ID = /^[a-z0-9][a-z0-9-]{0,159}$/;
 /** Ресторан Еды: `<бренд>:<placeSlug>` из ссылки `/r/<бренд>?placeSlug=<placeSlug>`. */
 export const SHOP_PLACE_REF = /^[a-z0-9][a-z0-9_-]{0,79}:[a-z0-9][a-z0-9_-]{0,79}$/;
+/** Товар Маркета: `<modelId>-<sku>` из ссылки `/card/<slug>/<modelId>?sku=<sku>`. Подмножество SHOP_PRODUCT_ID. */
+export const MARKET_PRODUCT_ID = /^[1-9]\d{0,19}-[1-9]\d{0,19}$/;
 
 /**
  * У блюд Еды нет своих страниц: блюдо — это название в меню ресторана. id
@@ -181,6 +196,7 @@ export function normalizeShopService(v: unknown): ShopService | null {
   const s = v.trim().toLowerCase();
   if (isService(s)) return s;
   if (s === "лавка" || s === "яндекс лавка") return "lavka";
+  if (s === "маркет" || s === "яндекс маркет" || s === "яндекс.маркет") return "market";
   return s === "еда" || s === "яндекс еда" || s === "яндекс.еда" ? "eda" : null;
 }
 
@@ -189,12 +205,14 @@ export const normalizeShopPlaceName = (v: unknown) => normalizeShopName(v);
 
 const exact = <T>(norm: (v: unknown) => T | null, v: unknown) => norm(v) !== null && norm(v) === v;
 
-function parseLines(raw: unknown): ShopLine[] | null {
+const idFits = (service: ShopService, id: string) => SHOP_PRODUCT_ID.test(id) && (service !== "market" || MARKET_PRODUCT_ID.test(id));
+
+function parseLines(raw: unknown, service: ShopService): ShopLine[] | null {
   if (!Array.isArray(raw) || raw.length < 1 || raw.length > SHOP_ITEMS_MAX) return null;
   const lines: ShopLine[] = [];
   for (const l of raw) {
     if (!isObject(l) || keysOf(l) !== "id,name,qty") return null;
-    if (typeof l.id !== "string" || !SHOP_PRODUCT_ID.test(l.id) || !exact(normalizeShopName, l.name) || !isQty(l.qty)) return null;
+    if (typeof l.id !== "string" || !idFits(service, l.id) || !exact(normalizeShopName, l.name) || !isQty(l.qty)) return null;
     lines.push({ id: l.id, name: l.name as string, qty: l.qty });
   }
   return new Set(lines.map((l) => l.id)).size === lines.length ? lines : null;
@@ -220,7 +238,7 @@ export function parseShopRequest(raw: unknown): ShopRequest | null {
       const place = shopNeedsPlace(m.service);
       if (keys !== (place ? "lines,op,place,service,session" : "lines,op,service,session")) return null;
       if (place && (typeof m.place !== "string" || !SHOP_PLACE_REF.test(m.place))) return null;
-      const lines = parseLines(m.lines);
+      const lines = parseLines(m.lines, m.service);
       return lines ? { op: "prepare", session: m.session as string, service: m.service, ...(place ? { place: m.place as string } : {}), lines } : null;
     }
     case "confirm":
@@ -371,14 +389,19 @@ export interface OrderFoodView {
   delivery_rub: number;
 }
 
-/** Разбор payload ORDER_FOOD (build-payload его уже нормализовал; здесь — второй рубеж). */
+/**
+ * Разбор payload ORDER_FOOD и MARKET_PURCHASE (build-payload его уже
+ * нормализовал; здесь — второй рубеж). У MARKET_PURCHASE поля service нет:
+ * его подставляет вызывающий.
+ */
 export function parseOrderFood(p: Record<string, unknown>): OrderFoodView | null {
   if (!isService(p.service) || !isFee(p.delivery_rub) || !Array.isArray(p.lines)) return null;
+  if (p.service === "market" && p.delivery_rub > MARKET_DELIVERY_MAX) return null;
   if (shopNeedsPlace(p.service) ? !exact(normalizeShopPlaceName, p.place) : p.place !== undefined) return null;
   if (p.lines.length < 1 || p.lines.length > SHOP_ITEMS_MAX) return null;
   const lines: OrderFoodView["lines"] = [];
   for (const l of p.lines) {
-    if (!isObject(l) || typeof l.id !== "string" || !SHOP_PRODUCT_ID.test(l.id)) return null;
+    if (!isObject(l) || typeof l.id !== "string" || !idFits(p.service, l.id)) return null;
     if (!exact(normalizeShopName, l.name) || !isQty(l.qty) || !isRub(l.price_rub)) return null;
     lines.push({ id: l.id, name: l.name as string, qty: l.qty, price_rub: l.price_rub });
   }
@@ -386,11 +409,12 @@ export function parseOrderFood(p: Record<string, unknown>): OrderFoodView | null
   return { service: p.service, ...(p.place !== undefined ? { place: p.place as string } : {}), lines, delivery_rub: p.delivery_rub };
 }
 
-/** Карточка ORDER_FOOD в чате: то же, что потом подпишет телефон. */
+/** Карточка ORDER_FOOD и MARKET_PURCHASE в чате: то же, что потом подпишет телефон. */
 export function describeOrderFood(p: Record<string, unknown>, deviationPct: number): string {
   const o = parseOrderFood(p);
   if (!o) return "некорректный заказ";
   const amount = shopLineSum(o.lines) + o.delivery_rub;
-  return `${shopStoreLabel(o.service, o.place)}: ${o.lines.map(shopLineText).join("; ")}; доставка ${o.delivery_rub} ₽. ` +
+  const delivery = o.service === "market" ? `доставка до ${o.delivery_rub} ₽` : `доставка ${o.delivery_rub} ₽`;
+  return `${shopStoreLabel(o.service, o.place)}: ${o.lines.map(shopLineText).join("; ")}; ${delivery}. ` +
     `Всего ${amount} ₽ (итог на странице — не больше ${shopMaxFinal(amount, deviationPct)} ₽), дальше — подпись на телефоне`;
 }

@@ -1,5 +1,5 @@
 /**
- * Шаги 10a и 10b: покупки в Яндекс Лавке и Яндекс Еде через браузер на Mac владельца.
+ * Шаги 10a–10c: покупки в Яндекс Лавке, Яндекс Еде и Яндекс Маркете через браузер на Mac владельца.
  *
  *   SHOP_QUOTE  {service?, place?, queries}             — инлайново: адрес, доставка,
  *                                                         ресторан (Еда) и до трёх
@@ -7,6 +7,10 @@
  *   ORDER_FOOD  {service, place?, lines[{id,name,qty,price_rub}], delivery_rub}
  *                                                       — карточка в чате (money), затем
  *                                                         заявка в подписанный гейт;
+ *   MARKET_PURCHASE {lines[…], delivery_rub}            — то же для Маркета; доставка
+ *                                                         там видна только на оформлении,
+ *                                                         поэтому delivery_rub — сколько
+ *                                                         владелец готов за неё заплатить;
  *   подпись на телефоне → исполнитель: claim → prepare → checkFinal → confirm;
  *   SHOP_STATUS {service?}                              — инлайново: состояние заказа.
  *
@@ -27,12 +31,12 @@ import { signedActions } from "../native-signing.ts";
 import { limitsFromEnv, maxRubFor, SignedActionRefusal, type SignedActions } from "../signed-actions.ts";
 import { log } from "../log.ts";
 import {
+  MARKET_DELIVERY_MAX,
   normalizeShopPlaceName,
   normalizeShopQuery,
   normalizeShopService,
   parseShopOutcome,
   SHOP_FAIL_LABEL,
-  SHOP_GATE_ACTION,
   SHOP_GATE_SERVICE,
   SHOP_ITEMS_MAX,
   SHOP_PLACED_STATES,
@@ -40,8 +44,10 @@ import {
   SHOP_QUOTE_TTL_MS,
   SHOP_SERVICES,
   SHOP_STATE_LABEL,
+  shopGateAction,
   shopLineSum,
   shopNeedsPlace,
+  shopOrderType,
   shopStoreLabel,
   shopLineText,
   shopMaxFinal,
@@ -101,9 +107,11 @@ interface PendingOrder {
   service: ShopService;
   place?: ShopPlace;
   address: string;
-  lines: PayloadByType["ORDER_FOOD"]["lines"];
+  lines: OrderLines;
   at: number;
 }
+
+type OrderLines = PayloadByType["ORDER_FOOD"]["lines"];
 
 /** Последний расчёт на пользователя: заказывать можно только по нему. */
 const quotes = new Map<string, Quote>();
@@ -183,9 +191,12 @@ export async function quoteShop(input: Record<string, unknown>, ctx: ShopInlineC
       max_rub: maxRubFor(limitsFromEnv(), SHOP_GATE_SERVICE[service]),
       valid_min: Math.round(SHOP_QUOTE_TTL_MS / 60_000),
       note:
-        "Это поиск, не заказ. Для заказа — ORDER_FOOD с выбранными товарами: id, name и price_rub ровно из этого расчёта, qty — сколько просил владелец; " +
+        `Это поиск, не заказ. Для заказа — ${shopOrderType(service)} с выбранными товарами: id, name и price_rub ровно из этого расчёта, qty — сколько просил владелец; ` +
         (out.place ? "place — ресторан ровно из расчёта; если он не тот, что имел в виду владелец, переспроси; " : "") +
-        "delivery_rub — из расчёта (null → 0). Если товар неочевиден, спроси владельца, какой из вариантов.",
+        (service === "market" && out.delivery_rub === null
+          ? `delivery_rub — сколько владелец готов заплатить за доставку (0..${MARKET_DELIVERY_MAX}; не сказал — спроси или 0). `
+          : "delivery_rub — из расчёта (null → 0). ") +
+        "Если товар неочевиден, спроси владельца, какой из вариантов.",
     };
   } catch (e) {
     return { ok: false, error: errorText(e) };
@@ -216,12 +227,13 @@ const GATE_TEXT: Partial<Record<string, string>> = {
 };
 
 /** Позиции заявки → параметры подписи: магазин, ресторан, адрес, товары, доставка. */
-function gateParams(quote: Quote, lines: PendingOrder["lines"], deliveryRub: number): Record<string, string | number> {
+function gateParams(quote: Quote, lines: OrderLines, deliveryRub: number): Record<string, string | number> {
   const params: Record<string, string | number> = { store: SHOP_SERVICES[quote.service] };
   if (quote.place) params.place = quote.place.name;
   params.address = quote.address;
   lines.forEach((l, i) => { params[`item_${String(i + 1).padStart(2, "0")}`] = shopLineText(l); });
-  params.delivery_rub = deliveryRub;
+  // В Маркете это потолок доставки, а не её цена.
+  params[quote.service === "market" && quote.delivery_rub === null ? "delivery_max_rub" : "delivery_rub"] = deliveryRub;
   return params;
 }
 
@@ -230,10 +242,22 @@ function gateParams(quote: Quote, lines: PendingOrder["lines"], deliveryRub: num
  * Сам заказ не делается — его сделает исполнитель после подписи.
  */
 export async function handleOrderFood(payload: PayloadByType["ORDER_FOOD"], ctx: ShopHandlerContext): Promise<HandlerResult> {
+  if (payload.service === "market") return { ok: false, error: "для Маркета — MARKET_PURCHASE" };
+  return issueShopOrder(payload.service, payload, ctx);
+}
+
+/** MARKET_PURCHASE после одобрения в чате: то же, что ORDER_FOOD, в Маркете. */
+export async function handleMarketPurchase(payload: PayloadByType["MARKET_PURCHASE"], ctx: ShopHandlerContext): Promise<HandlerResult> {
+  return issueShopOrder("market", payload, ctx);
+}
+
+type OrderInput = { place?: string; lines: OrderLines; delivery_rub: number; _userId?: string; _delegated?: boolean };
+
+async function issueShopOrder(service: ShopService, payload: OrderInput, ctx: ShopHandlerContext): Promise<HandlerResult> {
   const refusal = ownerRefusal(ctx.agentKey, ctx.chatId, payload._userId, payload._delegated === true);
   if (refusal) return { ok: false, error: refusal };
   const userId = payload._userId!;
-  const { service, lines, delivery_rub: delivery } = payload;
+  const { lines, delivery_rub: delivery } = payload;
   const quote = quotes.get(userId);
   const now = deps.now();
   if (!quote || now - quote.at > SHOP_QUOTE_TTL_MS || quote.service !== service) {
@@ -249,13 +273,20 @@ export async function handleOrderFood(payload: PayloadByType["ORDER_FOOD"], ctx:
       return { ok: false, error: `в расчёте «${item.name}» за ${item.price_rub} ₽, а в заявке «${line.name}» за ${line.price_rub} ₽: пересчитай через SHOP_QUOTE` };
     }
   }
-  if (delivery !== (quote.delivery_rub ?? 0)) {
-    return { ok: false, error: `доставка в расчёте ${quote.delivery_rub ?? 0} ₽, а в заявке ${delivery} ₽` };
+  // Маркет не показывает доставку до оформления: владелец называет, сколько готов за неё отдать.
+  const deliveryCap = service === "market" && quote.delivery_rub === null;
+  if (deliveryCap ? !(Number.isSafeInteger(delivery) && delivery >= 0 && delivery <= MARKET_DELIVERY_MAX) : delivery !== (quote.delivery_rub ?? 0)) {
+    return {
+      ok: false,
+      error: deliveryCap
+        ? `delivery_rub — сколько владелец готов заплатить за доставку, 0..${MARKET_DELIVERY_MAX} ₽`
+        : `доставка в расчёте ${quote.delivery_rub ?? 0} ₽, а в заявке ${delivery} ₽`,
+    };
   }
   const amount = shopLineSum(lines) + delivery;
   try {
     const { nonce, payload: signed } = deps.gate().issue(
-      { service: SHOP_GATE_SERVICE[service], action: SHOP_GATE_ACTION, params: gateParams(quote, lines, delivery), amountRub: amount },
+      { service: SHOP_GATE_SERVICE[service], action: shopGateAction(service), params: gateParams(quote, lines, delivery), amountRub: amount },
       now,
     );
     for (const [key, order] of pendingOrders) if (now - order.at > SHOP_QUOTE_TTL_MS) pendingOrders.delete(key);
@@ -310,7 +341,7 @@ async function runSignedShop(nonce: string): Promise<void> {
   let maxFinal: number;
   try {
     const claimed = gate.claim(nonce, order.payload, deps.now());
-    if (!GATE_SERVICES.includes(claimed.service) || claimed.service !== SHOP_GATE_SERVICE[order.service] || claimed.action !== SHOP_GATE_ACTION) {
+    if (!GATE_SERVICES.includes(claimed.service) || claimed.service !== SHOP_GATE_SERVICE[order.service] || claimed.action !== shopGateAction(order.service)) {
       gate.abort(nonce, deps.now());
       return;
     }

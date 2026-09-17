@@ -3,7 +3,7 @@ import { nativeTurnContext } from "./native-context.ts";
  * C5/R-A: Anthropic tool_use схема + диспатчер.
  *
  * Аудит 2026-09-11: здесь было написано «все 12 инструментов идут через единый
- * `gateOrDispatch`». Неверно дважды. Инструментов в `TOOL_NAMES` тридцать три
+ * `gateOrDispatch`». Неверно дважды. Инструментов в `TOOL_NAMES` тридцать четыре
  * (число сверяется тестом audit-2026-09-11-tool-counts: в круге 29 оно уже
  * успело протухнуть на два, пока список рос); восемнадцать — это
  * `INLINE_TOOL_NAMES` из `constants.ts`, то есть ровно тот набор, который через
@@ -749,11 +749,11 @@ export const TOOLS: Anthropic.Tool[] = [
   {
     name: "SHOP_QUOTE",
     description:
-      "Поиск в Яндекс Лавке (продукты) или Яндекс Еде (блюда одного ресторана) через браузер на Mac владельца: адрес доставки из профиля, стоимость доставки и до трёх подходящих товаров с ценой на каждый запрос. Для Еды нужен place — ресторан; в ответе будет найденный ресторан, покажи его владельцу. Ничего не кладёт в корзину и не заказывает. Только когда владелец сам попросил в своём личном чате. Расчёт действует 15 минут.",
+      "Поиск в Яндекс Лавке (продукты), Яндекс Еде (блюда одного ресторана) или Яндекс Маркете (покупки) через браузер на Mac владельца: адрес доставки из профиля, стоимость доставки (у Маркета — null, она видна только на оформлении) и до трёх подходящих товаров с ценой на каждый запрос. Для Еды нужен place — ресторан; в ответе будет найденный ресторан, покажи его владельцу. Ничего не кладёт в корзину и не заказывает. Только когда владелец сам попросил в своём личном чате. Расчёт действует 15 минут.",
     input_schema: {
       type: "object",
       properties: {
-        service: { type: "string", enum: ["lavka", "eda"], description: "lavka — продукты (по умолчанию), eda — ресторан." },
+        service: { type: "string", enum: ["lavka", "eda", "market"], description: "lavka — продукты (по умолчанию), eda — ресторан, market — Маркет." },
         place: { type: "string", description: "Только для eda: название ресторана, как сказал владелец («Жарицца Пицца»)." },
         queries: {
           type: "array",
@@ -794,8 +794,33 @@ export const TOOLS: Anthropic.Tool[] = [
   {
     name: "SHOP_STATUS",
     description:
-      "Read-only: состояние последнего заказа в Яндекс Лавке или Яндекс Еде на Mac владельца — принят, готовится или собирается, курьер в пути, доставлен, отменён. Только для владельца в его личном чате.",
-    input_schema: { type: "object", properties: { service: { type: "string", enum: ["lavka", "eda"] } } },
+      "Read-only: состояние последнего заказа в Яндекс Лавке, Яндекс Еде или Яндекс Маркете на Mac владельца — принят, готовится или собирается, курьер в пути, доставлен, отменён. Только для владельца в его личном чате.",
+    input_schema: { type: "object", properties: { service: { type: "string", enum: ["lavka", "eda", "market"] } } },
+  },
+  {
+    name: "MARKET_PURCHASE",
+    description:
+      "Купить в Яндекс Маркете по свежему расчёту SHOP_QUOTE {service: \"market\"}: id, name и price_rub каждого товара — ровно из расчёта, qty — сколько просил владелец. delivery_rub — сколько владелец готов заплатить за доставку (Маркет показывает её только на оформлении): если не сказал — спроси или 0. Если вариантов несколько и владелец не назвал конкретный — спроси. Покупка ждёт подтверждения в чате, затем подписи Face ID на телефоне; результат придёт отдельным сообщением. Пока он не пришёл, не говори «куплено». Лимиты: сумма и число заказов в день ограничены сервером, итог на странице не может превысить подписанную сумму больше чем на 15%.",
+    input_schema: {
+      type: "object",
+      properties: {
+        lines: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string", description: "id товара из SHOP_QUOTE." },
+              name: { type: "string", description: "Название ровно как в SHOP_QUOTE." },
+              qty: { type: "number", description: "Количество, 1..20." },
+              price_rub: { type: "number", description: "Цена за штуку из SHOP_QUOTE, целые рубли." },
+            },
+            required: ["id", "name", "qty", "price_rub"],
+          },
+        },
+        delivery_rub: { type: "number", description: "Сколько владелец готов заплатить за доставку, целые рубли 0..1000." },
+      },
+      required: ["lines", "delivery_rub"],
+    },
   },
   {
     name: "GENERATE_SVG_IMAGE",
@@ -964,6 +989,7 @@ export const TOOL_NAMES = new Set<string>([
   "ORDER_TAXI",
   "TAXI_CANCEL",
   "ORDER_FOOD",
+  "MARKET_PURCHASE",
   // 2026-08-02: инструмент был объявлен в TOOLS, получил payload-валидатор и
   // case в диспатчере — но не попал сюда, поэтому executeTool отбивал его на
   // `unknown tool` ДО gateOrDispatch: ни строки в agent_actions, ни ошибки в
@@ -1794,7 +1820,8 @@ export async function executeTool(
   // USERBOT_SEND_DM, CLOUDFLARE_DNS, такси и Лавка: хендлер по _userId сверяет, что просил владелец из своей лички.
   if (
     at === "MAC_RUN_CLAUDE" || at === "MAC_STOP" || at === "MAC_CONTROL" || at === "USERBOT_SEND_DM" ||
-    at === "CLOUDFLARE_DNS" || at === "ORDER_TAXI" || at === "TAXI_CANCEL" || at === "ORDER_FOOD"
+    at === "CLOUDFLARE_DNS" || at === "ORDER_TAXI" || at === "TAXI_CANCEL" || at === "ORDER_FOOD" ||
+    at === "MARKET_PURCHASE"
   ) {
     const p = built.payload as { _userId?: string; _delegated?: boolean };
     p._userId = ctx.triggerUserId;

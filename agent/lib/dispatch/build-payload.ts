@@ -25,6 +25,7 @@ import { normalizeTaxiAddress, normalizeTaxiTariff, TAXI_ADDRESS_MAX, TAXI_TARIF
 import {
   normalizeShopName,
   normalizeShopPlaceName,
+  MARKET_DELIVERY_MAX,
   normalizeShopService,
   parseOrderFood,
   shopNeedsPlace,
@@ -980,6 +981,7 @@ export function buildPayload<T extends ActionType>(
     case "ORDER_FOOD": {
       const service = normalizeShopService(i.service);
       if (!service) return { ok: false, error: `service must be one of: ${SHOP_SERVICE_KEYS.join(", ")}` };
+      if (service === "market") return { ok: false, error: "для Маркета — MARKET_PURCHASE" };
       const place = shopNeedsPlace(service) ? normalizeShopPlaceName(i.place) : undefined;
       if (shopNeedsPlace(service) && !place) return { ok: false, error: "place — ресторан ровно как в SHOP_QUOTE" };
       if (!shopNeedsPlace(service) && i.place !== undefined) return { ok: false, error: `у ${service} нет ресторана: place не нужен` };
@@ -998,6 +1000,25 @@ export function buildPayload<T extends ActionType>(
         };
       }
       const payload: PayloadFor<"ORDER_FOOD"> = parsed;
+      return { ok: true, payload: payload as PayloadFor<T> };
+    }
+    case "MARKET_PURCHASE": {
+      if (i.service !== undefined || i.place !== undefined) return { ok: false, error: "у MARKET_PURCHASE нет service и place" };
+      if (!Array.isArray(i.lines) || i.lines.length < 1 || i.lines.length > SHOP_ITEMS_MAX) {
+        return { ok: false, error: `lines — от 1 до ${SHOP_ITEMS_MAX} товаров из SHOP_QUOTE` };
+      }
+      const lines = i.lines.map((l) => {
+        const o = (l && typeof l === "object" ? l : {}) as Record<string, unknown>;
+        return { id: o.id, name: normalizeShopName(o.name), qty: o.qty, price_rub: o.price_rub };
+      });
+      const parsed = parseOrderFood({ service: "market", lines, delivery_rub: i.delivery_rub ?? 0 });
+      if (!parsed) {
+        return {
+          ok: false,
+          error: `каждый товар — {id, name, price_rub} ровно из SHOP_QUOTE и qty 1..${SHOP_QTY_MAX}, без повторов; delivery_rub — целые рубли 0..${MARKET_DELIVERY_MAX}`,
+        };
+      }
+      const payload: PayloadFor<"MARKET_PURCHASE"> = { lines: parsed.lines, delivery_rub: parsed.delivery_rub };
       return { ok: true, payload: payload as PayloadFor<T> };
     }
     case "MAC_STOP": {

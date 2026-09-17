@@ -1,5 +1,5 @@
 /**
- * Шаги 10a и 10b: Яндекс Лавка и Яндекс Еда. Всё на заглушках: страница, мост и Telegram
+ * Шаги 10a–10c: Яндекс Лавка, Еда и Маркет. Всё на заглушках: страница, мост и Telegram
  * подменены, настоящий браузер не запускается и заказ не делается.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -13,6 +13,7 @@ import { buildPayload } from "../lib/dispatch/build-payload.ts";
 import {
   configureShop,
   executeSignedShop,
+  handleMarketPurchase,
   handleOrderFood,
   hasPendingShopOrder,
   quoteShop,
@@ -45,6 +46,7 @@ import {
 } from "../mac-daemon/shop.ts";
 import { productIdFromHref, routeShopPage } from "../mac-daemon/shop-playwright.ts";
 import { dishMatches, dishName, edaPlaceUrl, pickPlace, placeRefFromHref } from "../mac-daemon/eda-playwright.ts";
+import { marketIdFromHref, marketUrlFor } from "../mac-daemon/market-playwright.ts";
 import type { ShopPlace } from "../lib/shop.ts";
 
 const T0 = Date.UTC(2026, 8, 17, 9, 0, 0);
@@ -77,7 +79,7 @@ describe("parsing", () => {
     expect(normalizeShopName("Молоко​ 1 л")).toBeNull();
     expect(normalizeShopService(undefined)).toBe("lavka");
     expect(normalizeShopService("Лавка")).toBe("lavka");
-    expect(normalizeShopService("market")).toBeNull();
+    expect(normalizeShopService("ozon")).toBeNull();
     expect(productIdFromHref("/good/moloko-3-2-1l?from=search")).toBe("moloko-3-2-1l");
     expect(productIdFromHref("https://evil.example.com/good/x")).toBeNull();
   });
@@ -92,7 +94,7 @@ describe("parsing", () => {
     expect(parseShopRequest({ op: "prepare", session: SESSION, service: "lavka", lines: [{ ...lines[0], id: "../cart" }] })).toBeNull();
     expect(parseShopRequest({ op: "confirm", session: SESSION, maxRub: 500, extra: 1 })).toBeNull();
     expect(parseShopRequest({ op: "confirm", session: "short", maxRub: 500 })).toBeNull();
-    expect(parseShopRequest({ op: "status", service: "market" })).toBeNull();
+    expect(parseShopRequest({ op: "status", service: "ozon" })).toBeNull();
   });
 
   test("daemon answer is checked, junk throws", () => {
@@ -630,7 +632,7 @@ describe("eda: parsing and page helpers", () => {
     const eda = fakePage();
     eda.s.place = PLACE;
     eda.s.address = "Еда-адрес";
-    const page = routeShopPage({ lavka: lavka.page, eda: eda.page });
+    const page = routeShopPage({ lavka: lavka.page, eda: eda.page, market: fakePage().page });
     await page.openHome({ service: "lavka" });
     expect(await page.address()).toBe("Краснодар, Красная 1");
     expect(await page.findPlace("бургер")).toEqual(PLACE);
@@ -806,5 +808,166 @@ describe("eda: server flow", () => {
     expect(buildPayload("ORDER_FOOD", { service: "eda", lines: [line], delivery_rub: 0 }, ctx).ok).toBe(false);
     expect(buildPayload("ORDER_FOOD", { service: "lavka", place: PLACE.name, lines: [{ ...MILK, qty: 1 }], delivery_rub: 0 }, ctx).ok).toBe(false);
     expect(approvalCategories("ORDER_FOOD", { service: "eda", place: PLACE.name, lines: [line], delivery_rub: 0 })).toEqual(["money"]);
+  });
+});
+
+const CHARGER = { id: "123456789-100200300", name: "Зарядное устройство USB-C 65 Вт", price_rub: 2490 };
+const CABLE = { id: "987654321-400500600", name: "Кабель USB-C 1 м", price_rub: 590 };
+
+describe("market: parsing and page helpers", () => {
+  test("service names, product ids and links", () => {
+    expect(normalizeShopService("Маркет")).toBe("market");
+    expect(normalizeShopService("яндекс.маркет")).toBe("market");
+    expect(marketIdFromHref("/card/zaryadka/123456789?sku=100200300&do-waremd5=x")).toBe(CHARGER.id);
+    expect(marketIdFromHref("https://market.yandex.ru/product--zaryadka/123456789?sku=100200300")).toBe(CHARGER.id);
+    expect(marketIdFromHref("/card/zaryadka/123456789")).toBeNull();
+    expect(marketIdFromHref("/card/zaryadka/123456789?sku=abc")).toBeNull();
+    expect(marketIdFromHref("https://evil.example.com/card/x/123456789?sku=1")).toBeNull();
+    expect(marketIdFromHref(null)).toBeNull();
+    expect(marketUrlFor(CHARGER.id)).toBe("https://market.yandex.ru/product/123456789?sku=100200300");
+  });
+
+  test("daemon frame: market lines need a model-sku id, no place", () => {
+    const lines = [{ id: CHARGER.id, name: CHARGER.name, qty: 1 }];
+    expect(parseShopRequest({ op: "prepare", session: SESSION, service: "market", lines })).toEqual({ op: "prepare", session: SESSION, service: "market", lines });
+    expect(parseShopRequest({ op: "prepare", session: SESSION, service: "market", lines: [{ ...lines[0], id: "zaryadka" }] })).toBeNull();
+    expect(parseShopRequest({ op: "prepare", session: SESSION, service: "market", place: "a:b", lines })).toBeNull();
+    expect(parseShopRequest({ op: "quote", service: "market", queries: ["зарядка"] })).toEqual({ op: "quote", service: "market", queries: ["зарядка"] });
+  });
+
+  test("approval card says delivery is a ceiling", () => {
+    expect(describeOrderFood({ service: "market", lines: [{ ...CHARGER, qty: 1 }], delivery_rub: 300 }, 15)).toBe(
+      "Яндекс Маркет: Зарядное устройство USB-C 65 Вт × 1 — 2490 ₽; доставка до 300 ₽. Всего 2790 ₽ (итог на странице — не больше 3208 ₽), дальше — подпись на телефоне",
+    );
+    expect(describeOrderFood({ service: "market", lines: [{ ...CHARGER, qty: 1 }], delivery_rub: 1001 }, 15)).toBe("некорректный заказ");
+    expect(approvalPreview("MARKET_PURCHASE", { lines: [{ ...CHARGER, qty: 1 }], delivery_rub: 0 })).toContain("Яндекс Маркет");
+    expect(approvalCategories("MARKET_PURCHASE", { lines: [{ ...CHARGER, qty: 1 }], delivery_rub: 0 })).toEqual(["money"]);
+  });
+
+  test("buildPayload: MARKET_PURCHASE has no service or place, ORDER_FOOD refuses market", () => {
+    const line = { ...CHARGER, qty: 1 };
+    const ctx = { agentKey: "orchestrator" };
+    expect(buildPayload("MARKET_PURCHASE", { lines: [line], delivery_rub: 200 }, ctx)).toEqual({ ok: true, payload: { lines: [line], delivery_rub: 200 } });
+    expect(buildPayload("MARKET_PURCHASE", { lines: [line] }, ctx)).toEqual({ ok: true, payload: { lines: [line], delivery_rub: 0 } });
+    expect(buildPayload("MARKET_PURCHASE", { lines: [line], delivery_rub: 1500 }, ctx).ok).toBe(false);
+    expect(buildPayload("MARKET_PURCHASE", { service: "lavka", lines: [line], delivery_rub: 0 }, ctx).ok).toBe(false);
+    expect(buildPayload("MARKET_PURCHASE", { place: "x", lines: [line], delivery_rub: 0 }, ctx).ok).toBe(false);
+    expect(buildPayload("MARKET_PURCHASE", { lines: [{ ...line, id: "zaryadka" }], delivery_rub: 0 }, ctx).ok).toBe(false);
+  });
+});
+
+function marketPage() {
+  const f = fakePage();
+  f.s.delivery = null;
+  f.s.cards = [
+    { ...CHARGER, available: true },
+    { id: "zaryadka-bez-sku", name: "Зарядка без варианта", price_rub: 990, available: true },
+  ];
+  f.s.products = new Map([
+    [CHARGER.id, { name: CHARGER.name, price_rub: 2490, available: true }],
+    [CABLE.id, { name: CABLE.name, price_rub: 590, available: true }],
+  ]);
+  return f;
+}
+
+describe("market: mac runner", () => {
+  const prepare: ShopRequest = {
+    op: "prepare",
+    session: SESSION,
+    service: "market",
+    lines: [{ id: CHARGER.id, name: CHARGER.name, qty: 1 }, { id: CABLE.id, name: CABLE.name, qty: 2 }],
+  };
+
+  test("quote keeps only concrete variants, delivery unknown", async () => {
+    const { s, page } = marketPage();
+    const r = runner(page);
+    expect(await r.run({ op: "quote", service: "market", queries: ["зарядка"] })).toEqual({
+      ok: true,
+      op: "quote",
+      address: ADDRESS,
+      delivery_rub: null,
+      results: [{ query: "зарядка", candidates: [CHARGER] }],
+    });
+    expect(s.clicks).toEqual([]);
+    await r.close();
+  });
+
+  test("prepare and confirm with signed variants", async () => {
+    const { s, page } = marketPage();
+    const r = runner(page);
+    expect(await r.run(prepare)).toMatchObject({ ok: true, op: "prepare", total_rub: 3670 });
+    expect(await r.run({ op: "confirm", session: SESSION, maxRub: 4300 })).toEqual({ ok: true, op: "confirm", state: "accepted" });
+    expect(s.clicks.filter((c) => c === "pay")).toHaveLength(1);
+    await r.close();
+  });
+
+  test("variant with options: refusal, cart cleared, no pay", async () => {
+    const { s, page } = marketPage();
+    s.qtyResult = "options_required";
+    const r = runner(page);
+    expect(await r.run(prepare)).toEqual({ ok: false, code: "options_required", screenshot: "U0NSRUVO" });
+    expect(s.cart.size).toBe(0);
+    expect(s.clicks).not.toContain("pay");
+    await r.close();
+  });
+});
+
+describe("market: server flow", () => {
+  let h: Awaited<ReturnType<typeof harness>> | null = null;
+  const MARKET_QUOTE: ShopOutcome = {
+    ok: true,
+    op: "quote",
+    address: ADDRESS,
+    delivery_rub: null,
+    results: [{ query: "зарядка", candidates: [CHARGER] }],
+  };
+  const buy = (delivery_rub = 300, lines = [{ ...CHARGER, qty: 1 }]) =>
+    handleMarketPurchase({ lines, delivery_rub, _userId: String(OWNER) }, { agentKey: "orchestrator", chatId: OWNER });
+  beforeEach(() => {
+    resetShopState();
+    process.env.SHOP_ENABLED = "true";
+    process.env.MINIAPP_ADMIN_USER_IDS = `123,${OWNER}`;
+  });
+  afterEach(() => {
+    h?.restore();
+    h = null;
+    resetShopState();
+    for (const k of ENV_KEYS) {
+      if (savedEnv[k] === undefined) delete process.env[k]; else process.env[k] = savedEnv[k];
+    }
+  });
+
+  test("ORDER_FOOD refuses market; MARKET_PURCHASE signs market_purchase with a delivery ceiling", async () => {
+    h = await harness(
+      { quote: MARKET_QUOTE, prepare: { ok: true, op: "prepare", address: ADDRESS, lines: [{ id: CHARGER.id, qty: 1, price_rub: 2490 }], total_rub: 2690 }, confirm: { ok: true, op: "confirm", state: "accepted" } },
+      { maxRub: 5000, dailyMax: 5, deviationPct: 15 },
+    );
+    expect(await quoteShop({ service: "market", queries: ["зарядка"] }, h.ctx)).toMatchObject({ ok: true, delivery_rub: null });
+    expect((await handleOrderFood({ service: "market", lines: [{ ...CHARGER, qty: 1 }], delivery_rub: 0, _userId: String(OWNER) }, { agentKey: "orchestrator", chatId: OWNER })).ok).toBe(false);
+    expect((await buy(1001)).ok).toBe(false);
+    expect((await buy(300, [{ ...CHARGER, price_rub: 1990, qty: 1 }])).ok).toBe(false);
+    expect(await buy()).toMatchObject({ ok: true, result: { status: "awaiting_signature", amount_rub: 2790 } });
+    const { payload } = h.gate.pending(T0).at(-1)!;
+    const signed = JSON.parse(payload);
+    expect(signed).toMatchObject({
+      service: "yandex_market",
+      action: "market_purchase",
+      amount_rub: 2790,
+      params: { store: "Яндекс Маркет", address: ADDRESS, item_01: "Зарядное устройство USB-C 65 Вт × 1 — 2490 ₽", delivery_max_rub: 300 },
+    });
+    expect(signed.params.delivery_rub).toBeUndefined();
+    const nonce = await h.sign();
+    await executeSignedShop(nonce);
+    expect(h.requests.map((r) => r.op)).toEqual(["quote", "prepare", "confirm"]);
+    expect(h.requests[1]).toEqual({ op: "prepare", session: SESSION, service: "market", lines: [{ id: CHARGER.id, name: CHARGER.name, qty: 1 }] });
+    expect(h.status(nonce)).toBe("executed");
+  });
+
+  test("known delivery must be matched exactly", async () => {
+    h = await harness({ quote: { ...MARKET_QUOTE, delivery_rub: 199 } }, { maxRub: 5000, dailyMax: 5, deviationPct: 15 });
+    await quoteShop({ service: "market", queries: ["зарядка"] }, h.ctx);
+    expect((await buy(300)).ok).toBe(false);
+    expect(await buy(199)).toMatchObject({ ok: true, result: { amount_rub: 2689 } });
+    expect(JSON.parse(h.gate.pending(T0).at(-1)!.payload).params).toMatchObject({ delivery_rub: 199 });
   });
 });

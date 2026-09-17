@@ -294,6 +294,18 @@ export interface OrderFoodPayload {
   _delegated?: boolean;
 }
 
+/**
+ * MARKET_PURCHASE: товары Маркета из SHOP_QUOTE {service: "market"} и
+ * delivery_rub — сколько владелец готов заплатить за доставку (Маркет
+ * показывает её только на оформлении).
+ */
+export interface MarketPurchasePayload {
+  lines: Array<{ id: string; name: string; qty: number; price_rub: number }>;
+  delivery_rub: number;
+  _userId?: string;
+  _delegated?: boolean;
+}
+
 export interface MacRunClaudePayload {
   allowFallback?: boolean;
   provider?: "claude" | "codex";
@@ -471,6 +483,7 @@ export type PayloadByType = {
   ORDER_TAXI: OrderTaxiPayload;
   TAXI_CANCEL: { _userId?: string; _delegated?: boolean };
   ORDER_FOOD: OrderFoodPayload;
+  MARKET_PURCHASE: MarketPurchasePayload;
   SCHEDULE_POST: SchedulePostPayload;
   CREATE_REMINDER: CreateReminderPayload;
   CANCEL_REMINDER: CancelReminderPayload;

@@ -259,3 +259,27 @@ Verification: local installed Claude accepted the readiness command and produced
    `EDA_STATE_TEXT`. Если отличаются — правится только `eda-selectors.ts`.
 4. Корзина Еды должна быть пустой. Если после «В корзину» открывается окно (опции
    блюда, «корзина другого ресторана») — исполнитель закрывает его и отказывает.
+
+## Яндекс Маркет
+
+Тот же кадр `shop`, `SHOP_ENABLED` и профиль `SHOP_PROFILE_DIR`. Вёрстка — в
+`market-selectors.ts`, код страницы — `market-playwright.ts`. Агент Маркет не
+осматривал: маршруты, `data-auto` и подписи — все помечены «НЕ сверено». Пока
+владелец их не сверил, исполнитель упрётся в отказ до оплаты — деньги не спишутся.
+
+Товар — `<modelId>-<sku>` из ссылки карточки (`/card/<slug>/<modelId>?sku=<sku>`).
+Доставка на расчёте не читается (`delivery_rub: null`): её цена видна только на
+оформлении, и итог сверяется с подписанным потолком.
+
+1. `SHOP_PROFILE_DIR=… bun shop.ts login market` — войти, выбрать адрес, проверить
+   сохранённую карту (не «при получении»), Enter.
+2. `bun shop.ts market-quote "товар"` — поиск без корзины. Пустой список —
+   `marketSearchUrl`, `snippet*`; id не читается — `snippetLink` и `marketIdFromHref`.
+3. `bun shop.ts probe market`: руками открой карточку товара, положи его в корзину
+   (посмотри счётчик и «плюс»/«минус»), открой корзину, оформление до оплаты и
+   «Мои заказы»; на каждой нажми Enter. Сверь `productTitle`, `productOffer`,
+   `cartButton`, `qty*`, `addressButton`, `cartItem*`, тексты `checkout`, `pay`,
+   `total`, `savedCard`, `payOnDelivery` и `MARKET_STATE_TEXT`. Правится только
+   `market-selectors.ts`.
+4. Корзина Маркета должна быть пустой. Если после «В корзину» страница просит
+   выбрать размер или цвет — отказ `options_required`; допродажу исполнитель закрывает.

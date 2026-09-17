@@ -1,6 +1,6 @@
 /**
  * ShopPage поверх Playwright: настоящий Chrome владельца с отдельным профилем.
- * Лавка — здесь, Еда — eda-playwright.ts; одна вкладка, маршрутизатор отдаёт
+ * Лавка — здесь, Еда — eda-playwright.ts, Маркет — market-playwright.ts; одна вкладка, маршрутизатор отдаёт
  * вызовы адаптеру сервиса, страницу которого открыли последней.
  *
  * playwright-core лежит только в mac-daemon/node_modules — на сервере его нет,
@@ -65,12 +65,13 @@ export async function launchPlaywrightShop(env: ShopEnv, profileDir: string, opt
   raw.setDefaultTimeout(UI_TIMEOUT_MS);
   raw.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
   const { edaShopPage } = await import("./eda-playwright.ts");
-  const page = routeShopPage({ lavka: playwrightShopPage(raw), eda: edaShopPage(raw) });
+  const { marketShopPage } = await import("./market-playwright.ts");
+  const page = routeShopPage({ lavka: playwrightShopPage(raw), eda: edaShopPage(raw), market: marketShopPage(raw) });
   return { page: () => page, close: () => context.close() };
 }
 
 /**
- * Одна вкладка на оба сервиса: open* выбирает адаптер, остальные вызовы идут
+ * Одна вкладка на все сервисы: open* выбирает адаптер, остальные вызовы идут
  * туда, где открыли страницу последней.
  */
 export function routeShopPage(pages: Record<ShopService, ShopPage>): ShopPage {
@@ -131,7 +132,7 @@ export function productIdFromHref(href: unknown): string | null {
   return SHOP_PRODUCT_ID.test(id) ? id : null;
 }
 
-/** Общие приёмы работы со страницей для адаптеров Лавки и Еды. */
+/** Общие приёмы работы со страницей для адаптеров Лавки, Еды и Маркета. */
 export function pageKit(page: any) {
   const bodyText = async (): Promise<string> => {
     try {

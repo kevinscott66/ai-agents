@@ -1,6 +1,6 @@
 /**
  * Исполнитель покупок на Mac владельца: браузер с отдельным профилем Яндекса
- * (Лавка и Еда — один профиль, один вход).
+ * (Лавка, Еда и Маркет — один профиль, один вход).
  *
  * Сервер присылает только проверенные операции (lib/shop.ts). Заказ — две
  * операции: `prepare` (подписанные позиции кладутся в пустую корзину, итог
@@ -12,6 +12,11 @@
  * нет своих страниц, и блюдо находится в меню ресторана по точному названию.
  * Блюдо с обязательным выбором опций агент не заказывает: `options_required`.
  *
+ * В Маркете товар — `<modelId>-<sku>`: заказывается ровно подписанный вариант,
+ * карточки без sku в расчёт не попадают. Доставка Маркета видна только на
+ * оформлении, поэтому расчёт возвращает её как null, а потолок итога
+ * подписывается с доставкой, которую владелец готов заплатить.
+ *
  * Корзина владельца не трогается: если в ней что-то лежит — отказ. Всё, что
  * исполнитель положил сам, он сам и убирает при любом отказе до оплаты. После
  * нажатия «Оплатить» отказов «до заказа» нет: любая ошибка — состояние
@@ -21,14 +26,16 @@
  * доставки и карта — только руками владельца: `bun mac-daemon/shop.ts login`.
  *
  * CLI (для владельца, заказывать не умеет):
- *   bun mac-daemon/shop.ts login [eda]    — открыть окно, войти и выбрать адрес вручную
- *   bun mac-daemon/shop.ts probe [eda]    — дерево доступности страницы
+ *   bun mac-daemon/shop.ts login [eda|market]  — открыть окно, войти и выбрать адрес вручную
+ *   bun mac-daemon/shop.ts probe [eda|market]  — дерево доступности страницы
  *   bun mac-daemon/shop.ts quote "молоко" "хлеб"
  *   bun mac-daemon/shop.ts eda-quote "ресторан" "блюдо" …
+ *   bun mac-daemon/shop.ts market-quote "зарядка usb-c" …
  */
 import { isAbsolute } from "node:path";
 import { lstatSync, mkdirSync } from "node:fs";
 import {
+  MARKET_PRODUCT_ID,
   SHOP_CANDIDATES_MAX,
   SHOP_PLACED_STATES,
   SHOP_PLACE_REF,
@@ -301,6 +308,8 @@ export class ShopRunner {
             if (!card.available || card.price_rub === null || !name) continue;
             // id блюда Еды — производная ресторана и названия: другое — чужая карточка.
             if (place && card.id !== edaDishId(place.ref, name)) continue;
+            // Товар Маркета без sku — не конкретный вариант, заказывать его нечем.
+            if (request.service === "market" && !MARKET_PRODUCT_ID.test(card.id)) continue;
             if (candidates.some((c) => c.id === card.id)) continue;
             candidates.push({ id: card.id, name, price_rub: card.price_rub });
             if (candidates.length === SHOP_CANDIDATES_MAX) break;
@@ -386,6 +395,7 @@ export class ShopRunner {
       checkAborted();
       // Подписанный id блюда должен выводиться из подписанного ресторана и названия.
       if (target.place && line.id !== edaDishId(target.place, line.name)) throw new ShopError("product_mismatch");
+      if (target.service === "market" && !MARKET_PRODUCT_ID.test(line.id)) throw new ShopError("product_mismatch");
       await page.openProduct(target, line);
       await this.guard(page);
       const info = await page.product();
@@ -495,7 +505,7 @@ async function cli(args: string[]) {
     const { launchPlaywrightShop } = await import("./shop-playwright.ts");
     const browser = await launchPlaywrightShop(env, profile, { headless: false });
     const page = browser.page();
-    await page.openHome({ service: rest[0] === "eda" ? "eda" : "lavka" });
+    await page.openHome({ service: rest[0] === "eda" || rest[0] === "market" ? rest[0] : "lavka" });
     if (command === "login") {
       console.log("Войди в Яндекс, выбери адрес доставки и проверь карту в открывшемся окне сам. Когда закончишь — нажми Enter здесь.");
       await new Promise<void>((resolve) => process.stdin.once("data", () => resolve()));
@@ -508,22 +518,22 @@ async function cli(args: string[]) {
     await browser.close();
     return;
   }
-  if (command === "quote" || command === "eda-quote") {
+  if (command === "quote" || command === "eda-quote" || command === "market-quote") {
     const eda = command === "eda-quote";
     const place = eda ? normalizeShopQuery(rest.shift()) : null;
     const queries = rest.map(normalizeShopQuery);
     if ((eda && !place) || !queries.length || queries.some((q) => !q)) {
-      throw new Error("usage: bun mac-daemon/shop.ts quote \"молоко\" \"хлеб\" | eda-quote \"ресторан\" \"блюдо\"");
+      throw new Error("usage: bun mac-daemon/shop.ts quote \"молоко\" \"хлеб\" | eda-quote \"ресторан\" \"блюдо\" | market-quote \"товар\"");
     }
     const local = new ShopRunner({ ...env, SHOP_ENABLED: "true" }, { launch: async (e, d) => (await import("./shop-playwright.ts")).launchPlaywrightShop(e, d, { headless: false }) });
     const out = await local.run(eda
       ? { op: "quote", service: "eda", place: place!, queries: queries as string[] }
-      : { op: "quote", service: "lavka", queries: queries as string[] });
+      : { op: "quote", service: command === "market-quote" ? "market" : "lavka", queries: queries as string[] });
     await local.close();
     console.log(JSON.stringify(out.ok ? out : { ...out, screenshot: out.screenshot ? `<${out.screenshot.length} base64>` : undefined }, null, 2));
     return;
   }
-  throw new Error("usage: bun mac-daemon/shop.ts login [eda] | probe [eda] | quote \"молоко\" | eda-quote \"ресторан\" \"блюдо\"");
+  throw new Error("usage: bun mac-daemon/shop.ts login [eda|market] | probe [eda|market] | quote \"молоко\" | eda-quote \"ресторан\" \"блюдо\" | market-quote \"товар\"");
 }
 
 if (import.meta.main) {
