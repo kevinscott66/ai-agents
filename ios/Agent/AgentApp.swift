@@ -414,6 +414,20 @@ struct RootView: View {
             Button("Сбросить", role: .destructive) { model.abandonWaiting() }
         } message: { Text("Это не остановит работу на сервере. Повтор команды может выполнить действие ещё раз.") }
     }
+    /// Черновик сразу пишется распознаванием на устройстве; после стопа сервер присылает
+    /// более точный текст, и он заменяет черновик, если тот не правили руками.
+    private func startDictation() {
+        let target = server
+        Task {
+            await voice.start(refine: { data in
+                guard let token = Credentials.read(server: target) else { throw AgentError.message("Подключите устройство в настройках") }
+                return try await AgentAPI(server: target).transcribeVoice(data, expectedToken: token)
+            }, apply: { spoken, refined in
+                guard server == target, let text = DictationDraft.replacement(draft: model.draft, spoken: spoken, refined: refined) else { return }
+                model.draft = text
+            })
+        }
+    }
     private func choose(_ text: String) { voice.stop(); model.draft = text; typing = true }
     private var chat: some View {
         ScrollViewReader { proxy in
@@ -600,7 +614,7 @@ struct RootView: View {
                     .disabled(model.busy || model.pending || mediaLoading).accessibilityLabel("Прикрепить или выполнить действие")
                 TextField(voice.recording ? "Слушаю…" : "Спросите Агента", text: $model.draft, axis: .vertical)
                     .font(.body).lineLimit(1...5).focused($typing).padding(.vertical, 12)
-                Button { model.stopSpeech(); typing = false; if voice.recording || voice.starting { voice.stop() } else { Task { await voice.start() } } } label: {
+                Button { model.stopSpeech(); typing = false; if voice.recording || voice.starting { voice.finish() } else { startDictation() } } label: {
                     Image(systemName: (voice.recording || voice.starting) ? "stop.fill" : "mic").font(.system(size: 19)).frame(width: 44, height: 46)
                 }.accessibilityLabel((voice.recording || voice.starting) ? "Остановить запись" : "Голосовой ввод")
                 Button {
@@ -612,7 +626,7 @@ struct RootView: View {
                         .font(.system(size: 18, weight: .semibold)).foregroundStyle(inverseInk).frame(width: 40, height: 40).background(ink, in: Circle()).frame(width: 44, height: 44)
                 }.disabled(model.busy || model.pending || model.remoteBusy || mediaLoading || locator.loading).accessibilityLabel(model.draft.isEmpty ? "Начать голосовой разговор" : "Отправить").padding(.vertical, 3).padding(.trailing, 4)
             }.padding(6).modifier(AgentGlass(radius: 30))
-            Text(voice.recording ? "Нажмите стоп, проверьте текст и отправьте" : "Агент помогает действовать. Важное проверяйте.")
+            Text(voice.recording ? "Нажмите стоп, проверьте текст и отправьте" : voice.refining ? "Уточняю текст…" : "Агент помогает действовать. Важное проверяйте.")
                 .font(.system(size: 11)).foregroundStyle(.secondary).multilineTextAlignment(.center)
         }.padding(.horizontal, 14).padding(.top, 8).padding(.bottom, 6)
     }
