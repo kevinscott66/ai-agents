@@ -20,6 +20,7 @@
  */
 
 import { parseMacControl, type MacControl } from "../lib/mac-control.ts";
+import { parseTaxiRequest, type TaxiRequest } from "../lib/taxi.ts";
 
 /** Режимы разрешений, которые понимает демон (их пять, у CLI — четыре). */
 export const RUN_MODES = [
@@ -94,9 +95,17 @@ export interface ControlMsg {
   control: MacControl;
 }
 
+/** Операция такси (mac-daemon/taxi.ts). Разбирается так же строго, как MAC_CONTROL. */
+export interface TaxiMsg {
+  type: "taxi";
+  id: string;
+  request: TaxiRequest;
+}
+
 export type BridgeMsg =
   | AssistantMsg
   | ControlMsg
+  | TaxiMsg
   | RunMsg
   | PingMsg
   | AuthOkMsg
@@ -142,6 +151,11 @@ export function parseBridgeMsg(raw: unknown): ParsedMsg {
       if (!isNonEmptyString(m.id) || m.id.length > 100) return null;
       const control = parseMacControl(m.control);
       return control ? { type: "control", id: m.id, control } : null;
+    }
+    case "taxi": {
+      if (!isNonEmptyString(m.id) || m.id.length > 100) return null;
+      const request = parseTaxiRequest(m.request);
+      return request ? { type: "taxi", id: m.id, request } : null;
     }
     case "ping":
       return { type: "ping" };

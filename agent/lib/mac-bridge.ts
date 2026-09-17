@@ -321,6 +321,7 @@ import { SECOND_MS, MINUTE_MS } from "./time-constants.ts";
 import { log, scrubSecretString } from "./log.ts";
 import { safeTick } from "./safe-timer.ts";
 import type { MacControl } from "./mac-control.ts";
+import type { TaxiRequest } from "./taxi.ts";
 import {
   DEFAULT_MAC_BRIDGE_HOST,
   DEFAULT_MAC_BRIDGE_PORT,
@@ -459,10 +460,22 @@ export function sendControlToMac(control: MacControl, userId: string | undefined
   return sendMacRequest({ control });
 }
 
-type ShortRequest = { operation: "calendar_today" | "open_workspace" } | { control: MacControl };
+/**
+ * Операция такси на Mac (шаг 9). Условия те же, что у MAC_CONTROL; таймаут
+ * длиннее: браузеру нужно открыть страницу, построить маршрут и дождаться цены.
+ */
+export function sendTaxiToMac(request: TaxiRequest, userId: string | undefined, chatId: number): Promise<MacRunResult> {
+  if (!userId || !isUserAllowed(userId) || String(chatId) !== userId || chatId <= 0) return Promise.reject(new Error("forbidden"));
+  if (!isMacOnline()) return Promise.reject(new Error("mac_offline"));
+  return sendMacRequest({ taxi: request });
+}
+
+export const MAC_TAXI_TIMEOUT_MS = 90_000;
+
+type ShortRequest = { operation: "calendar_today" | "open_workspace" } | { control: MacControl } | { taxi: TaxiRequest };
 
 function sendMacRequest(req: MacRunRequest | ShortRequest): Promise<MacRunResult> {
-  const short = "operation" in req || "control" in req;
+  const short = "operation" in req || "control" in req || "taxi" in req;
   return new Promise<MacRunResult>((resolve, reject) => {
     if (!activeSocket) {
       reject(new Error("mac_offline"));
@@ -484,7 +497,7 @@ function sendMacRequest(req: MacRunRequest | ShortRequest): Promise<MacRunResult
         cancelOnMac(id);
         p.reject(new Error("mac_timeout"));
       }
-    }, short ? 30_000 : _readRunTimeoutMs());
+    }, "taxi" in req ? MAC_TAXI_TIMEOUT_MS : short ? 30_000 : _readRunTimeoutMs());
     pending.set(id, {
       id,
       stdout: "",
@@ -511,6 +524,8 @@ function sendMacRequest(req: MacRunRequest | ShortRequest): Promise<MacRunResult
             type: "assistant", id, operation: req.operation,
           } : "control" in req ? {
             type: "control", id, control: req.control,
+          } : "taxi" in req ? {
+            type: "taxi", id, request: req.taxi,
           } : {
             type: req.provider === "codex" ? "run_codex" : "run",
             id,

@@ -10,6 +10,7 @@ import type { TaskStatus } from "./tasks.ts";
 import type { MacControl } from "./mac-control.ts";
 import type { UserbotDm } from "./userbot-dm.ts";
 import type { DnsChange } from "./cloudflare-dns.ts";
+import type { TaxiTariff } from "./taxi.ts";
 
 export interface SendMessagePayload {
   chatId?: number;
@@ -268,6 +269,16 @@ export type UserbotSendDmPayload = UserbotDm & { _userId?: string; _delegated?: 
  */
 export type CloudflareDnsPayload = DnsChange & { _userId?: string; _delegated?: boolean };
 
+/** ORDER_TAXI: нормализованные адреса, ключ тарифа и цена из TAXI_QUOTE. */
+export interface OrderTaxiPayload {
+  from: string;
+  to: string;
+  tariff: TaxiTariff;
+  price_rub: number;
+  _userId?: string;
+  _delegated?: boolean;
+}
+
 export interface MacRunClaudePayload {
   allowFallback?: boolean;
   provider?: "claude" | "codex";
@@ -442,6 +453,8 @@ export type PayloadByType = {
   MAC_CONTROL: MacControlPayload;
   USERBOT_SEND_DM: UserbotSendDmPayload;
   CLOUDFLARE_DNS: CloudflareDnsPayload;
+  ORDER_TAXI: OrderTaxiPayload;
+  TAXI_CANCEL: { _userId?: string; _delegated?: boolean };
   SCHEDULE_POST: SchedulePostPayload;
   CREATE_REMINDER: CreateReminderPayload;
   CANCEL_REMINDER: CancelReminderPayload;

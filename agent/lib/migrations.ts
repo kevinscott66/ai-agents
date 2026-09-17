@@ -1596,6 +1596,21 @@ export const MIGRATIONS: Migration[] = [
       for (const c of CHARACTERS) ins.run(c.key, c.key === "orchestrator" ? 1 : 0);
     },
   },
+  {
+    // Шаг 9: ORDER_TAXI и TAXI_CANCEL (lib/dispatch/taxi.ts). Только
+    // оркестратор и только с подтверждением; политика владельца (money)
+    // держит то же, строка — второй рубеж, подпись на телефоне — третий.
+    name: "061_seed_taxi",
+    up: (db) => {
+      for (const action of ["ORDER_TAXI", "TAXI_CANCEL"]) {
+        const ins = db.prepare(
+          `INSERT OR IGNORE INTO permissions(agent_key, action_type, allowed, requires_approval)
+           VALUES (?, ?, ?, 1)`,
+        );
+        for (const c of CHARACTERS) ins.run(c.key, action, c.key === "orchestrator" ? 1 : 0);
+      }
+    },
+  },
 ];
 
 /**

@@ -48,6 +48,10 @@ export const ACTION_TYPES = [
   "USERBOT_SEND_DM",
   // DNS-записи в Cloudflare (lib/cloudflare-dns.ts), всегда с подтверждением.
   "CLOUDFLARE_DNS",
+  // Такси через Яндекс Go на Mac (lib/dispatch/taxi.ts): карточка в чате,
+  // затем подпись на телефоне. TAXI_QUOTE и TAXI_STATUS — инлайновые.
+  "ORDER_TAXI",
+  "TAXI_CANCEL",
   "SCHEDULE_POST",
   // Напоминания в чат-источник (lib/reminders.ts). LIST_REMINDERS — инлайновый.
   "CREATE_REMINDER",
@@ -167,6 +171,11 @@ export const CALLER_RESTRICTED: Record<string, string> = {
   // DNS владельца: изменение и чтение записей Cloudflare.
   CLOUDFLARE_DNS: "orchestrator",
   CLOUDFLARE_DNS_LIST: "orchestrator",
+  // Такси владельца: заказ, отмена, расчёт и состояние.
+  ORDER_TAXI: "orchestrator",
+  TAXI_CANCEL: "orchestrator",
+  TAXI_QUOTE: "orchestrator",
+  TAXI_STATUS: "orchestrator",
   // Создание канала от имени владельца + назначение админов — действие реального
   // аккаунта; только лид (orchestrator) как контролёр процесса.
   CREATE_TEAM_CHANNEL: "orchestrator",

@@ -21,6 +21,7 @@ import {
 } from "../reminder-time.ts";
 import { dmTextError, normalizeDmUsername } from "../userbot-dm.ts";
 import { buildDnsChange, parseDnsProtected, parseDnsZones } from "../cloudflare-dns.ts";
+import { normalizeTaxiAddress, normalizeTaxiTariff, TAXI_ADDRESS_MAX, TAXI_TARIFF_KEYS } from "../taxi.ts";
 import { MAC_CONTROL_COMMANDS, MAC_TITLE_MAX, parseMacControl, validMacTitle } from "../mac-control.ts";
 
 const ROLE_KEYS = CHARACTERS.map((c) => c.key);
@@ -948,6 +949,22 @@ export function buildPayload<T extends ActionType>(
       );
       if (!built.ok) return { ok: false, error: built.error };
       const payload: PayloadFor<"CLOUDFLARE_DNS"> = built.change;
+      return { ok: true, payload: payload as PayloadFor<T> };
+    }
+    case "ORDER_TAXI": {
+      const from = normalizeTaxiAddress(i.from);
+      const to = normalizeTaxiAddress(i.to);
+      if (!from || !to) return { ok: false, error: `from и to — адреса одной строкой, 3..${TAXI_ADDRESS_MAX} символов` };
+      const tariff = normalizeTaxiTariff(i.tariff);
+      if (!tariff) return { ok: false, error: `tariff must be one of: ${TAXI_TARIFF_KEYS.join(", ")}` };
+      if (!Number.isSafeInteger(i.price_rub) || (i.price_rub as number) <= 0) {
+        return { ok: false, error: "price_rub — целые рубли из TAXI_QUOTE" };
+      }
+      const payload: PayloadFor<"ORDER_TAXI"> = { from, to, tariff, price_rub: i.price_rub as number };
+      return { ok: true, payload: payload as PayloadFor<T> };
+    }
+    case "TAXI_CANCEL": {
+      const payload: PayloadFor<"TAXI_CANCEL"> = {};
       return { ok: true, payload: payload as PayloadFor<T> };
     }
     case "MAC_STOP": {

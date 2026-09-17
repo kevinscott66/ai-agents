@@ -29,6 +29,7 @@ import { spawnWithFallback, type ProviderMetadata } from "./provider-fallback.ts
 import { codexCommand } from "./codex-command.ts";
 import { runAssistantOperation, assistantErrorCode } from "./assistant.ts";
 import { runMacControl, controlErrorCode } from "./macctl.ts";
+import { runTaxiRequest, taxiErrorCode, closeTaxiRunner } from "./taxi.ts";
 import { createDaemonHandshake } from "./auth-handshake.ts";
 import { createAuthGate } from "./auth-gate.ts";
 import { createSocketLifecycle } from "./reconnect.ts";
@@ -511,6 +512,18 @@ function connect(): void {
         }).finally(() => { assistantControllers.delete(msg.id); });
         return;
       }
+      case "taxi": {
+        // Свой замок в TaxiRunner (один браузер); отмена — через тот же cancel по id.
+        const controller = new AbortController();
+        assistantControllers.set(msg.id, controller);
+        runTaxiRequest(msg.request, controller.signal).then(output => {
+          sendChunk(ws, msg.id, "stdout", output);
+          sendResult(ws, msg.id, true, 0);
+        }).catch(error => {
+          sendResult(ws, msg.id, false, undefined, taxiErrorCode(error));
+        }).finally(() => { assistantControllers.delete(msg.id); });
+        return;
+      }
       case "run":
         handleRun(ws, msg).catch((e) => {
           console.error("[daemon] handleRun error:", e);
@@ -566,13 +579,12 @@ function scheduleReconnect(): void {
   setTimeout(connect, wait);
 }
 
-process.once("SIGINT", () => {
+// Браузер такси держит профиль с cookie: закрыть его штатно, но не дольше 2 с.
+const shutdown = () => {
   killAllChildren();
-  process.exit(0);
-});
-process.once("SIGTERM", () => {
-  killAllChildren();
-  process.exit(0);
-});
+  Promise.race([closeTaxiRunner(), new Promise((r) => setTimeout(r, 2_000))]).finally(() => process.exit(0));
+};
+process.once("SIGINT", shutdown);
+process.once("SIGTERM", shutdown);
 
 connect();

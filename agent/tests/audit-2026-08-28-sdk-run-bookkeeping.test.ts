@@ -101,6 +101,8 @@ describe("набор безопасных тулзов", () => {
         "QUERY_DB",
         "READ_WIKI",
         "SEARCH_WIKI",
+        "TAXI_QUOTE",
+        "TAXI_STATUS",
         "LIST_SCHEDULED_POSTS",
         "LIST_REMINDERS",
       ].sort(),
