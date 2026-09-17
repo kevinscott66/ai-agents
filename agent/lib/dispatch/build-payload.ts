@@ -22,7 +22,16 @@ import {
 import { dmTextError, normalizeDmUsername } from "../userbot-dm.ts";
 import { buildDnsChange, parseDnsProtected, parseDnsZones } from "../cloudflare-dns.ts";
 import { normalizeTaxiAddress, normalizeTaxiTariff, TAXI_ADDRESS_MAX, TAXI_TARIFF_KEYS } from "../taxi.ts";
-import { normalizeShopName, normalizeShopService, parseOrderFood, SHOP_ITEMS_MAX, SHOP_QTY_MAX } from "../shop.ts";
+import {
+  normalizeShopName,
+  normalizeShopPlaceName,
+  normalizeShopService,
+  parseOrderFood,
+  shopNeedsPlace,
+  SHOP_ITEMS_MAX,
+  SHOP_QTY_MAX,
+  SHOP_SERVICE_KEYS,
+} from "../shop.ts";
 import { MAC_CONTROL_COMMANDS, MAC_TITLE_MAX, parseMacControl, validMacTitle } from "../mac-control.ts";
 
 const ROLE_KEYS = CHARACTERS.map((c) => c.key);
@@ -970,7 +979,10 @@ export function buildPayload<T extends ActionType>(
     }
     case "ORDER_FOOD": {
       const service = normalizeShopService(i.service);
-      if (!service) return { ok: false, error: "service must be: lavka" };
+      if (!service) return { ok: false, error: `service must be one of: ${SHOP_SERVICE_KEYS.join(", ")}` };
+      const place = shopNeedsPlace(service) ? normalizeShopPlaceName(i.place) : undefined;
+      if (shopNeedsPlace(service) && !place) return { ok: false, error: "place — ресторан ровно как в SHOP_QUOTE" };
+      if (!shopNeedsPlace(service) && i.place !== undefined) return { ok: false, error: `у ${service} нет ресторана: place не нужен` };
       if (!Array.isArray(i.lines) || i.lines.length < 1 || i.lines.length > SHOP_ITEMS_MAX) {
         return { ok: false, error: `lines — от 1 до ${SHOP_ITEMS_MAX} товаров из SHOP_QUOTE` };
       }
@@ -978,7 +990,7 @@ export function buildPayload<T extends ActionType>(
         const o = (l && typeof l === "object" ? l : {}) as Record<string, unknown>;
         return { id: o.id, name: normalizeShopName(o.name), qty: o.qty, price_rub: o.price_rub };
       });
-      const parsed = parseOrderFood({ service, lines, delivery_rub: i.delivery_rub ?? 0 });
+      const parsed = parseOrderFood({ service, ...(place ? { place } : {}), lines, delivery_rub: i.delivery_rub ?? 0 });
       if (!parsed) {
         return {
           ok: false,

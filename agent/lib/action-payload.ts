@@ -286,6 +286,8 @@ export interface OrderTaxiPayload {
  */
 export interface OrderFoodPayload {
   service: ShopService;
+  /** Ресторан Еды — название ровно как в SHOP_QUOTE; у Лавки поля нет. */
+  place?: string;
   lines: Array<{ id: string; name: string; qty: number; price_rub: number }>;
   delivery_rub: number;
   _userId?: string;

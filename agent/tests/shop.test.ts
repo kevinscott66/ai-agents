@@ -1,5 +1,5 @@
 /**
- * Шаг 10a: Яндекс Лавка. Всё на заглушках: страница, мост и Telegram
+ * Шаги 10a и 10b: Яндекс Лавка и Яндекс Еда. Всё на заглушках: страница, мост и Telegram
  * подменены, настоящий браузер не запускается и заказ не делается.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -22,6 +22,7 @@ import {
 import { SignedActions } from "../lib/signed-actions.ts";
 import {
   describeOrderFood,
+  edaDishId,
   normalizeShopName,
   normalizeShopService,
   parseDeliveryRubles,
@@ -39,9 +40,12 @@ import {
   type ProductInfo,
   type SearchCard,
   type ShopGuard,
+  type QtyResult,
   type ShopPage,
 } from "../mac-daemon/shop.ts";
-import { productIdFromHref } from "../mac-daemon/shop-playwright.ts";
+import { productIdFromHref, routeShopPage } from "../mac-daemon/shop-playwright.ts";
+import { dishMatches, dishName, edaPlaceUrl, pickPlace, placeRefFromHref } from "../mac-daemon/eda-playwright.ts";
+import type { ShopPlace } from "../lib/shop.ts";
 
 const T0 = Date.UTC(2026, 8, 17, 9, 0, 0);
 const OWNER = 777_000_444;
@@ -129,13 +133,17 @@ function fakePage() {
     stateAfterPay: "accepted" as ShopOrderState,
     clicks: [] as string[],
     shots: 0,
+    place: null as ShopPlace | null,
+    qtyResult: "ok" as QtyResult,
+    opened: [] as string[],
   };
   const total = () => [...s.cart].reduce((sum, [id, qty]) => sum + qty * (s.products.get(id)?.price_rub ?? 0), 0) + (s.delivery ?? 0);
   const page: ShopPage = {
-    openHome: async () => { s.current = "home"; },
+    openHome: async (t) => { s.current = "home"; s.opened.push(`home:${t.place ?? t.service}`); },
+    findPlace: async () => s.place,
     openSearch: async () => { s.current = "search"; },
-    openProduct: async (_svc, id) => { s.current = id; },
-    openCart: async () => { s.current = "cart"; },
+    openProduct: async (_t, item) => { s.current = item.id; },
+    openCart: async (t) => { s.current = "cart"; s.opened.push(`cart:${t.place ?? t.service}`); },
     openOrders: async () => { s.current = "orders"; },
     guard: async () => s.guard,
     address: async () => s.address,
@@ -144,7 +152,9 @@ function fakePage() {
     product: async () => s.products.get(s.current) ?? { name: null, price_rub: null, available: false },
     setProductQty: async (qty) => {
       s.clicks.push(`qty:${s.current}:${qty}`);
+      if (qty > 0 && s.qtyResult !== "ok") return s.qtyResult;
       if (qty === 0) s.cart.delete(s.current); else s.cart.set(s.current, qty);
+      return "ok";
     },
     cart: async () => [...s.cart].map(([id, qty]) => ({ id, qty, price_rub: s.products.get(id)?.price_rub ?? null })),
     openCheckout: async () => { s.current = "checkout"; return s.cart.size > 0; },
@@ -550,5 +560,251 @@ describe("chat approval", () => {
     expect(buildPayload("ORDER_FOOD", { service: "lavka", lines: [line, line], delivery_rub: 0 }, { agentKey: "orchestrator" }).ok).toBe(false);
     expect(buildPayload("ORDER_FOOD", { service: "market", lines: [line], delivery_rub: 0 }, { agentKey: "orchestrator" }).ok).toBe(false);
     expect(buildPayload("ORDER_FOOD", { service: "lavka", lines: [], delivery_rub: 0 }, { agentKey: "orchestrator" }).ok).toBe(false);
+  });
+});
+
+const PLACE: ShopPlace = { ref: "burger-house:krasnaya-1", name: "Бургер Хаус" };
+const BURGER = { id: edaDishId(PLACE.ref, "Чизбургер 250 г"), name: "Чизбургер 250 г", price_rub: 350 };
+const FRIES = { id: edaDishId(PLACE.ref, "Картофель фри 150 г"), name: "Картофель фри 150 г", price_rub: 150 };
+
+describe("eda: parsing and page helpers", () => {
+  test("dish id derives from place and name", () => {
+    expect(BURGER.id).toMatch(/^d[0-9a-f]{24}$/);
+    expect(edaDishId(PLACE.ref, BURGER.name)).toBe(BURGER.id);
+    expect(edaDishId("other:place", BURGER.name)).not.toBe(BURGER.id);
+    expect(edaDishId(PLACE.ref, "Чизбургер 300 г")).not.toBe(BURGER.id);
+    expect(normalizeShopService("Яндекс Еда")).toBe("eda");
+    expect(normalizeShopService("еда")).toBe("eda");
+  });
+
+  test("daemon frame: place required for eda, forbidden for lavka", () => {
+    const lines = [{ id: BURGER.id, name: BURGER.name, qty: 1 }];
+    expect(parseShopRequest({ op: "quote", service: "eda", place: "бургер хаус", queries: ["чизбургер"] }))
+      .toEqual({ op: "quote", service: "eda", place: "бургер хаус", queries: ["чизбургер"] });
+    expect(parseShopRequest({ op: "quote", service: "eda", queries: ["чизбургер"] })).toBeNull();
+    expect(parseShopRequest({ op: "quote", service: "lavka", place: "бургер хаус", queries: ["молоко"] })).toBeNull();
+    expect(parseShopRequest({ op: "prepare", session: SESSION, service: "eda", place: PLACE.ref, lines }))
+      .toEqual({ op: "prepare", session: SESSION, service: "eda", place: PLACE.ref, lines });
+    expect(parseShopRequest({ op: "prepare", session: SESSION, service: "eda", place: "Бургер Хаус", lines })).toBeNull();
+    expect(parseShopRequest({ op: "prepare", session: SESSION, service: "eda", place: "../x:y", lines })).toBeNull();
+    expect(parseShopRequest({ op: "prepare", session: SESSION, service: "eda", lines })).toBeNull();
+  });
+
+  test("quote answer carries the place strictly", () => {
+    const base = { ok: true, op: "quote", address: ADDRESS, delivery_rub: 0, results: [{ query: "чизбургер", candidates: [BURGER] }] };
+    expect(parseShopOutcome(JSON.stringify({ ...base, place: PLACE }), "quote")).toMatchObject({ place: PLACE });
+    expect(() => parseShopOutcome(JSON.stringify({ ...base, place: { ...PLACE, extra: 1 } }), "quote")).toThrow("invalid_shop_result");
+    expect(() => parseShopOutcome(JSON.stringify({ ...base, place: { ...PLACE, ref: "no ref" } }), "quote")).toThrow("invalid_shop_result");
+  });
+
+  test("approval card names the restaurant", () => {
+    const p = { service: "eda", place: PLACE.name, lines: [{ ...BURGER, qty: 2 }], delivery_rub: 99 };
+    expect(describeOrderFood(p, 15)).toBe(
+      "Яндекс Еда · Бургер Хаус: Чизбургер 250 г × 2 — 700 ₽; доставка 99 ₽. Всего 799 ₽ (итог на странице — не больше 918 ₽), дальше — подпись на телефоне",
+    );
+    expect(describeOrderFood({ ...p, place: undefined }, 15)).toBe("некорректный заказ");
+    expect(describeOrderFood({ ...p, service: "lavka" }, 15)).toBe("некорректный заказ");
+  });
+
+  test("place links, place choice and dish matching", () => {
+    expect(placeRefFromHref("/r/burger-house?placeSlug=krasnaya-1")).toBe(PLACE.ref);
+    expect(placeRefFromHref("https://eda.yandex.ru/r/burger-house?placeSlug=krasnaya-1&a=1")).toBe(PLACE.ref);
+    expect(placeRefFromHref("https://evil.example.com/r/burger-house?placeSlug=krasnaya-1")).toBeNull();
+    expect(placeRefFromHref("/r/burger-house")).toBeNull();
+    expect(placeRefFromHref("/r/Burger House?placeSlug=x")).toBeNull();
+    expect(edaPlaceUrl(PLACE.ref)).toBe("https://eda.yandex.ru/r/burger-house?placeSlug=krasnaya-1");
+    const places = [{ ref: "a:1", name: "Бургер Хаус Экспресс" }, { ref: "b:2", name: "Бургер хаус" }, { ref: "c:3", name: "Суши Мастер" }];
+    expect(pickPlace("бургер хаус", places)).toEqual(places[1]!);
+    expect(pickPlace("экспресс", places)).toEqual(places[0]!);
+    expect(pickPlace("пицца", places)).toBeNull();
+    expect(pickPlace("  ", places)).toBeNull();
+    expect(dishMatches("Чизбургер 250 г", "чизбургер")).toBe(true);
+    expect(dishMatches("Двойной чизбургер", "чизбургеры двойные")).toBe(true);
+    expect(dishMatches("Картофель фри", "чизбургер")).toBe(false);
+    expect(dishName(" Чизбургер ", "250 г")).toBe("Чизбургер 250 г");
+    expect(dishName("Чизбургер", "")).toBe("Чизбургер");
+  });
+
+  test("router sends each call to the page of the opened service", async () => {
+    const lavka = fakePage();
+    const eda = fakePage();
+    eda.s.place = PLACE;
+    eda.s.address = "Еда-адрес";
+    const page = routeShopPage({ lavka: lavka.page, eda: eda.page });
+    await page.openHome({ service: "lavka" });
+    expect(await page.address()).toBe("Краснодар, Красная 1");
+    expect(await page.findPlace("бургер")).toEqual(PLACE);
+    await page.openHome({ service: "eda", place: PLACE.ref });
+    expect(await page.address()).toBe("Еда-адрес");
+    expect(lavka.s.opened).toEqual(["home:lavka"]);
+    expect(eda.s.opened).toEqual([`home:${PLACE.ref}`]);
+  });
+});
+
+function edaPage() {
+  const f = fakePage();
+  f.s.place = PLACE;
+  f.s.delivery = 99;
+  f.s.cards = [
+    { ...BURGER, available: true },
+    { id: "d000000000000000000000000", name: "Чизбургер из другого ресторана", price_rub: 1, available: true },
+  ];
+  f.s.products = new Map([
+    [BURGER.id, { name: BURGER.name, price_rub: 350, available: true }],
+    [FRIES.id, { name: FRIES.name, price_rub: 150, available: true }],
+  ]);
+  return f;
+}
+
+describe("eda: mac runner", () => {
+  const prepare: ShopRequest = {
+    op: "prepare",
+    session: SESSION,
+    service: "eda",
+    place: PLACE.ref,
+    lines: [{ id: BURGER.id, name: BURGER.name, qty: 2 }, { id: FRIES.id, name: FRIES.name, qty: 1 }],
+  };
+
+  test("quote finds the place, opens it and keeps only its own dishes", async () => {
+    const { s, page } = edaPage();
+    const r = runner(page);
+    expect(await r.run({ op: "quote", service: "eda", place: "бургер хаус", queries: ["чизбургер"] })).toEqual({
+      ok: true,
+      op: "quote",
+      address: ADDRESS,
+      place: PLACE,
+      delivery_rub: 99,
+      results: [{ query: "чизбургер", candidates: [BURGER] }],
+    });
+    expect(s.opened).toEqual(["home:eda", `home:${PLACE.ref}`]);
+    expect(s.clicks).toEqual([]);
+    await r.close();
+  });
+
+  test("unknown place: refusal with a screenshot, nothing searched", async () => {
+    const { s, page } = edaPage();
+    s.place = null;
+    const r = runner(page);
+    expect(await r.run({ op: "quote", service: "eda", place: "нет такого", queries: ["чизбургер"] })).toEqual({ ok: false, code: "place_not_found", screenshot: "U0NSRUVO" });
+    s.place = { ref: "not a ref", name: "Бургер Хаус" };
+    expect((await r.run({ op: "quote", service: "eda", place: "бургер хаус", queries: ["чизбургер"] }) as { code: string }).code).toBe("place_not_found");
+    expect(s.opened).toEqual(["home:eda", "home:eda"]);
+    await r.close();
+  });
+
+  test("prepare and confirm in the signed restaurant", async () => {
+    const { s, page } = edaPage();
+    const r = runner(page);
+    expect(await r.run(prepare)).toMatchObject({ ok: true, op: "prepare", total_rub: 949 });
+    expect(s.opened.every((o) => o === `cart:${PLACE.ref}`)).toBe(true);
+    expect(await r.run({ op: "confirm", session: SESSION, maxRub: 1100 })).toEqual({ ok: true, op: "confirm", state: "accepted" });
+    await r.close();
+  });
+
+  test("dish id not derived from the signed place: refusal before any click", async () => {
+    const { s, page } = edaPage();
+    const r = runner(page);
+    const foreign = { ...prepare, place: "other:place" };
+    expect((await r.run(foreign) as { code: string }).code).toBe("product_mismatch");
+    expect(s.clicks).toEqual([]);
+    const { place: _p, ...noPlace } = prepare as ShopRequest & { place: string };
+    expect((await r.run(noPlace as ShopRequest) as { code: string }).code).toBe("place_not_found");
+    await r.close();
+  });
+
+  test("dish with options: refusal, added dishes removed", async () => {
+    const { s, page } = edaPage();
+    const r = runner(page);
+    page.setProductQty = async (qty) => {
+      s.clicks.push(`qty:${s.current}:${qty}`);
+      if (qty > 0 && s.current === FRIES.id) return "options_required";
+      if (qty === 0) s.cart.delete(s.current); else s.cart.set(s.current, qty);
+      return "ok";
+    };
+    expect(await r.run(prepare)).toEqual({ ok: false, code: "options_required", screenshot: "U0NSRUVO" });
+    expect(s.cart.size).toBe(0);
+    expect(s.clicks).not.toContain("pay");
+    await r.close();
+  });
+
+  test("page asks something of its own (blocked): unexpected_page, cart cleared", async () => {
+    const { s, page } = edaPage();
+    s.qtyResult = "blocked";
+    const r = runner(page);
+    expect((await r.run(prepare) as { code: string }).code).toBe("unexpected_page");
+    expect(s.cart.size).toBe(0);
+    await r.close();
+  });
+});
+
+describe("eda: server flow", () => {
+  let h: Awaited<ReturnType<typeof harness>> | null = null;
+  const EDA_QUOTE: ShopOutcome = {
+    ok: true,
+    op: "quote",
+    address: ADDRESS,
+    place: PLACE,
+    delivery_rub: 99,
+    results: [{ query: "чизбургер", candidates: [BURGER] }],
+  };
+  const edaOrder = (place: string | null = PLACE.name, lines = [{ ...BURGER, qty: 2 }]) =>
+    handleOrderFood({ service: "eda", ...(place === null ? {} : { place }), lines, delivery_rub: 99, _userId: String(OWNER) }, { agentKey: "orchestrator", chatId: OWNER });
+  beforeEach(() => {
+    resetShopState();
+    process.env.SHOP_ENABLED = "true";
+    process.env.MINIAPP_ADMIN_USER_IDS = `123,${OWNER}`;
+  });
+  afterEach(() => {
+    h?.restore();
+    h = null;
+    resetShopState();
+    for (const k of ENV_KEYS) {
+      if (savedEnv[k] === undefined) delete process.env[k]; else process.env[k] = savedEnv[k];
+    }
+  });
+
+  test("quote needs a place for eda and refuses one for lavka", async () => {
+    h = await harness({ quote: EDA_QUOTE });
+    expect((await quoteShop({ service: "eda", queries: ["чизбургер"] }, h.ctx)).ok).toBe(false);
+    expect((await quoteShop({ service: "lavka", place: "бургер хаус", queries: ["молоко"] }, h.ctx)).ok).toBe(false);
+    expect(h.requests).toEqual([]);
+    expect(await quoteShop({ service: "eda", place: "Бургер  хаус", queries: ["чизбургер"] }, h.ctx)).toMatchObject({ ok: true, place: PLACE.name, delivery_rub: 99 });
+    expect(h.requests).toEqual([{ op: "quote", service: "eda", place: "Бургер хаус", queries: ["чизбургер"] }]);
+  });
+
+  test("daemon answer without the place is rejected", async () => {
+    const { place: _p, ...noPlace } = EDA_QUOTE as ShopOutcome & { place: ShopPlace };
+    h = await harness({ quote: noPlace as ShopOutcome });
+    expect(await quoteShop({ service: "eda", place: "бургер хаус", queries: ["чизбургер"] }, h.ctx)).toMatchObject({ ok: false });
+  });
+
+  test("order must name the quoted restaurant; signed params include it; prepare sends the ref", async () => {
+    h = await harness({ quote: EDA_QUOTE, prepare: { ok: true, op: "prepare", address: ADDRESS, lines: [{ id: BURGER.id, qty: 2, price_rub: 350 }], total_rub: 799 }, confirm: { ok: true, op: "confirm", state: "accepted" } });
+    await quoteShop({ service: "eda", place: "бургер хаус", queries: ["чизбургер"] }, h.ctx);
+    expect((await edaOrder("Суши Мастер")).ok).toBe(false);
+    expect((await edaOrder(null)).ok).toBe(false);
+    const res = await edaOrder();
+    expect(res).toMatchObject({ ok: true, result: { status: "awaiting_signature", amount_rub: 799 } });
+    const { payload } = h.gate.pending(T0).at(-1)!;
+    expect(JSON.parse(payload)).toMatchObject({
+      service: "yandex_eda",
+      action: "order_food",
+      amount_rub: 799,
+      params: { store: "Яндекс Еда", place: PLACE.name, address: ADDRESS, item_01: "Чизбургер 250 г × 2 — 700 ₽", delivery_rub: 99 },
+    });
+    const nonce = await h.sign();
+    await executeSignedShop(nonce);
+    expect(h.requests[1]).toEqual({ op: "prepare", session: SESSION, service: "eda", place: PLACE.ref, lines: [{ id: BURGER.id, name: BURGER.name, qty: 2 }] });
+    expect(h.status(nonce)).toBe("executed");
+  });
+
+  test("buildPayload: place required for eda, refused for lavka", () => {
+    const line = { ...BURGER, qty: 1 };
+    const ctx = { agentKey: "orchestrator" };
+    expect(buildPayload("ORDER_FOOD", { service: "еда", place: " Бургер  Хаус ", lines: [line], delivery_rub: 0 }, ctx))
+      .toEqual({ ok: true, payload: { service: "eda", place: PLACE.name, lines: [line], delivery_rub: 0 } });
+    expect(buildPayload("ORDER_FOOD", { service: "eda", lines: [line], delivery_rub: 0 }, ctx).ok).toBe(false);
+    expect(buildPayload("ORDER_FOOD", { service: "lavka", place: PLACE.name, lines: [{ ...MILK, qty: 1 }], delivery_rub: 0 }, ctx).ok).toBe(false);
+    expect(approvalCategories("ORDER_FOOD", { service: "eda", place: PLACE.name, lines: [line], delivery_rub: 0 })).toEqual(["money"]);
   });
 });

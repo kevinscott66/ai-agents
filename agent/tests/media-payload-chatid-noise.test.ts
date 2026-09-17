@@ -8,7 +8,7 @@
  *
  * Сборщики payload'а для картинок ставили `chatId: chatId ?? 0`
  * (dispatch/media.ts:336,360), где `chatId` — это то, что назвала МОДЕЛЬ
- * (build-payload.ts:232-233), а не чат хода. Модель его обычно не называет.
+ * (build-payload.ts:242-243), а не чат хода. Модель его обычно не называет.
  * Замер:
  *
  *   GENERATE_IMAGE     → payload.chatId = 0

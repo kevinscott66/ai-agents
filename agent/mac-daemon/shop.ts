@@ -1,11 +1,16 @@
 /**
- * Исполнитель покупок на Mac владельца: браузер с отдельным профилем Лавки.
+ * Исполнитель покупок на Mac владельца: браузер с отдельным профилем Яндекса
+ * (Лавка и Еда — один профиль, один вход).
  *
  * Сервер присылает только проверенные операции (lib/shop.ts). Заказ — две
  * операции: `prepare` (подписанные позиции кладутся в пустую корзину, итог
  * читается со страницы оформления — ничего не оплачивается) и `confirm`
  * (корзина и итог ещё раз, сверка с подписанным потолком, одно нажатие
  * «Оплатить»). Сессия prepare одноразовая и живёт SHOP_SESSION_TTL_MS.
+ *
+ * В Еде заказ собирается в одном ресторане: сервер присылает его ref, у блюд
+ * нет своих страниц, и блюдо находится в меню ресторана по точному названию.
+ * Блюдо с обязательным выбором опций агент не заказывает: `options_required`.
  *
  * Корзина владельца не трогается: если в ней что-то лежит — отказ. Всё, что
  * исполнитель положил сам, он сам и убирает при любом отказе до оплаты. После
@@ -16,25 +21,31 @@
  * доставки и карта — только руками владельца: `bun mac-daemon/shop.ts login`.
  *
  * CLI (для владельца, заказывать не умеет):
- *   bun mac-daemon/shop.ts login          — открыть окно, войти и выбрать адрес вручную
- *   bun mac-daemon/shop.ts probe [url]    — дерево доступности страницы
+ *   bun mac-daemon/shop.ts login [eda]    — открыть окно, войти и выбрать адрес вручную
+ *   bun mac-daemon/shop.ts probe [eda]    — дерево доступности страницы
  *   bun mac-daemon/shop.ts quote "молоко" "хлеб"
+ *   bun mac-daemon/shop.ts eda-quote "ресторан" "блюдо" …
  */
 import { isAbsolute } from "node:path";
 import { lstatSync, mkdirSync } from "node:fs";
 import {
   SHOP_CANDIDATES_MAX,
   SHOP_PLACED_STATES,
+  SHOP_PLACE_REF,
   SHOP_SESSION_TTL_MS,
+  edaDishId,
   normalizeShopName,
+  normalizeShopPlaceName,
   normalizeShopQuery,
   parseShopRequest,
+  shopNeedsPlace,
   type ShopCandidate,
   type ShopQuoteResult,
   type ShopFailCode,
   type ShopLine,
   type ShopOrderState,
   type ShopOutcome,
+  type ShopPlace,
   type ShopPreparedLine,
   type ShopRequest,
   type ShopService,
@@ -77,12 +88,30 @@ export interface CheckoutInfo {
   pay_button: boolean;
 }
 
+/** Где работаем: сервис и, для Еды, ref ресторана. */
+export interface ShopTarget {
+  service: ShopService;
+  place?: string;
+}
+
+/** Позиция, которую открывают: id и точное название (в Еде ищется по нему). */
+export interface ShopItemRef {
+  id: string;
+  name: string;
+}
+
+/** Итог нажатия «в корзину»: блюдо просит выбрать опции или страница спросила что-то своё. */
+export type QtyResult = "ok" | "options_required" | "blocked";
+
 /** Всё, что исполнитель делает со страницей. Тесты подставляют свою. */
 export interface ShopPage {
-  openHome(service: ShopService): Promise<void>;
-  openSearch(service: ShopService, query: string): Promise<void>;
-  openProduct(service: ShopService, id: string): Promise<void>;
-  openCart(service: ShopService): Promise<void>;
+  /** Лавка — главная; Еда без place — главная, с place — страница ресторана. */
+  openHome(target: ShopTarget): Promise<void>;
+  /** Еда: найти ресторан по названию. Без навигации в него. */
+  findPlace(query: string): Promise<ShopPlace | null>;
+  openSearch(target: ShopTarget, query: string): Promise<void>;
+  openProduct(target: ShopTarget, item: ShopItemRef): Promise<void>;
+  openCart(target: ShopTarget): Promise<void>;
   openOrders(service: ShopService): Promise<void>;
   guard(): Promise<ShopGuard>;
   /** Адрес доставки из шапки; null — не выбран. */
@@ -91,7 +120,7 @@ export interface ShopPage {
   searchCards(): Promise<SearchCard[]>;
   product(): Promise<ProductInfo>;
   /** На странице товара: довести количество в корзине до qty (0 — убрать). */
-  setProductQty(qty: number): Promise<void>;
+  setProductQty(qty: number): Promise<QtyResult>;
   cart(): Promise<CartRow[]>;
   /** Открыть оформление из корзины; false — кнопки нет. */
   openCheckout(): Promise<boolean>;
@@ -144,14 +173,15 @@ export function checkShopProfile(dir: string | undefined, uid: number | undefine
 
 /** Отказы, к которым полезен скриншот: владелец видит, на чём встали. */
 const SCREENSHOT_CODES: readonly ShopFailCode[] = [
-  "login_required", "address_required", "captcha", "unexpected_page", "product_not_found", "product_mismatch",
-  "out_of_stock", "cart_not_empty", "cart_mismatch", "price_unreadable", "price_changed", "checkout_unavailable",
+  "login_required", "address_required", "captcha", "unexpected_page", "place_not_found", "product_not_found", "product_mismatch",
+  "out_of_stock", "options_required", "cart_not_empty", "cart_mismatch", "price_unreadable", "price_changed", "checkout_unavailable",
   "payment_needs_owner", "pay_button_missing",
 ];
 
 interface Session {
   id: string;
-  service: ShopService;
+  target: ShopTarget;
+  items: ShopLine[];
   lines: ShopPreparedLine[];
   expires: number;
 }
@@ -246,41 +276,57 @@ export class ShopRunner {
     switch (request.op) {
       case "quote": {
         if (this.activeSession()) throw new ShopError("shop_busy");
-        const address = await this.openAt(page, () => page.openHome(request.service));
+        let target: ShopTarget = { service: request.service };
+        const address = await this.openAt(page, () => page.openHome(target));
+        let place: ShopPlace | undefined;
+        if (shopNeedsPlace(request.service)) {
+          const found = request.place ? await page.findPlace(request.place) : null;
+          await this.guard(page);
+          const name = found ? normalizeShopPlaceName(found.name) : null;
+          if (!found || !SHOP_PLACE_REF.test(found.ref) || !name) throw new ShopError("place_not_found");
+          place = { ref: found.ref, name };
+          target = { service: request.service, place: found.ref };
+          await page.openHome(target);
+          await this.guard(page);
+        }
         const delivery = await page.deliveryFee();
         const results: ShopQuoteResult[] = [];
         for (const query of request.queries) {
           checkAborted();
-          await page.openSearch(request.service, query);
+          await page.openSearch(target, query);
           await this.guard(page);
           const candidates: ShopCandidate[] = [];
           for (const card of await page.searchCards()) {
             const name = normalizeShopName(card.name);
             if (!card.available || card.price_rub === null || !name) continue;
+            // id блюда Еды — производная ресторана и названия: другое — чужая карточка.
+            if (place && card.id !== edaDishId(place.ref, name)) continue;
             if (candidates.some((c) => c.id === card.id)) continue;
             candidates.push({ id: card.id, name, price_rub: card.price_rub });
             if (candidates.length === SHOP_CANDIDATES_MAX) break;
           }
           results.push({ query, candidates });
         }
-        return { ok: true, op: "quote", address, delivery_rub: delivery, results };
+        return { ok: true, op: "quote", address, ...(place ? { place } : {}), delivery_rub: delivery, results };
       }
       case "prepare": {
         const active = this.activeSession();
         if (active && active.id !== request.session) throw new ShopError("shop_busy");
-        if (active) await this.clearLines(page, active.service, active.lines);
+        if (active) await this.clearLines(page, active.target, active.items);
         this.session = null;
-        const address = await this.openAt(page, () => page.openCart(request.service));
+        if (shopNeedsPlace(request.service) !== (request.place !== undefined)) throw new ShopError("place_not_found");
+        const target: ShopTarget = { service: request.service, ...(request.place ? { place: request.place } : {}) };
+        const address = await this.openAt(page, () => page.openCart(target));
         if ((await page.cart()).length) throw new ShopError("cart_not_empty");
         const added: ShopLine[] = [];
         try {
-          const lines = await this.fillCart(page, request.service, request.lines, added, checkAborted);
+          const lines = await this.fillCart(page, target, request.lines, added, checkAborted);
           const total = await this.checkoutTotal(page, lines);
-          this.session = { id: request.session, service: request.service, lines, expires: this.now() + SHOP_SESSION_TTL_MS };
+          this.session = { id: request.session, target, items: request.lines, lines, expires: this.now() + SHOP_SESSION_TTL_MS };
           return { ok: true, op: "prepare", address, lines, total_rub: total };
         } catch (e) {
           await this.snapshot(page, e);
-          await this.clearLines(page, request.service, added);
+          await this.clearLines(page, target, added);
           throw e;
         }
       }
@@ -290,14 +336,14 @@ export class ShopRunner {
         // Одноразовая: и успех, и любой отказ её гасят.
         this.session = null;
         try {
-          await page.openCart(session.service);
+          await page.openCart(session.target);
           await this.guard(page);
           const total = await this.checkoutTotal(page, session.lines);
           if (total > request.maxRub) throw new PriceChanged(total);
           checkAborted();
         } catch (e) {
           await this.snapshot(page, e);
-          await this.clearLines(page, session.service, session.lines);
+          await this.clearLines(page, session.target, session.items);
           throw e;
         }
         await page.clickPay();
@@ -308,7 +354,7 @@ export class ShopRunner {
         const session = this.activeSession();
         if (session?.id === request.session) {
           this.session = null;
-          await this.clearLines(page, session.service, session.lines);
+          await this.clearLines(page, session.target, session.items);
         }
         return { ok: true, op: "abandon" };
       }
@@ -335,10 +381,12 @@ export class ShopRunner {
   }
 
   /** Каждая подписанная позиция: страница товара, то же название, в наличии, цена читается. */
-  private async fillCart(page: ShopPage, service: ShopService, lines: ShopLine[], added: ShopLine[], checkAborted: () => void): Promise<ShopPreparedLine[]> {
+  private async fillCart(page: ShopPage, target: ShopTarget, lines: ShopLine[], added: ShopLine[], checkAborted: () => void): Promise<ShopPreparedLine[]> {
     for (const line of lines) {
       checkAborted();
-      await page.openProduct(service, line.id);
+      // Подписанный id блюда должен выводиться из подписанного ресторана и названия.
+      if (target.place && line.id !== edaDishId(target.place, line.name)) throw new ShopError("product_mismatch");
+      await page.openProduct(target, line);
       await this.guard(page);
       const info = await page.product();
       if (!info.name) throw new ShopError("product_not_found");
@@ -346,9 +394,11 @@ export class ShopRunner {
       if (!info.available) throw new ShopError("out_of_stock");
       if (info.price_rub === null) throw new ShopError("price_unreadable");
       added.push(line);
-      await page.setProductQty(line.qty);
+      const result = await page.setProductQty(line.qty);
+      if (result === "options_required") throw new ShopError("options_required");
+      if (result === "blocked") throw new ShopError("unexpected_page");
     }
-    await page.openCart(service);
+    await page.openCart(target);
     await this.guard(page);
     const rows = await page.cart();
     const prepared: ShopPreparedLine[] = [];
@@ -387,10 +437,10 @@ export class ShopRunner {
   }
 
   /** Убрать то, что положил сам. Лучшее усилие: ошибки не перекрывают исходный отказ. */
-  private async clearLines(page: ShopPage, service: ShopService, lines: ReadonlyArray<{ id: string }>) {
+  private async clearLines(page: ShopPage, target: ShopTarget, lines: ReadonlyArray<ShopItemRef>) {
     for (const line of lines) {
       try {
-        await page.openProduct(service, line.id);
+        await page.openProduct(target, line);
         if ((await page.guard()) !== "ok") return;
         await page.setProductQty(0);
       } catch {
@@ -445,7 +495,7 @@ async function cli(args: string[]) {
     const { launchPlaywrightShop } = await import("./shop-playwright.ts");
     const browser = await launchPlaywrightShop(env, profile, { headless: false });
     const page = browser.page();
-    await page.openHome("lavka");
+    await page.openHome({ service: rest[0] === "eda" ? "eda" : "lavka" });
     if (command === "login") {
       console.log("Войди в Яндекс, выбери адрес доставки и проверь карту в открывшемся окне сам. Когда закончишь — нажми Enter здесь.");
       await new Promise<void>((resolve) => process.stdin.once("data", () => resolve()));
@@ -458,16 +508,22 @@ async function cli(args: string[]) {
     await browser.close();
     return;
   }
-  if (command === "quote") {
+  if (command === "quote" || command === "eda-quote") {
+    const eda = command === "eda-quote";
+    const place = eda ? normalizeShopQuery(rest.shift()) : null;
     const queries = rest.map(normalizeShopQuery);
-    if (!queries.length || queries.some((q) => !q)) throw new Error("usage: bun mac-daemon/shop.ts quote \"молоко\" \"хлеб\"");
+    if ((eda && !place) || !queries.length || queries.some((q) => !q)) {
+      throw new Error("usage: bun mac-daemon/shop.ts quote \"молоко\" \"хлеб\" | eda-quote \"ресторан\" \"блюдо\"");
+    }
     const local = new ShopRunner({ ...env, SHOP_ENABLED: "true" }, { launch: async (e, d) => (await import("./shop-playwright.ts")).launchPlaywrightShop(e, d, { headless: false }) });
-    const out = await local.run({ op: "quote", service: "lavka", queries: queries as string[] });
+    const out = await local.run(eda
+      ? { op: "quote", service: "eda", place: place!, queries: queries as string[] }
+      : { op: "quote", service: "lavka", queries: queries as string[] });
     await local.close();
     console.log(JSON.stringify(out.ok ? out : { ...out, screenshot: out.screenshot ? `<${out.screenshot.length} base64>` : undefined }, null, 2));
     return;
   }
-  throw new Error("usage: bun mac-daemon/shop.ts login | probe | quote \"молоко\" \"хлеб\"");
+  throw new Error("usage: bun mac-daemon/shop.ts login [eda] | probe [eda] | quote \"молоко\" | eda-quote \"ресторан\" \"блюдо\"");
 }
 
 if (import.meta.main) {

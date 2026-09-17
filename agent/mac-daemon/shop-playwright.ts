@@ -1,12 +1,22 @@
 /**
  * ShopPage поверх Playwright: настоящий Chrome владельца с отдельным профилем.
+ * Лавка — здесь, Еда — eda-playwright.ts; одна вкладка, маршрутизатор отдаёт
+ * вызовы адаптеру сервиса, страницу которого открыли последней.
  *
  * playwright-core лежит только в mac-daemon/node_modules — на сервере его нет,
  * поэтому модуль грузится динамически по имени из переменной и без импорта
  * типов. Никаких «стелс»-приёмов: обычный Chrome, обычный профиль; капча — это
  * остановка и скриншот, а не повод прятаться.
  */
-import { SHOP_ORDER_STATES, SHOP_PRODUCT_ID, SHOP_SCREENSHOT_B64_MAX, parseDeliveryRubles, parseShopRubles, type ShopOrderState } from "../lib/shop.ts";
+import {
+  SHOP_ORDER_STATES,
+  SHOP_PRODUCT_ID,
+  SHOP_SCREENSHOT_B64_MAX,
+  parseDeliveryRubles,
+  parseShopRubles,
+  type ShopOrderState,
+  type ShopService,
+} from "../lib/shop.ts";
 import {
   LAVKA_CAPTCHA_FRAME,
   LAVKA_CAPTCHA_TEXT,
@@ -24,12 +34,12 @@ import {
 import type { CartRow, SearchCard, ShopBrowser, ShopEnv, ShopPage } from "./shop.ts";
 
 const PLAYWRIGHT = "playwright-core";
-const NAV_TIMEOUT_MS = 30_000;
-const UI_TIMEOUT_MS = 8_000;
+export const NAV_TIMEOUT_MS = 30_000;
+export const UI_TIMEOUT_MS = 8_000;
 const BODY_TEXT_MAX = 20_000;
-const QTY_CLICKS_MAX = 40;
+export const QTY_CLICKS_MAX = 40;
 
-const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+export const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export async function launchPlaywrightShop(env: ShopEnv, profileDir: string, opts: { headless?: boolean } = {}): Promise<ShopBrowser> {
   let pw: any;
@@ -54,11 +64,42 @@ export async function launchPlaywrightShop(env: ShopEnv, profileDir: string, opt
   const raw = context.pages()[0] ?? (await context.newPage());
   raw.setDefaultTimeout(UI_TIMEOUT_MS);
   raw.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
-  const page = playwrightShopPage(raw);
+  const { edaShopPage } = await import("./eda-playwright.ts");
+  const page = routeShopPage({ lavka: playwrightShopPage(raw), eda: edaShopPage(raw) });
   return { page: () => page, close: () => context.close() };
 }
 
-function hostMatches(url: string, hosts: RegExp[]): boolean {
+/**
+ * Одна вкладка на оба сервиса: open* выбирает адаптер, остальные вызовы идут
+ * туда, где открыли страницу последней.
+ */
+export function routeShopPage(pages: Record<ShopService, ShopPage>): ShopPage {
+  let current: ShopPage = pages.lavka;
+  const on = (service: ShopService) => (current = pages[service]);
+  return {
+    openHome: (t) => on(t.service).openHome(t),
+    findPlace: (q) => on("eda").findPlace(q),
+    openSearch: (t, q) => on(t.service).openSearch(t, q),
+    openProduct: (t, item) => on(t.service).openProduct(t, item),
+    openCart: (t) => on(t.service).openCart(t),
+    openOrders: (service) => on(service).openOrders(service),
+    guard: () => current.guard(),
+    address: () => current.address(),
+    deliveryFee: () => current.deliveryFee(),
+    searchCards: () => current.searchCards(),
+    product: () => current.product(),
+    setProductQty: (qty) => current.setProductQty(qty),
+    cart: () => current.cart(),
+    openCheckout: () => current.openCheckout(),
+    checkout: () => current.checkout(),
+    clickPay: () => current.clickPay(),
+    orderState: () => current.orderState(),
+    screenshot: () => current.screenshot(),
+    probe: () => current.probe(),
+  };
+}
+
+export function hostMatches(url: string, hosts: RegExp[]): boolean {
   try {
     const u = new URL(url);
     return u.protocol === "https:" && hosts.some((h) => h.test(u.hostname));
@@ -67,7 +108,7 @@ function hostMatches(url: string, hosts: RegExp[]): boolean {
   }
 }
 
-async function visible(locator: any, timeout = 0): Promise<boolean> {
+export async function visible(locator: any, timeout = 0): Promise<boolean> {
   try {
     if (timeout) await locator.waitFor({ state: "visible", timeout });
     return await locator.isVisible();
@@ -90,7 +131,8 @@ export function productIdFromHref(href: unknown): string | null {
   return SHOP_PRODUCT_ID.test(id) ? id : null;
 }
 
-export function playwrightShopPage(page: any): ShopPage {
+/** Общие приёмы работы со страницей для адаптеров Лавки и Еды. */
+export function pageKit(page: any) {
   const bodyText = async (): Promise<string> => {
     try {
       return String(await page.locator("body").innerText({ timeout: UI_TIMEOUT_MS })).slice(0, BODY_TEXT_MAX);
@@ -110,6 +152,48 @@ export function playwrightShopPage(page: any): ShopPage {
       return null;
     }
   };
+  /** Последняя сумма в строке рядом с видимой подписью `label` («Итого»). */
+  const totalNear = (label: RegExp): Promise<string | null> => page.evaluate((re: string) => {
+    const doc = (globalThis as any).document;
+    const labelRe = new RegExp(re, "i");
+    const leaf = [...doc.querySelectorAll("body *")].reverse().find((el: any) =>
+      el.children.length === 0 && labelRe.test(String(el.textContent ?? "").trim()) && el.getClientRects().length > 0);
+    let row: any = leaf;
+    for (let i = 0; i < 4 && row && !/\d\s?₽/.test(String(row.innerText ?? "")); i++) row = row.parentElement;
+    const m = String(row?.innerText ?? "").match(/\d[\d \u00a0\u202f]*(?:[,.]\d{1,2})?\s?₽/g);
+    return m ? m[m.length - 1] : null;
+  }, label.source);
+  const screenshot = async (): Promise<string | null> => {
+    for (const quality of [45, 30, 18]) {
+      try {
+        const buf: Uint8Array = await page.screenshot({ type: "jpeg", quality, scale: "css", timeout: UI_TIMEOUT_MS });
+        const b64 = Buffer.from(buf).toString("base64");
+        if (b64.length <= SHOP_SCREENSHOT_B64_MAX) return b64;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  };
+  const probe = async (): Promise<string> => {
+    try {
+      return String(await page.locator("body").ariaSnapshot({ timeout: UI_TIMEOUT_MS }));
+    } catch (e) {
+      return `probe failed: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  };
+  /** Состояние заказа по тексту страницы; порядок правил важен. */
+  const stateFromBody = async (rules: ReadonlyArray<[ShopOrderState, RegExp]>): Promise<ShopOrderState> => {
+    const body = await bodyText();
+    const hit = rules.find(([, re]) => re.test(body));
+    const state: ShopOrderState = hit ? hit[0] : /Заказов (?:пока )?нет|У вас нет заказов/i.test(body) ? "none" : "unknown";
+    return SHOP_ORDER_STATES.includes(state) ? state : "unknown";
+  };
+  return { bodyText, goto, text, totalNear, screenshot, probe, stateFromBody };
+}
+
+export function playwrightShopPage(page: any): ShopPage {
+  const { bodyText, goto, text, totalNear, screenshot, probe, stateFromBody } = pageKit(page);
   const bar = () => page.locator(LAVKA_TESTID.addToCartBar).first();
   const qtyInBar = async (): Promise<number> => {
     const input = bar().locator(LAVKA_TESTID.qtyInput).first();
@@ -121,8 +205,9 @@ export function playwrightShopPage(page: any): ShopPage {
 
   return {
     openHome: () => goto(`${LAVKA_ORIGIN}/`),
-    openSearch: (_service, query) => goto(lavkaSearchUrl(query)),
-    openProduct: (_service, id) => goto(lavkaProductUrl(id)),
+    findPlace: async () => null,
+    openSearch: (_target, query) => goto(lavkaSearchUrl(query)),
+    openProduct: (_target, item) => goto(lavkaProductUrl(item.id)),
     // Корзина на десктопе — боковая мини-корзина на любой странице каталога.
     openCart: () => goto(`${LAVKA_ORIGIN}/`),
     openOrders: () => goto(LAVKA_ORDERS_URL),
@@ -197,6 +282,7 @@ export function playwrightShopPage(page: any): ShopPage {
         if (next === current) break; // упёрлись (остаток на складе): сверка корзины это поймает
         current = next;
       }
+      return "ok";
     },
     async cart() {
       const cart = page.locator(LAVKA_TESTID.miniCart).first();
@@ -242,16 +328,7 @@ export function playwrightShopPage(page: any): ShopPage {
     },
     async checkout() {
       const body = await bodyText();
-      const total: string | null = await page.evaluate((re: string) => {
-        const doc = (globalThis as any).document;
-        const label = new RegExp(re, "i");
-        const leaf = [...doc.querySelectorAll("body *")].reverse().find((el: any) =>
-          el.children.length === 0 && label.test(String(el.textContent ?? "").trim()) && el.getClientRects().length > 0);
-        let row: any = leaf;
-        for (let i = 0; i < 4 && row && !/\d\s?₽/.test(String(row.innerText ?? "")); i++) row = row.parentElement;
-        const m = String(row?.innerText ?? "").match(/\d[\d \u00a0\u202f]*(?:[,.]\d{1,2})?\s?₽/g);
-        return m ? m[m.length - 1] : null;
-      }, LAVKA_TEXT.total.source);
+      const total = await totalNear(LAVKA_TEXT.total);
       return {
         total_rub: parseShopRubles(total),
         blocked: LAVKA_TEXT.checkoutBlocked.test(body),
@@ -262,30 +339,8 @@ export function playwrightShopPage(page: any): ShopPage {
     async clickPay() {
       await payLocator().click();
     },
-    async orderState() {
-      const body = await bodyText();
-      const hit = LAVKA_STATE_TEXT.find(([, re]) => re.test(body));
-      const state: ShopOrderState = hit ? hit[0] : /Заказов (?:пока )?нет|У вас нет заказов/i.test(body) ? "none" : "unknown";
-      return SHOP_ORDER_STATES.includes(state) ? state : "unknown";
-    },
-    async screenshot() {
-      for (const quality of [45, 30, 18]) {
-        try {
-          const buf: Uint8Array = await page.screenshot({ type: "jpeg", quality, scale: "css", timeout: UI_TIMEOUT_MS });
-          const b64 = Buffer.from(buf).toString("base64");
-          if (b64.length <= SHOP_SCREENSHOT_B64_MAX) return b64;
-        } catch {
-          return null;
-        }
-      }
-      return null;
-    },
-    async probe() {
-      try {
-        return String(await page.locator("body").ariaSnapshot({ timeout: UI_TIMEOUT_MS }));
-      } catch (e) {
-        return `probe failed: ${e instanceof Error ? e.message : String(e)}`;
-      }
-    },
+    orderState: () => stateFromBody(LAVKA_STATE_TEXT),
+    screenshot,
+    probe,
   };
 }

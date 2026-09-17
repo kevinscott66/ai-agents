@@ -1,9 +1,10 @@
 /**
- * Шаг 10a: покупки в Яндекс Лавке через браузер на Mac владельца.
+ * Шаги 10a и 10b: покупки в Яндекс Лавке и Яндекс Еде через браузер на Mac владельца.
  *
- *   SHOP_QUOTE  {service?, queries}                     — инлайново: адрес, доставка
- *                                                         и до трёх товаров на запрос;
- *   ORDER_FOOD  {service, lines[{id,name,qty,price_rub}], delivery_rub}
+ *   SHOP_QUOTE  {service?, place?, queries}             — инлайново: адрес, доставка,
+ *                                                         ресторан (Еда) и до трёх
+ *                                                         товаров на запрос;
+ *   ORDER_FOOD  {service, place?, lines[{id,name,qty,price_rub}], delivery_rub}
  *                                                       — карточка в чате (money), затем
  *                                                         заявка в подписанный гейт;
  *   подпись на телефоне → исполнитель: claim → prepare → checkFinal → confirm;
@@ -12,7 +13,8 @@
  * Деньги двигает только исполнитель и только по подписанному payload: в
  * корзину кладутся ровно подписанные товары, итог со страницы оформления
  * сверяется с подписанным потолком до нажатия «Оплатить». Адрес доставки
- * тоже подписан: если на сайте он сменился — отказ. Капчу не решаем.
+ * тоже подписан: если на сайте он сменился — отказ. В Еде подписан и ресторан:
+ * исполнитель собирает корзину только в нём. Капчу не решаем.
  *
  * Ожидающие подписи заявки живут в памяти процесса — как у такси
  * (lib/dispatch/taxi.ts): рестарт их теряет, слот дневного лимита остаётся занят.
@@ -25,6 +27,7 @@ import { signedActions } from "../native-signing.ts";
 import { limitsFromEnv, maxRubFor, SignedActionRefusal, type SignedActions } from "../signed-actions.ts";
 import { log } from "../log.ts";
 import {
+  normalizeShopPlaceName,
   normalizeShopQuery,
   normalizeShopService,
   parseShopOutcome,
@@ -38,10 +41,13 @@ import {
   SHOP_SERVICES,
   SHOP_STATE_LABEL,
   shopLineSum,
+  shopNeedsPlace,
+  shopStoreLabel,
   shopLineText,
   shopMaxFinal,
   type ShopCandidate,
   type ShopOutcome,
+  type ShopPlace,
   type ShopRequest,
   type ShopService,
 } from "../shop.ts";
@@ -80,12 +86,20 @@ export function configureShop(patch: Partial<ShopDeps>) {
 
 export const shopEnabled = () => process.env.SHOP_ENABLED === "true";
 
-interface Quote { service: ShopService; address: string; delivery_rub: number | null; items: Map<string, ShopCandidate>; at: number }
+interface Quote {
+  service: ShopService;
+  place?: ShopPlace;
+  address: string;
+  delivery_rub: number | null;
+  items: Map<string, ShopCandidate>;
+  at: number;
+}
 interface PendingOrder {
   payload: string;
   userId: string;
   chatId: number;
   service: ShopService;
+  place?: ShopPlace;
   address: string;
   lines: PayloadByType["ORDER_FOOD"]["lines"];
   at: number;
@@ -143,18 +157,26 @@ export async function quoteShop(input: Record<string, unknown>, ctx: ShopInlineC
   const queries = raw.map(normalizeShopQuery);
   if (queries.some((q) => !q)) return { ok: false, error: "каждый запрос — одна строка, 2..80 символов" };
   const unique = [...new Set(queries as string[])];
+  const needsPlace = shopNeedsPlace(service);
+  const placeQuery = needsPlace ? normalizeShopQuery(input.place) : undefined;
+  if (needsPlace && !placeQuery) return { ok: false, error: "place — название ресторана, 2..80 символов" };
+  if (!needsPlace && input.place !== undefined) return { ok: false, error: `у ${service} нет ресторана: place не нужен` };
   const userId = ctx.triggerUserId!;
   try {
-    const out = await askMac({ op: "quote", service, queries: unique }, userId, ctx.chatId);
+    const request: ShopRequest = { op: "quote", service, ...(placeQuery ? { place: placeQuery } : {}), queries: unique };
+    const out = await askMac(request, userId, ctx.chatId);
     if (!out.ok) return { ok: false, error: failText(out), code: out.code };
     if (out.op !== "quote") return { ok: false, error: "invalid_shop_result" };
+    // Ресторан приходит ровно у тех сервисов, где он нужен.
+    if (needsPlace !== (out.place !== undefined)) return { ok: false, error: "invalid_shop_result" };
     const items = new Map<string, ShopCandidate>();
     for (const r of out.results) for (const c of r.candidates) items.set(c.id, c);
-    quotes.set(userId, { service, address: out.address, delivery_rub: out.delivery_rub, items, at: deps.now() });
+    quotes.set(userId, { service, ...(out.place ? { place: out.place } : {}), address: out.address, delivery_rub: out.delivery_rub, items, at: deps.now() });
     return {
       ok: true,
       service,
       store: SHOP_SERVICES[service],
+      ...(out.place ? { place: out.place.name } : {}),
       address: out.address,
       delivery_rub: out.delivery_rub,
       results: out.results,
@@ -162,6 +184,7 @@ export async function quoteShop(input: Record<string, unknown>, ctx: ShopInlineC
       valid_min: Math.round(SHOP_QUOTE_TTL_MS / 60_000),
       note:
         "Это поиск, не заказ. Для заказа — ORDER_FOOD с выбранными товарами: id, name и price_rub ровно из этого расчёта, qty — сколько просил владелец; " +
+        (out.place ? "place — ресторан ровно из расчёта; если он не тот, что имел в виду владелец, переспроси; " : "") +
         "delivery_rub — из расчёта (null → 0). Если товар неочевиден, спроси владельца, какой из вариантов.",
     };
   } catch (e) {
@@ -192,9 +215,11 @@ const GATE_TEXT: Partial<Record<string, string>> = {
   payload_invalid: "заявка не проходит проверку гейта",
 };
 
-/** Позиции заявки → параметры подписи: магазин, адрес, товары, доставка. */
+/** Позиции заявки → параметры подписи: магазин, ресторан, адрес, товары, доставка. */
 function gateParams(quote: Quote, lines: PendingOrder["lines"], deliveryRub: number): Record<string, string | number> {
-  const params: Record<string, string | number> = { store: SHOP_SERVICES[quote.service], address: quote.address };
+  const params: Record<string, string | number> = { store: SHOP_SERVICES[quote.service] };
+  if (quote.place) params.place = quote.place.name;
+  params.address = quote.address;
   lines.forEach((l, i) => { params[`item_${String(i + 1).padStart(2, "0")}`] = shopLineText(l); });
   params.delivery_rub = deliveryRub;
   return params;
@@ -214,6 +239,9 @@ export async function handleOrderFood(payload: PayloadByType["ORDER_FOOD"], ctx:
   if (!quote || now - quote.at > SHOP_QUOTE_TTL_MS || quote.service !== service) {
     return { ok: false, error: "нет свежего расчёта в этом магазине: сначала SHOP_QUOTE и новое подтверждение" };
   }
+  if ((quote.place?.name ?? undefined) !== (payload.place === undefined ? undefined : normalizeShopPlaceName(payload.place))) {
+    return { ok: false, error: `в расчёте ресторан «${quote.place?.name ?? "—"}», а в заявке «${payload.place ?? "—"}»: пересчитай через SHOP_QUOTE` };
+  }
   for (const line of lines) {
     const item = quote.items.get(line.id);
     if (!item) return { ok: false, error: `товара ${line.id} не было в расчёте` };
@@ -231,7 +259,7 @@ export async function handleOrderFood(payload: PayloadByType["ORDER_FOOD"], ctx:
       now,
     );
     for (const [key, order] of pendingOrders) if (now - order.at > SHOP_QUOTE_TTL_MS) pendingOrders.delete(key);
-    pendingOrders.set(nonce, { payload: signed, userId, chatId: ctx.chatId, service, address: quote.address, lines, at: now });
+    pendingOrders.set(nonce, { payload: signed, userId, chatId: ctx.chatId, service, ...(quote.place ? { place: quote.place } : {}), address: quote.address, lines, at: now });
     return {
       ok: true,
       result: {
@@ -277,7 +305,7 @@ async function runSignedShop(nonce: string): Promise<void> {
   pendingOrders.delete(nonce);
   const gate = deps.gate();
   const { userId, chatId } = order;
-  const store = SHOP_SERVICES[order.service];
+  const store = shopStoreLabel(order.service, order.place?.name);
 
   let maxFinal: number;
   try {
@@ -303,7 +331,13 @@ async function runSignedShop(nonce: string): Promise<void> {
   let prepared: ShopOutcome;
   try {
     prepared = await askMac(
-      { op: "prepare", session, service: order.service, lines: order.lines.map(({ id, name, qty }) => ({ id, name, qty })) },
+      {
+        op: "prepare",
+        session,
+        service: order.service,
+        ...(order.place ? { place: order.place.ref } : {}),
+        lines: order.lines.map(({ id, name, qty }) => ({ id, name, qty })),
+      },
       userId,
       chatId,
     );
