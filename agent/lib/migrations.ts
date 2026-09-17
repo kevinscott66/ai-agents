@@ -1583,6 +1583,19 @@ export const MIGRATIONS: Migration[] = [
       for (const c of CHARACTERS) ins.run(c.key, c.key === "orchestrator" ? 1 : 0);
     },
   },
+  {
+    // Шаг 8: CLOUDFLARE_DNS — записи DNS в разрешённых зонах
+    // (lib/cloudflare-dns.ts). Только оркестратор и только с подтверждением;
+    // политика владельца (dns) держит то же, строка — второй рубеж.
+    name: "060_seed_cloudflare_dns",
+    up: (db) => {
+      const ins = db.prepare(
+        `INSERT OR IGNORE INTO permissions(agent_key, action_type, allowed, requires_approval)
+         VALUES (?, 'CLOUDFLARE_DNS', ?, 1)`,
+      );
+      for (const c of CHARACTERS) ins.run(c.key, c.key === "orchestrator" ? 1 : 0);
+    },
+  },
 ];
 
 /**

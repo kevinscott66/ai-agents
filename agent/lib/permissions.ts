@@ -46,6 +46,8 @@ export const ACTION_TYPES = [
   "MAC_CONTROL",
   // Личное сообщение человеку от аккаунта владельца (lib/userbot-dm.ts).
   "USERBOT_SEND_DM",
+  // DNS-записи в Cloudflare (lib/cloudflare-dns.ts), всегда с подтверждением.
+  "CLOUDFLARE_DNS",
   "SCHEDULE_POST",
   // Напоминания в чат-источник (lib/reminders.ts). LIST_REMINDERS — инлайновый.
   "CREATE_REMINDER",
@@ -162,6 +164,9 @@ export const CALLER_RESTRICTED: Record<string, string> = {
   MAC_CONTROL: "orchestrator",
   // Сообщение от личного аккаунта владельца человеку вне команды.
   USERBOT_SEND_DM: "orchestrator",
+  // DNS владельца: изменение и чтение записей Cloudflare.
+  CLOUDFLARE_DNS: "orchestrator",
+  CLOUDFLARE_DNS_LIST: "orchestrator",
   // Создание канала от имени владельца + назначение админов — действие реального
   // аккаунта; только лид (orchestrator) как контролёр процесса.
   CREATE_TEAM_CHANNEL: "orchestrator",

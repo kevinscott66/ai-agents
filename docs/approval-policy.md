@@ -17,7 +17,7 @@
 | Категория | Что попадает |
 | --- | --- |
 | `money` | `ORDER_TAXI`, `ORDER_FOOD`, `ORDER_DELIVERY`, `MARKET_PURCHASE` (зарезервированы до шагов 9–10, дополнительно идут через подписанный гейт); промпт `MAC_RUN_CLAUDE` про оплату/покупку/заказ |
-| `dns` | `CLOUDFLARE_DNS` (зарезервировано до шага 8); промпт про DNS, Cloudflare, CNAME, A-запись |
+| `dns` | `CLOUDFLARE_DNS` (любое изменение записи); промпт про DNS, Cloudflare, CNAME, A-запись |
 | `push_main` | `REVIEW_AND_MERGE_PR`; промпт с `git push … main`, force-push, «пуш в main» |
 | `delete` | `DELETE_MESSAGE`; промпт с `rm -rf`, `git reset --hard`, `drop table`, «удали» |
 | `shutdown` | `MAC_CONTROL` с `shutdown`/`restart`; промпт про shutdown/reboot/«выключи мак» |
@@ -38,6 +38,25 @@
 - одно сообщение до 4096 символов без разметки; невидимые и управляющие символы — отказ;
 - карточка подтверждения показывает адресата и весь текст без обрезки;
 - лимиты: 20 заявок в час и общее анти-flood ведро аккаунта.
+
+## DNS в Cloudflare
+
+`CLOUDFLARE_DNS {op, name, type, content?, previous?, ttl?, proxied?}` и
+инлайновое чтение `CLOUDFLARE_DNS_LIST {name?, type?}` (`agent/lib/cloudflare-dns.ts`):
+
+- выключено до `CLOUDFLARE_DNS_ENABLED=true`;
+- токен `CLOUDFLARE_DNS_API_TOKEN` выпускает владелец: Custom token, одно право
+  «Zone → DNS → Edit», Zone Resources — только нужные зоны; по желанию —
+  фильтр по IP сервера и срок действия. Zone Read не нужен: id зон лежат в
+  `CLOUDFLARE_DNS_ZONES` (`имя=id` через запятую). Токен не попадает ни в
+  payload, ни в ошибки: наружу уходят только HTTP-статус и коды Cloudflare;
+- только оркестратор, только по просьбе владельца в его личном чате, не делегированием;
+- типы A, AAAA, CNAME, TXT. NS, MX, CAA и прочие не поддерживаются;
+- корень зоны, wildcard и имена из `CLOUDFLARE_DNS_PROTECTED` не меняются;
+- `update` и `delete` несут `previous`: карточка показывает «было → станет»,
+  а хендлер меняет запись, только если она всё ещё такая;
+- зоны и защищённые имена сверяются заново после одобрения;
+- лимиты: 10 изменений в час, чтение — 10 в минуту.
 
 ## Что вне политики
 
