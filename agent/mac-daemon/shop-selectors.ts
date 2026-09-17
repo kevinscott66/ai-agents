@@ -32,6 +32,12 @@ export const LAVKA_TESTID = {
   qtyPlus: '[data-testid="add-spin-button"]',
   qtyMinus: '[data-testid="remove-spin-button"]',
   addressButton: '[data-testid="header-address-selection-button"]',
+  // окно «Мои адреса»: открывается кликом по адресу в шапке
+  addressModal: '[data-testid="my-addresses-modal"]',
+  addressItem: '[data-testid="address-item"]',
+  // в строке адреса есть ещё карандаш «изменить» — кликаем строго по подписи
+  addressItemTitle: '[data-testid="item-title"]',
+  addressModalClose: '[data-testid="modal-close-button"]',
   signIn: '[data-testid="sign-in"]',
   miniCart: '[data-testid="mini-cart"]',
   miniCartDelivery: '[data-testid="min-cart-delivery-conditions-title"]',

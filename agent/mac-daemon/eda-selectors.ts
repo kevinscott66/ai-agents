@@ -49,6 +49,10 @@ export const EDA_TESTID = {
   amountDec: '[data-testid="amount-select-decrement"]',
   amountInc: '[data-testid="amount-select-increment"]',
   amountValue: '[data-testid="item-quantity"]',
+  // окно адреса: открывается кликом по адресу в шапке
+  // «Заказ на этот адрес?» — тоже role=dialog, поэтому окно адресов узнаём по списку внутри
+  addressDialog: '[role="dialog"]:has([role="radiogroup"])',
+  addressRadio: 'button[role="radio"]',
   // корзина — боковая панель на странице ресторана
   cartRow: '[data-testid="product-card-row-root"]',
   cartRowName: '[data-testid="cart-item-name"]',
@@ -61,6 +65,8 @@ export const EDA_TEXT = {
   addressModal: /Куда доставить заказ\?/i,
   /** Адрес в шапке — кнопка без testid; остальные кнопки шапки узнаём по названию. */
   headerNotAddress: /^(?:Уведомления|Корзина|Профиль|Войти|Укажите адрес)?$/i,
+  /** Прочие кнопки шапки: всё остальное — адрес, даже «Укажите адрес». */
+  headerOther: /^(?:Уведомления|Корзина|Профиль|Войти)$/i,
   // НЕ сверено
   deliveryFee: /Доставка\s+(\d{1,5})\s?₽/i,
   // НЕ сверено

@@ -42,10 +42,12 @@ import {
   SHOP_SESSION_TTL_MS,
   edaDishId,
   edaVariantId,
+  matchSavedAddress,
   normalizeShopName,
   normalizeShopPlaceName,
   normalizeShopQuery,
   parseShopRequest,
+  shopAddressHas,
   shopNeedsPlace,
   type ShopCandidate,
   type ShopQuoteResult,
@@ -138,6 +140,12 @@ export interface ShopPage {
   addWithOptions?(qty: number, picks: ShopOptionPick[]): Promise<QtyResult>;
   /** Еда: убрать из корзины строки этих вариантов. */
   removeCartRows?(ids: string[]): Promise<void>;
+  /** Лавка и Еда: подписи сохранённых адресов из окна выбора (окно остаётся открытым). */
+  savedAddresses?(): Promise<string[]>;
+  /** Выбрать сохранённый адрес по номеру из savedAddresses. */
+  chooseAddress?(index: number): Promise<void>;
+  /** Закрыть окно выбора адреса, ничего не меняя. */
+  closeAddresses?(): Promise<void>;
   cart(): Promise<CartRow[]>;
   /** Открыть оформление из корзины; false — кнопки нет. */
   openCheckout(): Promise<boolean>;
@@ -379,6 +387,26 @@ export class ShopRunner {
         await page.openOrders(request.service);
         await this.guard(page);
         return { ok: true, op: "status", state: await page.orderState() };
+      }
+      case "set_address": {
+        // Пока идёт заказ, адрес не трогаем: подписан старый.
+        if (this.activeSession()) throw new ShopError("shop_busy");
+        if (!page.savedAddresses || !page.chooseAddress) throw new ShopError("address_required");
+        const target: ShopTarget = { service: request.service };
+        await page.openHome(target);
+        await this.guard(page);
+        const saved = await page.savedAddresses();
+        const index = matchSavedAddress(request.address, saved);
+        if (index === null) {
+          await page.closeAddresses?.();
+          return { ok: true, op: "set_address", matched: false, address: await page.address(), saved_count: saved.length };
+        }
+        await page.chooseAddress(index);
+        await this.guard(page);
+        const now = await page.address();
+        // Сверяем шапку: выбралось не то или не выбралось — говорим об этом, а не молчим.
+        const matched = now !== null && shopAddressHas(now, request.address);
+        return { ok: true, op: "set_address", matched, address: now, saved_count: saved.length };
       }
     }
   }

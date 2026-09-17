@@ -18,6 +18,7 @@ import {
   hasPendingShopOrder,
   quoteShop,
   resetShopState,
+  setShopAddress,
   shopStatus,
 } from "../lib/dispatch/shop.ts";
 import { SignedActions } from "../lib/signed-actions.ts";
@@ -25,6 +26,7 @@ import {
   describeOrderFood,
   edaDishId,
   edaVariantId,
+  matchSavedAddress,
   normalizeShopName,
   normalizeShopService,
   parseDeliveryRubles,
@@ -35,6 +37,8 @@ import {
   parseShopOptionGroups,
   parseShopOptionPicks,
   resolveShopOptions,
+  shopAddressHas,
+  shopAddressTokens,
   shopLineText,
   type ShopOptionGroup,
   type ShopOrderState,
@@ -158,6 +162,7 @@ function fakePage() {
     place: null as ShopPlace | null,
     qtyResult: "ok" as QtyResult,
     opened: [] as string[],
+    addresses: ["Краснодар, Красная 1", "Краснодар, Ленина 5, кв 12"] as string[],
   };
   const total = () => [...s.cart].reduce((sum, [id, qty]) => sum + qty * (s.products.get(id)?.price_rub ?? 0), 0) + (s.delivery ?? 0);
   const page: ShopPage = {
@@ -178,6 +183,9 @@ function fakePage() {
       if (qty === 0) s.cart.delete(s.current); else s.cart.set(s.current, qty);
       return "ok";
     },
+    savedAddresses: async () => { s.clicks.push("addresses"); return [...s.addresses]; },
+    chooseAddress: async (i) => { s.clicks.push(`address:${i}`); s.address = s.addresses[i] ?? s.address; },
+    closeAddresses: async () => { s.clicks.push("addresses:close"); },
     cart: async () => [...s.cart].map(([id, qty]) => ({ id, qty, price_rub: s.products.get(id)?.price_rub ?? null })),
     openCheckout: async () => { s.current = "checkout"; return s.cart.size > 0; },
     checkout: async () => ({ total_rub: total(), blocked: false, saved_card: true, pay_button: true, ...s.checkout }),
@@ -1192,5 +1200,131 @@ describe("market: server flow", () => {
     expect((await buy(300)).ok).toBe(false);
     expect(await buy(199)).toMatchObject({ ok: true, result: { amount_rub: 2689 } });
     expect(JSON.parse(h.gate.pending(T0).at(-1)!.payload).params).toMatchObject({ delivery_rub: 199 });
+  });
+});
+
+describe("адрес доставки", () => {
+  const SAVED = ["Краснодар, Красная 1", "Краснодар, Ленина 5, кв 12"];
+
+  test("слова адреса: сокращения и знаки не мешают, номер дома разбирается", () => {
+    expect(shopAddressTokens("ул. Ленина, д. 5, кв. 12")).toEqual(["ленина", "5", "12"]);
+    expect(shopAddressTokens("Красная 12/1к2")).toEqual(["красная", "12", "1", "2"]);
+    expect(shopAddressHas("Краснодар, Ленина 5, кв 12", "на Ленина 5")).toBe(true);
+    expect(shopAddressHas("Краснодар, Ленина 5", "Ленина 7")).toBe(false);
+    // Пустой запрос ничему не равен: «поменяй адрес» без адреса ничего не выберет.
+    expect(shopAddressHas("Краснодар, Ленина 5", "на")).toBe(false);
+  });
+
+  test("выбираем только при единственном совпадении", () => {
+    expect(matchSavedAddress("Ленина 5", SAVED)).toBe(1);
+    expect(matchSavedAddress("Красная", SAVED)).toBe(0);
+    // Подходит обоим — не выбираем сами.
+    expect(matchSavedAddress("Краснодар", SAVED)).toBe(null);
+    expect(matchSavedAddress("Гагарина 3", SAVED)).toBe(null);
+    expect(matchSavedAddress("Ленина 5", [])).toBe(null);
+  });
+
+  test("заявка и ответ Mac разбираются, Маркет отвергается", () => {
+    expect(parseShopRequest({ op: "set_address", service: "lavka", address: "Ленина 5" }))
+      .toEqual({ op: "set_address", service: "lavka", address: "Ленина 5" });
+    expect(parseShopRequest({ op: "set_address", service: "eda", address: "Ленина 5" })).not.toBe(null);
+    // У Маркета адрес — пункт выдачи.
+    expect(parseShopRequest({ op: "set_address", service: "market", address: "Ленина 5" })).toBe(null);
+    expect(parseShopRequest({ op: "set_address", service: "lavka", address: "  " })).toBe(null);
+    expect(parseShopRequest({ op: "set_address", service: "lavka" })).toBe(null);
+
+    const out = (d: Record<string, unknown>) => parseShopOutcome(JSON.stringify(d), "set_address");
+    expect(out({ ok: true, op: "set_address", matched: true, address: "Краснодар, Ленина 5", saved_count: 2 }))
+      .toEqual({ ok: true, op: "set_address", matched: true, address: "Краснодар, Ленина 5", saved_count: 2 });
+    expect(out({ ok: true, op: "set_address", matched: false, address: null, saved_count: 0 }))
+      .toMatchObject({ ok: true, matched: false, address: null });
+    // Сменили, но адрес не прочитали — такому ответу не верим.
+    expect(() => out({ ok: true, op: "set_address", matched: true, address: null, saved_count: 2 })).toThrow("invalid_shop_result");
+    expect(() => out({ ok: true, op: "set_address", matched: true, address: "Ленина 5", saved_count: 101 })).toThrow("invalid_shop_result");
+    expect(() => out({ ok: true, op: "status", state: "none" })).toThrow("invalid_shop_result");
+  });
+
+  test("исполнитель: один подходящий адрес выбирается, лишнего не жмёт", async () => {
+    const { s, page } = fakePage();
+    const r = runner(page);
+    expect(await r.run({ op: "set_address", service: "lavka", address: "Ленина 5" })).toEqual({
+      ok: true,
+      op: "set_address",
+      matched: true,
+      address: "Краснодар, Ленина 5, кв 12",
+      saved_count: 2,
+    });
+    expect(s.opened).toEqual(["home:lavka"]);
+    expect(s.clicks).toEqual(["addresses", "address:1"]);
+    expect(s.cart.size).toBe(0);
+    await r.close();
+  });
+
+  test("исполнитель: неоднозначный и ненайденный адрес — окно закрыли, адрес прежний", async () => {
+    const { s, page } = fakePage();
+    const r = runner(page);
+    expect(await r.run({ op: "set_address", service: "lavka", address: "Краснодар" })).toEqual({
+      ok: true,
+      op: "set_address",
+      matched: false,
+      address: "Краснодар, Красная 1",
+      saved_count: 2,
+    });
+    expect(await r.run({ op: "set_address", service: "eda", address: "Гагарина 3" })).toMatchObject({ matched: false });
+    expect(s.clicks).toEqual(["addresses", "addresses:close", "addresses", "addresses:close"]);
+    expect(s.address).toBe("Краснодар, Красная 1");
+    await r.close();
+  });
+
+  test("исполнитель: пока собрана корзина, адрес не трогаем", async () => {
+    const { s, page } = fakePage();
+    const r = runner(page);
+    await r.run({ op: "prepare", session: SESSION, service: "lavka", lines: [{ id: MILK.id, name: MILK.name, qty: 1 }] });
+    expect(await r.run({ op: "set_address", service: "lavka", address: "Ленина 5" })).toMatchObject({ ok: false, code: "shop_busy" });
+    expect(s.clicks).not.toContain("addresses");
+    await r.close();
+  });
+});
+
+describe("адрес доставки: инструмент", () => {
+  let h: Awaited<ReturnType<typeof harness>> | null = null;
+  beforeEach(() => {
+    resetShopState();
+    process.env.SHOP_ENABLED = "true";
+    process.env.MINIAPP_ADMIN_USER_IDS = `123,${OWNER}`;
+  });
+  afterEach(() => {
+    h?.restore();
+    h = null;
+    resetShopState();
+    for (const k of ENV_KEYS) {
+      if (savedEnv[k] === undefined) delete process.env[k]; else process.env[k] = savedEnv[k];
+    }
+  });
+
+  test("только владелец, только Лавка и Еда, расчёт после смены недействителен", async () => {
+    h = await harness({
+      quote: QUOTE,
+      set_address: { ok: true, op: "set_address", matched: true, address: "Краснодар, Ленина 5, кв 12", saved_count: 2 },
+    });
+    expect((await setShopAddress({ service: "lavka", address: "Ленина 5" }, { ...h.ctx, chatId: -100 })).ok).toBe(false);
+    expect((await setShopAddress({ service: "lavka", address: "Ленина 5" }, { ...h.ctx, agentKey: "qa" })).ok).toBe(false);
+    expect((await setShopAddress({ service: "market", address: "Ленина 5" }, h.ctx)).ok).toBe(false);
+    expect((await setShopAddress({ service: "lavka", address: " " }, h.ctx)).ok).toBe(false);
+    expect(h.requests).toEqual([]);
+
+    expect(await h.quote()).toMatchObject({ ok: true });
+    expect(await setShopAddress({ service: "lavka", address: "Ленина 5" }, h.ctx))
+      .toMatchObject({ ok: true, service: "lavka", address: "Краснодар, Ленина 5, кв 12" });
+    expect(h.requests.at(-1)).toEqual({ op: "set_address", service: "lavka", address: "Ленина 5" });
+    // Старый расчёт был про старый адрес — заказать по нему уже нельзя.
+    expect((await h.order()).ok).toBe(false);
+  });
+
+  test("не нашёлся — отказ с числом адресов, сами ничего не заводим", async () => {
+    h = await harness({ set_address: { ok: true, op: "set_address", matched: false, address: "Краснодар, Красная 1", saved_count: 2 } });
+    const out = await setShopAddress({ service: "eda", address: "Гагарина 3" }, h.ctx);
+    expect(out).toMatchObject({ ok: false, saved_count: 2 });
+    expect(String(out.note)).toContain("не заводит");
   });
 });

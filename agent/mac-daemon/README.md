@@ -243,10 +243,14 @@ Verification: local installed Claude accepted the readiness command and produced
    - `SHOP_ENABLED=true`;
    - `SHOP_PROFILE_DIR` — отдельный каталог профиля (не профиль такси), права `700`;
    - `SHOP_HEADLESS`, `SHOP_BROWSER_CHANNEL` — как у такси.
-3. Вход и адрес: `SHOP_PROFILE_DIR=… bun shop.ts login` — владелец входит сам,
-   выбирает адрес доставки и привязывает карту (или SberPay/Яндекс Пэй), затем
-   Enter. Агент адрес и карту не вводит: без адреса — `address_required`, без
-   сохранённого способа оплаты — `payment_needs_owner`.
+3. Вход и адреса: `SHOP_PROFILE_DIR=… bun shop.ts login` — владелец входит сам,
+   добавляет свои адреса доставки и привязывает карту (или SberPay/Яндекс Пэй),
+   затем Enter. Карту агент не вводит: без сохранённого способа оплаты —
+   `payment_needs_owner`. Новых адресов агент не заводит; по просьбе владельца он
+   умеет только переключиться на один из уже сохранённых (`set_address`): открывает
+   окно адресов, выбирает адрес, чьей подписи хватает словам запроса, — и только
+   если такой ровно один, — затем перечитывает шапку. Не нашлось или подходит
+   нескольким — окно закрывается, адрес прежний. Без адреса — `address_required`.
 4. Сверка локаторов: `bun shop.ts quote "молоко" "хлеб"` — поиск без корзины;
    `bun shop.ts probe` — дерево доступности текущей страницы: открой руками
    корзину с товаром, страницу оформления (до оплаты) и «Мои заказы», на каждой
@@ -281,7 +285,8 @@ Verification: local installed Claude accepted the readiness command and produced
 3. `bun shop.ts probe eda`: руками открой ресторан, положи одно блюдо (посмотри
    счётчик и «минус» на карточке), открой корзину, страницу оформления до оплаты и
    «Мои заказы»; на каждой нажми Enter. Сверь `dishCounter`, `dishMinus`,
-   `addressButton`, `cartRow*`, тексты `checkout`, `pay`, `total`, `savedCard` и
+   `addressButton`, `cartRow*`, окно адресов (`addressDialog`, `addressRadio`),
+   тексты `checkout`, `pay`, `total`, `savedCard` и
    `EDA_STATE_TEXT`. Если отличаются — правится только `eda-selectors.ts`.
 4. Корзина Еды должна быть пустой. Если после «В корзину» остаётся окно
    («корзина другого ресторана» и т. п.) — исполнитель закрывает его и отказывает.

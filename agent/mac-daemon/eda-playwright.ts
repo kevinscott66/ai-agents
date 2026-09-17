@@ -22,6 +22,7 @@ import {
   SHOP_CANDIDATES_MAX,
   SHOP_OPTION_CHOICES_MAX,
   SHOP_OPTION_GROUPS_MAX,
+  SHOP_ADDRESSES_MAX,
   SHOP_PLACE_REF,
   type ShopOptionGroup,
   type ShopOptionPick,
@@ -360,6 +361,19 @@ export function edaShopPage(page: any): ShopPage {
 
   const payLocator = () => page.getByRole("button", { name: EDA_TEXT.pay }).first();
 
+  const oneLine = (v: string) => v.replace(/\s+/g, " ").replace(/ ,/g, ",").trim();
+
+  /** Кнопка адреса в шапке: у неё нет testid, узнаём по подписи — не из известных. */
+  const headerAddressButton = async () => {
+    const buttons = page.getByRole("banner").first().getByRole("button");
+    const texts: string[] = await buttons.allInnerTexts().catch(() => []);
+    const i = texts.findIndex((v) => {
+      const s = oneLine(v);
+      return s.length > 0 && !EDA_TEXT.headerOther.test(s);
+    });
+    return i < 0 ? null : buttons.nth(i);
+  };
+
   return {
     openHome: async (target) => {
       if (target.place) await openPlace(target.place);
@@ -428,12 +442,52 @@ export function edaShopPage(page: any): ShopPage {
       let label: string | undefined;
       await waitFor(async () => {
         const texts: string[] = await buttons.allInnerTexts().catch(() => []);
-        label = texts.map((t) => t.replace(/\s+/g, " ").replace(/ ,/g, ",").trim()).find((t) => !EDA_TEXT.headerNotAddress.test(t));
+        label = texts.map(oneLine).find((t) => !EDA_TEXT.headerNotAddress.test(t));
         return label !== undefined || EDA_TEXT.addressUnset.test(texts.join("\n"));
       }, 20, 500);
       if (EDA_TEXT.addressModal.test(await bodyText())) return null;
       if (!label || EDA_TEXT.addressUnset.test(label)) return null;
       return label.length >= 3 && label.length <= 200 ? label : null;
+    },
+    async savedAddresses() {
+      // Без адреса Еда сама открывает это окно; с адресом его открывает кнопка в шапке.
+      const dialog = page.locator(EDA_TESTID.addressDialog).first();
+      if (!(await visible(dialog))) {
+        // Шапка оживает не сразу: пока каталог в заглушках, клик по адресу ничего не открывает.
+        await waitFor(async () => {
+          const button = await headerAddressButton();
+          if (!button) return false;
+          // Поверх шапки может висеть подсказка «Заказ на этот адрес?» — она перехватывает клик.
+          await button.click({ timeout: UI_TIMEOUT_MS }).catch(async () => {
+            await button.click({ timeout: UI_TIMEOUT_MS, force: true }).catch(() => {});
+          });
+          return await visible(dialog, 2_000);
+        }, 5, 2_000);
+      }
+      if (!(await visible(dialog, UI_TIMEOUT_MS))) return [];
+      // Список подтягивается позже окна: сперва в нём висят заглушки без подписей.
+      const items = dialog.locator(EDA_TESTID.addressRadio);
+      await waitFor(async () => {
+        const raw: string[] = await items.allInnerTexts().catch(() => []);
+        return raw.some((v) => v.trim().length >= 3);
+      }, 10, 1_000);
+      const texts: string[] = await items.allInnerTexts().catch(() => []);
+      return texts.map(oneLine).filter((s) => s.length >= 3 && s.length <= 200).slice(0, SHOP_ADDRESSES_MAX);
+    },
+    async chooseAddress(index) {
+      const dialog = page.locator(EDA_TESTID.addressDialog).first();
+      await dialog.locator(EDA_TESTID.addressRadio).nth(index).click({ timeout: UI_TIMEOUT_MS });
+      // Окно закрывается само; каталог перезагружается под новый адрес.
+      await waitFor(async () => !(await visible(dialog)), 20, 500);
+      await page.waitForLoadState("load", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
+      await wait(1_000);
+    },
+    async closeAddresses() {
+      const dialog = page.locator(EDA_TESTID.addressDialog).first();
+      if (!(await visible(dialog))) return;
+      const close = dialog.getByRole("button", { name: EDA_TEXT.closeDialog }).first();
+      if (await visible(close)) await close.click({ timeout: UI_TIMEOUT_MS }).catch(() => {});
+      else await page.keyboard.press("Escape").catch(() => {});
     },
     async deliveryFee() {
       // Панель корзины — после длинного меню, за пределами обрезанного bodyText.

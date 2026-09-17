@@ -30,6 +30,7 @@ import { limitsFromEnv, maxRubFor, type SignedActions } from "../signed-actions.
 import { log } from "../log.ts";
 import {
   MARKET_DELIVERY_MAX,
+  normalizeShopAddress,
   normalizeShopPlaceName,
   normalizeShopQuery,
   normalizeShopService,
@@ -44,6 +45,7 @@ import {
   SHOP_QUOTE_TTL_MS,
   SHOP_SERVICES,
   SHOP_STATE_LABEL,
+  shopCanSetAddress,
   shopGateAction,
   shopLineSum,
   shopNeedsPlace,
@@ -217,6 +219,49 @@ export async function shopStatus(input: Record<string, unknown>, ctx: ShopInline
     if (!out.ok) return { ok: false, error: failText(out), code: out.code };
     if (out.op !== "status") return { ok: false, error: "invalid_shop_result" };
     return { ok: true, service, state: out.state, state_text: SHOP_STATE_LABEL[out.state] };
+  } catch (e) {
+    return { ok: false, error: errorText(e) };
+  }
+}
+
+/**
+ * SHOP_SET_ADDRESS: переключить доставку на другой адрес владельца.
+ *
+ * Выбираем только из уже сохранённых в сервисе адресов и только когда запрос
+ * подходит ровно одному из них: новых адресов агент не заводит и сам за
+ * владельца не решает. Список сохранённых наружу не отдаём — это личные данные;
+ * в ответе только сколько их и что стоит в шапке сейчас.
+ */
+export async function setShopAddress(input: Record<string, unknown>, ctx: ShopInlineContext): Promise<ShopToolResult> {
+  const refusal = ownerRefusal(ctx.agentKey, ctx.chatId, ctx.triggerUserId, inlineDelegated(ctx));
+  if (refusal) return { ok: false, error: refusal };
+  const service = normalizeShopService(input.service);
+  if (!service) return { ok: false, error: `service must be one of: ${Object.keys(SHOP_SERVICES).join(", ")}` };
+  if (!shopCanSetAddress(service)) {
+    return { ok: false, error: `у ${SHOP_SERVICES[service]} адрес — это пункт выдачи, его выбирает владелец сам` };
+  }
+  const address = normalizeShopAddress(input.address);
+  if (!address) return { ok: false, error: "address — одна строка, 3..200 символов" };
+  const userId = ctx.triggerUserId!;
+  try {
+    const out = await askMac({ op: "set_address", service, address }, userId, ctx.chatId);
+    if (!out.ok) return { ok: false, error: failText(out), code: out.code };
+    if (out.op !== "set_address") return { ok: false, error: "invalid_shop_result" };
+    // Адрес сменился — прошлый расчёт больше не про этот адрес.
+    if (out.matched) quotes.delete(userId);
+    return out.matched
+      ? { ok: true, service, store: SHOP_SERVICES[service], address: out.address, note: "Адрес доставки переключён. Прошлый расчёт больше не действует — посчитай заново." }
+      : {
+        ok: false,
+        service,
+        store: SHOP_SERVICES[service],
+        address: out.address,
+        saved_count: out.saved_count,
+        error: out.saved_count === 0
+          ? "в этом сервисе нет сохранённых адресов"
+          : "такой адрес не нашёлся среди сохранённых или подходит сразу нескольким",
+        note: "Новый адрес агент не заводит: попроси владельца добавить или выбрать адрес самому. Адрес доставки не менялся.",
+      };
   } catch (e) {
     return { ok: false, error: errorText(e) };
   }

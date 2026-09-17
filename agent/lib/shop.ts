@@ -177,7 +177,50 @@ export type ShopRequest =
   | { op: "prepare"; session: string; service: ShopService; place?: string; lines: ShopLine[] }
   | { op: "confirm"; session: string; maxRub: number }
   | { op: "abandon"; session: string }
-  | { op: "status"; service: ShopService };
+  | { op: "status"; service: ShopService }
+  | { op: "set_address"; service: ShopService; address: string };
+
+/** Сколько сохранённых адресов читаем из окна выбора. */
+export const SHOP_ADDRESSES_MAX = 20;
+
+/** Адрес меняем только между сохранёнными: у Маркета адрес — пункт выдачи, его не трогаем. */
+export const shopCanSetAddress = (service: ShopService) => service === "lavka" || service === "eda";
+
+/**
+ * Адрес в слова для сравнения: строчные, «ё» → «е», сокращения («ул.», «д.»,
+ * «корп.») и знаки убраны, номера домов («12/1к2») разбиты на части.
+ */
+export function shopAddressTokens(v: string): string[] {
+  return v
+    .toLowerCase().replace(/ё/g, "е")
+    .replace(/[^a-zа-я0-9]+/gi, " ")
+    .split(" ")
+    .flatMap((w) => (/^\d/.test(w) ? w.split(/(?<=\d)(?=[а-я])|(?<=[а-я])(?=\d)/) : [w]))
+    .filter((w) => (w.length > 1 || /\d/.test(w)) && !SHOP_ADDRESS_STOP.has(w));
+}
+
+/** Сокращения, предлоги и слова-связки: в сравнении не участвуют. */
+const SHOP_ADDRESS_STOP = new Set([
+  "ул", "улица", "дом", "кв", "квартира", "корп", "корпус", "стр", "строение", "под", "подъезд", "этаж",
+  "пр", "проспект", "мкр", "микрорайон", "им", "имени", "г", "город",
+  "на", "во", "по", "до", "из", "со", "адрес", "адресу",
+]);
+
+/** Все слова запроса есть в подписи адреса. */
+export const shopAddressHas = (label: string, query: string): boolean => {
+  const tokens = shopAddressTokens(label);
+  const want = shopAddressTokens(query);
+  return want.length > 0 && want.every((w) => tokens.includes(w));
+};
+
+/**
+ * Какой из сохранённых адресов имел в виду владелец. Ровно одно совпадение —
+ * его номер; ни одного или несколько — null: сами не выбираем и новых не заводим.
+ */
+export function matchSavedAddress(query: string, saved: ReadonlyArray<string>): number | null {
+  const hits = saved.flatMap((label, i) => (shopAddressHas(label, query) ? [i] : []));
+  return hits.length === 1 ? hits[0]! : null;
+}
 
 export interface ShopCandidate {
   id: string;
@@ -206,6 +249,8 @@ export type ShopOutcome =
   | { ok: true; op: "confirm"; state: ShopOrderState }
   | { ok: true; op: "abandon" }
   | { ok: true; op: "status"; state: ShopOrderState }
+  /** Адрес после попытки: matched — нашёлся ровно один сохранённый и он выбран. */
+  | { ok: true; op: "set_address"; matched: boolean; address: string | null; saved_count: number }
   | { ok: false; code: ShopFailCode; price_rub?: number; screenshot?: string };
 
 const isService = (v: unknown): v is ShopService => typeof v === "string" && Object.hasOwn(SHOP_SERVICES, v);
@@ -383,6 +428,11 @@ export function parseShopRequest(raw: unknown): ShopRequest | null {
       return keys === "op,session" && session(m.session) ? { op: "abandon", session: m.session as string } : null;
     case "status":
       return keys === "op,service" && isService(m.service) ? { op: "status", service: m.service } : null;
+    case "set_address": {
+      if (keys !== "address,op,service" || !isService(m.service) || !shopCanSetAddress(m.service)) return null;
+      const address = normalizeShopAddress(m.address);
+      return address && address === m.address && address.length >= 3 ? { op: "set_address", service: m.service, address } : null;
+    }
     default:
       return null;
   }
@@ -474,6 +524,14 @@ export function parseShopOutcome(raw: string, expected: ShopRequest["op"]): Shop
       return state(d.state) ? { ok: true, op: expected, state: d.state } : bad();
     case "abandon":
       return { ok: true, op: "abandon" };
+    case "set_address": {
+      const address = d.address === null ? null : normalizeShopAddress(d.address);
+      if (d.address !== null && (!address || address !== d.address)) return bad();
+      if (typeof d.matched !== "boolean") return bad();
+      if (!Number.isSafeInteger(d.saved_count) || (d.saved_count as number) < 0 || (d.saved_count as number) > 100) return bad();
+      if (d.matched && !address) return bad();
+      return { ok: true, op: "set_address", matched: d.matched, address, saved_count: d.saved_count as number };
+    }
   }
 }
 

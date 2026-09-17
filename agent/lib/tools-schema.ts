@@ -5,7 +5,7 @@ import { nativeTurnContext } from "./native-context.ts";
  * Аудит 2026-09-11: здесь было написано «все 12 инструментов идут через единый
  * `gateOrDispatch`». Неверно дважды. Инструментов в `TOOL_NAMES` тридцать шесть
  * (число сверяется тестом audit-2026-09-11-tool-counts: в круге 29 оно уже
- * успело протухнуть на два, пока список рос); двадцать — это
+ * успело протухнуть на два, пока список рос); двадцать один — это
  * `INLINE_TOOL_NAMES` из `constants.ts`, то есть ровно тот набор, который через
  * `gateOrDispatch` как раз НЕ идёт: ни CALLER_RESTRICTED, ни строка permissions
  * к ним не применяются (см. разбор инлайновой ветки в `executeTool` ниже).
@@ -27,7 +27,7 @@ import { getErrorMessage } from "./errors.ts";
 import { INLINE_TOOL_NAMES } from "./constants.ts";
 import { listCloudflareDns } from "./dispatch/cloudflare.ts";
 import { quoteTaxi, taxiStatus } from "./dispatch/taxi.ts";
-import { quoteShop, shopStatus } from "./dispatch/shop.ts";
+import { quoteShop, setShopAddress, shopStatus } from "./dispatch/shop.ts";
 import { deliveryStatus, quoteDelivery } from "./dispatch/delivery.ts";
 import Anthropic from "@anthropic-ai/sdk";
 import type { Telegram } from "telegraf";
@@ -813,6 +813,19 @@ export const TOOLS: Anthropic.Tool[] = [
     description:
       "Read-only: состояние последнего заказа в Яндекс Лавке, Яндекс Еде или Яндекс Маркете на Mac владельца — принят, готовится или собирается, курьер в пути, доставлен, отменён. Только для владельца в его личном чате.",
     input_schema: { type: "object", properties: { service: { type: "string", enum: ["lavka", "eda", "market"] } } },
+  },
+  {
+    name: "SHOP_SET_ADDRESS",
+    description:
+      "Переключить доставку Яндекс Лавки или Яндекс Еды на другой адрес владельца — только когда он сам об этом попросил. Выбирается ровно один уже сохранённый в сервисе адрес: новых агент не заводит и сам не решает, какой имелся в виду. Если адрес не нашёлся или подходит сразу нескольким — скажи владельцу, адрес останется прежним. После смены прошлый SHOP_QUOTE недействителен: посчитай заново. У Яндекс Маркета адрес — пункт выдачи, его не меняем. Только для владельца в его личном чате.",
+    input_schema: {
+      type: "object",
+      properties: {
+        service: { type: "string", enum: ["lavka", "eda"], description: "Сервис, где меняем адрес доставки." },
+        address: { type: "string", description: "Адрес словами владельца — по нему ищется сохранённый («на Ленина 5», «домой на дачу»)." },
+      },
+      required: ["address"],
+    },
   },
   {
     name: "MARKET_PURCHASE",
@@ -1721,6 +1734,9 @@ export async function executeTool(
   }
   if (name === "SHOP_STATUS") {
     return fmt(await shopStatus(i, ctx));
+  }
+  if (name === "SHOP_SET_ADDRESS") {
+    return fmt(await setShopAddress(i, ctx));
   }
   if (name === "DELIVERY_QUOTE") {
     return fmt(await quoteDelivery(i, ctx));
