@@ -58,8 +58,14 @@ describe("аудит 2026-08-29: INLINE_TOOL_NAMES живёт в листе", ()
     // Проверка, что спред отработал по инициализированному биндингу, а не по
     // пустому: при TDZ сюда бы вообще не дошли, при частичной инициализации —
     // получили бы пустое множество.
-    expect(SDK_SIDE_EFFECT_FREE_TOOLS.size).toBe(INLINE_TOOL_NAMES.size - 1);
+    // Инлайновые инструменты с последствиями исключены поимённо: они инлайновые
+    // (без карточки), но «ничего не сделали» про них сказать нельзя.
+    const WITH_EFFECT = ["CANCEL_SCHEDULED_POST", "SHOP_SET_ADDRESS"];
+    expect(SDK_SIDE_EFFECT_FREE_TOOLS.size).toBe(INLINE_TOOL_NAMES.size - WITH_EFFECT.length);
     expect(SDK_SIDE_EFFECT_FREE_TOOLS.has("READ_WIKI")).toBe(true);
-    expect(SDK_SIDE_EFFECT_FREE_TOOLS.has("CANCEL_SCHEDULED_POST")).toBe(false);
+    for (const n of WITH_EFFECT) {
+      expect(INLINE_TOOL_NAMES.has(n)).toBe(true);
+      expect(SDK_SIDE_EFFECT_FREE_TOOLS.has(n)).toBe(false);
+    }
   });
 });

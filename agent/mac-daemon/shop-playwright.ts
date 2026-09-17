@@ -14,6 +14,7 @@ import {
   SHOP_SCREENSHOT_B64_MAX,
   parseDeliveryRubles,
   parseShopRubles,
+  SHOP_ADDRESSES_MAX,
   type ShopOrderState,
   type ShopService,
 } from "../lib/shop.ts";
@@ -42,6 +43,7 @@ import {
   UI_TIMEOUT_MS,
   visible,
   wait,
+  waitFor,
 } from "./playwright-kit.ts";
 
 // Адаптеры Еды и Маркета берут эти приёмы отсюда.
@@ -81,6 +83,12 @@ export function routeShopPage(pages: Record<ShopService, ShopPage>): ShopPage {
     searchCards: () => current.searchCards(),
     product: () => current.product(),
     setProductQty: (qty) => current.setProductQty(qty),
+    // Опции умеет только Еда; у остальных — отказ, а не молчаливый заказ без выбора.
+    addWithOptions: async (qty, picks) => (current.addWithOptions ? current.addWithOptions(qty, picks) : "options_required"),
+    removeCartRows: async (ids) => { await current.removeCartRows?.(ids); },
+    savedAddresses: async () => (current.savedAddresses ? current.savedAddresses() : []),
+    chooseAddress: async (index) => { await current.chooseAddress?.(index); },
+    closeAddresses: async () => { await current.closeAddresses?.(); },
     cart: () => current.cart(),
     openCheckout: () => current.openCheckout(),
     checkout: () => current.checkout(),
@@ -178,6 +186,47 @@ export function playwrightShopPage(page: any): ShopPage {
       if (!label || LAVKA_TEXT.addressUnset.test(label)) return null;
       const s = label.replace(/\s+/g, " ").trim();
       return s.length >= 3 && s.length <= 200 ? s : null;
+    },
+    async savedAddresses() {
+      const modal = page.locator(LAVKA_TESTID.addressModal).first();
+      if (!(await visible(modal))) {
+        // Шапка оживает не сразу: по холодной странице первый клик может пройти вхолостую.
+        await waitFor(async () => {
+          const button = page.locator(LAVKA_TESTID.addressButton).first();
+          if (!(await visible(button))) return false;
+          await button.click({ timeout: UI_TIMEOUT_MS }).catch(() => {});
+          return await visible(modal, 2_000);
+        }, 5, 2_000);
+      }
+      if (!(await visible(modal, UI_TIMEOUT_MS))) return [];
+      // Список подтягивается позже окна: сперва в нём висят заглушки без подписей.
+      const items = modal.locator(LAVKA_TESTID.addressItem);
+      await waitFor(async () => {
+        const raw: string[] = await items.allInnerTexts().catch(() => []);
+        return raw.some((v) => v.trim().length >= 3);
+      }, 10, 1_000);
+      const texts: string[] = await items.allInnerTexts().catch(() => []);
+      return texts
+        .map((v) => v.replace(/\s+/g, " ").trim())
+        .filter((s) => s.length >= 3 && s.length <= 200)
+        .slice(0, SHOP_ADDRESSES_MAX);
+    },
+    async chooseAddress(index) {
+      const modal = page.locator(LAVKA_TESTID.addressModal).first();
+      // Кнопку «Добавить адрес» не трогаем: выбираем только из сохранённых.
+      const item = modal.locator(LAVKA_TESTID.addressItem).nth(index);
+      const title = item.locator(LAVKA_TESTID.addressItemTitle).first();
+      await (await visible(title) ? title : item).click({ timeout: UI_TIMEOUT_MS });
+      await waitFor(async () => !(await visible(modal)), 20, 500);
+      await page.waitForLoadState("load", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
+      await wait(1_000);
+    },
+    async closeAddresses() {
+      const modal = page.locator(LAVKA_TESTID.addressModal).first();
+      if (!(await visible(modal))) return;
+      const close = modal.locator(LAVKA_TESTID.addressModalClose).first();
+      if (await visible(close)) await close.click({ timeout: UI_TIMEOUT_MS }).catch(() => {});
+      else await page.keyboard.press("Escape").catch(() => {});
     },
     async deliveryFee() {
       return parseDeliveryRubles(await text(page.locator(LAVKA_TESTID.miniCartDelivery).first()));

@@ -188,6 +188,7 @@ export const CALLER_RESTRICTED: Record<string, string> = {
   MARKET_PURCHASE: "orchestrator",
   SHOP_QUOTE: "orchestrator",
   SHOP_STATUS: "orchestrator",
+  SHOP_SET_ADDRESS: "orchestrator",
   ORDER_DELIVERY: "orchestrator",
   DELIVERY_CANCEL: "orchestrator",
   DELIVERY_QUOTE: "orchestrator",

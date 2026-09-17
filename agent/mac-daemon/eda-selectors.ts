@@ -6,8 +6,12 @@
  * поиске, поиск `/search?query=`, адрес в шапке, «Доставка N ₽» на странице
  * ресторана и карточки меню `product-card-v2-*` (название, цена, вес, «В корзину»).
  *
- * НЕ сверено — видно только после «В корзину», а корзину агент не трогает:
- * счётчик и «минус» на карточке, корзина, оформление, оплата и статус заказа. Их сверяет
+ * Сверено на живой корзине (положили и убрали): счётчик и «минус» на карточке,
+ * окно блюда с опциями (`product-full-card-*`, группы `h4` + `label` с
+ * radio/checkbox и доплатой «+ N ₽»), строки корзины `product-card-row-root`
+ * (название, отмеченные опции, сумма строки, вес, количество) и пустая корзина.
+ *
+ * НЕ сверено: оформление, оплата и статус заказа. Их сверяет
  * владелец: `bun mac-daemon/shop.ts probe eda`, правится только этот файл. Не
  * нашёл элемент — отказ до оплаты со скриншотом, догадок нет.
  */
@@ -32,14 +36,26 @@ export const EDA_TESTID = {
   dishPrice: '[data-testid="product-card-v2-price"]',
   dishMeta: '[data-testid="product-card-v2-hard-meta"]',
   dishPlus: '[data-testid="product-card-v2-counter-increase-btn"]',
-  // НЕ сверено
   dishMinus: '[data-testid="product-card-v2-counter-decrease-btn"]',
-  dishCounter: '[data-testid="product-card-v2-counter-value"]',
-  cart: '[data-testid="cart"]',
-  cartItem: '[data-testid="cart-item"]',
-  cartItemTitle: '[data-testid="cart-item-title"]',
-  cartItemCounter: '[data-testid="cart-item-counter-value"]',
-  cartItemPrice: '[data-testid="cart-item-price"]',
+  /** Сколько этого блюда в корзине — сумма по всем вариантам опций. */
+  dishCounter: '[data-testid="product-card-v2-counter-count"]',
+  // окно блюда: открывается кликом по карточке
+  fullName: '[data-testid="product-full-card-name"]',
+  fullWeight: '[data-testid="product-full-card-weight"]',
+  fullPrice: '[data-testid="product-full-card-current-price"]',
+  fullAdd: '[data-testid="product-full-card-add-to-cart"]',
+  fullAddDisabled: '[data-testid="product-full-card-add-to-cart-disabled"]',
+  optionInput: 'input[data-testid="checkbox-control"]',
+  amountDec: '[data-testid="amount-select-decrement"]',
+  amountInc: '[data-testid="amount-select-increment"]',
+  amountValue: '[data-testid="item-quantity"]',
+  // окно адреса: открывается кликом по адресу в шапке
+  // «Заказ на этот адрес?» — тоже role=dialog, поэтому окно адресов узнаём по списку внутри
+  addressDialog: '[role="dialog"]:has([role="radiogroup"])',
+  addressRadio: 'button[role="radio"]',
+  // корзина — боковая панель на странице ресторана
+  cartRow: '[data-testid="product-card-row-root"]',
+  cartRowName: '[data-testid="cart-item-name"]',
 };
 
 export const EDA_TEXT = {
@@ -49,13 +65,19 @@ export const EDA_TEXT = {
   addressModal: /Куда доставить заказ\?/i,
   /** Адрес в шапке — кнопка без testid; остальные кнопки шапки узнаём по названию. */
   headerNotAddress: /^(?:Уведомления|Корзина|Профиль|Войти|Укажите адрес)?$/i,
+  /** Прочие кнопки шапки: всё остальное — адрес, даже «Укажите адрес». */
+  headerOther: /^(?:Уведомления|Корзина|Профиль|Войти)$/i,
   // НЕ сверено
   deliveryFee: /Доставка\s+(\d{1,5})\s?₽/i,
   // НЕ сверено
   outOfStock: /Нет в наличии|Закончил(?:ся|ась|ось|ись)|Недоступно|Стоп-лист/i,
   placeClosed: /Ресторан закрыт|Сейчас закрыт|Не принимает заказы|Откроется в/i,
   freeDelivery: /Бесплатная доставка|Доставка 0 ₽/i,
-  cartEmpty: /В корзине пока пусто|Корзина пуста|В корзине пока ничего нет/i,
+  // сверено
+  cartEmpty: /Пусто,\s+как\s+ночью\s+в\s+холодильнике/i,
+  cartHeading: /^Корзина$/,
+  closeDialog: /^Закрыть модальное окно$/,
+  // НЕ сверено
   checkout: /^(?:Оформить(?: заказ)?|К оформлению|Перейти к оформлению|Далее)/,
   pay: /^(?:Оплатить|Заказать и оплатить|Оформить и оплатить)/,
   savedCard: /(?:•{2,}|\*{2,}|··)\s?\d{4}|Сбер ?Пэй|SberPay|Яндекс Пэй|Yandex Pay/i,

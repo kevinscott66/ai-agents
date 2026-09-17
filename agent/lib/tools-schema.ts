@@ -5,7 +5,7 @@ import { nativeTurnContext } from "./native-context.ts";
  * Аудит 2026-09-11: здесь было написано «все 12 инструментов идут через единый
  * `gateOrDispatch`». Неверно дважды. Инструментов в `TOOL_NAMES` тридцать шесть
  * (число сверяется тестом audit-2026-09-11-tool-counts: в круге 29 оно уже
- * успело протухнуть на два, пока список рос); двадцать — это
+ * успело протухнуть на два, пока список рос); двадцать один — это
  * `INLINE_TOOL_NAMES` из `constants.ts`, то есть ровно тот набор, который через
  * `gateOrDispatch` как раз НЕ идёт: ни CALLER_RESTRICTED, ни строка permissions
  * к ним не применяются (см. разбор инлайновой ветки в `executeTool` ниже).
@@ -27,7 +27,7 @@ import { getErrorMessage } from "./errors.ts";
 import { INLINE_TOOL_NAMES } from "./constants.ts";
 import { listCloudflareDns } from "./dispatch/cloudflare.ts";
 import { quoteTaxi, taxiStatus } from "./dispatch/taxi.ts";
-import { quoteShop, shopStatus } from "./dispatch/shop.ts";
+import { quoteShop, setShopAddress, shopStatus } from "./dispatch/shop.ts";
 import { deliveryStatus, quoteDelivery } from "./dispatch/delivery.ts";
 import Anthropic from "@anthropic-ai/sdk";
 import type { Telegram } from "telegraf";
@@ -723,13 +723,17 @@ export const TOOLS: Anthropic.Tool[] = [
   {
     name: "ORDER_TAXI",
     description:
-      "Заказать такси по свежему расчёту TAXI_QUOTE: те же from и to, выбранный владельцем tariff и price_rub этого тарифа из расчёта. Тариф и цену называет владелец — сам не выбирай. Заказ ждёт подтверждения в чате, затем подписи Face ID на телефоне; результат придёт отдельным сообщением. Пока он не пришёл, не говори «заказано». Лимиты: сумма и число заказов в день ограничены сервером, цена на странице не может вырасти больше чем на 15%.",
+      "Заказать такси по свежему расчёту TAXI_QUOTE: те же from и to, выбранный владельцем tariff и price_rub этого тарифа из расчёта. Тариф называет владелец, в том числе голосом («комфорт плюс», «бизнес», «элит», «детский», «минивэн»): переведи названное в ключ tariff и возьми его цену из расчёта. Сам тариф не выбирай; если названного тарифа нет в расчёте или название неоднозначно — скажи владельцу, какие тарифы есть, и спроси. Заказ ждёт подтверждения в чате, затем подписи Face ID на телефоне; результат придёт отдельным сообщением. Пока он не пришёл, не говори «заказано». Лимиты: сумма и число заказов в день ограничены сервером, цена на странице не может вырасти больше чем на 15%.",
     input_schema: {
       type: "object",
       properties: {
         from: { type: "string", description: "Откуда — ровно как в TAXI_QUOTE." },
         to: { type: "string", description: "Куда — ровно как в TAXI_QUOTE." },
-        tariff: { type: "string", enum: ["econom", "comfort", "comfortplus", "business", "minivan"] },
+        tariff: {
+          type: "string",
+          enum: ["econom", "comfort", "comfortplus", "business", "premier", "elite", "child", "minivan", "cruise"],
+          description: "Эконом, Комфорт, Комфорт+, Бизнес (Business), Премьер (Premier), Элит (Élite), Детский, Минивэн, Круиз (Cruise).",
+        },
         price_rub: { type: "number", description: "Цена выбранного тарифа из TAXI_QUOTE, целые рубли." },
       },
       required: ["from", "to", "tariff", "price_rub"],
@@ -750,7 +754,7 @@ export const TOOLS: Anthropic.Tool[] = [
   {
     name: "SHOP_QUOTE",
     description:
-      "Поиск в Яндекс Лавке (продукты), Яндекс Еде (блюда одного ресторана) или Яндекс Маркете (покупки) через браузер на Mac владельца: адрес доставки из профиля, стоимость доставки (у Маркета — null, она видна только на оформлении) и до трёх подходящих товаров с ценой на каждый запрос. Для Еды нужен place — ресторан; в ответе будет найденный ресторан, покажи его владельцу. Ничего не кладёт в корзину и не заказывает. Только когда владелец сам попросил в своём личном чате. Расчёт действует 15 минут.",
+      "Поиск в Яндекс Лавке (продукты), Яндекс Еде (блюда одного ресторана) или Яндекс Маркете (покупки) через браузер на Mac владельца: адрес доставки из профиля, стоимость доставки (у Маркета — null, она видна только на оформлении) и до трёх подходящих товаров с ценой на каждый запрос. Для Еды нужен place — ресторан; в ответе будет найденный ресторан, покажи его владельцу. У блюд Еды с выбором (размер, тесто, соус, состав) в кандидате есть options: группы {name, min, max, choices[{name, price_rub — доплата}]}, price_rub кандидата — без доплат. Ничего не кладёт в корзину и не заказывает. Только когда владелец сам попросил в своём личном чате. Расчёт действует 15 минут.",
     input_schema: {
       type: "object",
       properties: {
@@ -768,7 +772,7 @@ export const TOOLS: Anthropic.Tool[] = [
   {
     name: "ORDER_FOOD",
     description:
-      "Заказать продукты в Яндекс Лавке или блюда одного ресторана в Яндекс Еде по свежему расчёту SHOP_QUOTE: id, name и price_rub каждого товара — ровно из расчёта, для Еды place — ресторан ровно из расчёта, qty — сколько просил владелец, delivery_rub — доставка из расчёта. Если по запросу несколько вариантов и владелец не назвал конкретный — спроси. Заказ ждёт подтверждения в чате, затем подписи Face ID на телефоне; результат придёт отдельным сообщением. Пока он не пришёл, не говори «заказано». Лимиты: сумма и число заказов в день ограничены сервером, итог на странице не может вырасти больше чем на 15%.",
+      "Заказать продукты в Яндекс Лавке или блюда одного ресторана в Яндекс Еде по свежему расчёту SHOP_QUOTE: id и name каждого товара — ровно из расчёта, price_rub — цена из расчёта плюс доплаты выбранных опций, для Еды place — ресторан ровно из расчёта; у блюда с options — выбор владельца в options [{group, name}] (в каждой группе от min до max; обязательный выбор не угадывай — спроси), qty — сколько просил владелец, delivery_rub — доставка из расчёта. Если по запросу несколько вариантов и владелец не назвал конкретный — спроси. Заказ ждёт подтверждения в чате, затем подписи Face ID на телефоне; результат придёт отдельным сообщением. Пока он не пришёл, не говори «заказано». Лимиты: сумма и число заказов в день ограничены сервером, итог на странице не может вырасти больше чем на 15%.",
     input_schema: {
       type: "object",
       properties: {
@@ -782,7 +786,19 @@ export const TOOLS: Anthropic.Tool[] = [
               id: { type: "string", description: "id товара из SHOP_QUOTE." },
               name: { type: "string", description: "Название ровно как в SHOP_QUOTE." },
               qty: { type: "number", description: "Количество, 1..20." },
-              price_rub: { type: "number", description: "Цена за штуку из SHOP_QUOTE, целые рубли." },
+              price_rub: { type: "number", description: "Цена за штуку из SHOP_QUOTE плюс доплаты выбранных опций, целые рубли." },
+              options: {
+                type: "array",
+                description: "Только для блюд Еды с options в SHOP_QUOTE: выбранные варианты, group и name ровно из расчёта. Одно блюдо с разным выбором — разные строки.",
+                items: {
+                  type: "object",
+                  properties: {
+                    group: { type: "string", description: "Название группы опций из расчёта («Выберите тесто»)." },
+                    name: { type: "string", description: "Вариант из этой группы («Тонкое тесто»)." },
+                  },
+                  required: ["group", "name"],
+                },
+              },
             },
             required: ["id", "name", "qty", "price_rub"],
           },
@@ -797,6 +813,19 @@ export const TOOLS: Anthropic.Tool[] = [
     description:
       "Read-only: состояние последнего заказа в Яндекс Лавке, Яндекс Еде или Яндекс Маркете на Mac владельца — принят, готовится или собирается, курьер в пути, доставлен, отменён. Только для владельца в его личном чате.",
     input_schema: { type: "object", properties: { service: { type: "string", enum: ["lavka", "eda", "market"] } } },
+  },
+  {
+    name: "SHOP_SET_ADDRESS",
+    description:
+      "Переключить доставку Яндекс Лавки или Яндекс Еды на другой адрес владельца — только когда он сам об этом попросил. Выбирается ровно один уже сохранённый в сервисе адрес: новых агент не заводит и сам не решает, какой имелся в виду. Если адрес не нашёлся или подходит сразу нескольким — скажи владельцу, адрес останется прежним. После смены прошлый SHOP_QUOTE недействителен: посчитай заново. У Яндекс Маркета адрес — пункт выдачи, его не меняем. Только для владельца в его личном чате.",
+    input_schema: {
+      type: "object",
+      properties: {
+        service: { type: "string", enum: ["lavka", "eda"], description: "Сервис, где меняем адрес доставки." },
+        address: { type: "string", description: "Адрес словами владельца — по нему ищется сохранённый («на Ленина 5», «домой на дачу»)." },
+      },
+      required: ["address"],
+    },
   },
   {
     name: "MARKET_PURCHASE",
@@ -1705,6 +1734,9 @@ export async function executeTool(
   }
   if (name === "SHOP_STATUS") {
     return fmt(await shopStatus(i, ctx));
+  }
+  if (name === "SHOP_SET_ADDRESS") {
+    return fmt(await setShopAddress(i, ctx));
   }
   if (name === "DELIVERY_QUOTE") {
     return fmt(await quoteDelivery(i, ctx));

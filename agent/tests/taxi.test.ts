@@ -21,6 +21,7 @@ import {
   taxiStatus,
 } from "../lib/dispatch/taxi.ts";
 import { signingApi } from "../lib/native-signing.ts";
+import { TOOLS } from "../lib/tools-schema.ts";
 import { SignedActionRefusal, SignedActions } from "../lib/signed-actions.ts";
 import {
   describeTaxiPayload,
@@ -29,12 +30,15 @@ import {
   parseRubles,
   parseTaxiOutcome,
   parseTaxiRequest,
+  TAXI_TARIFF_KEYS,
+  TAXI_TARIFFS,
   type TaxiOrderState,
   type TaxiOutcome,
   type TaxiRequest,
   type TaxiTariff,
 } from "../lib/taxi.ts";
 import { checkTaxiProfile, TaxiRunner, type TaxiGuard, type TaxiPage, type TariffRow } from "../mac-daemon/taxi.ts";
+import { TAXI_PAGE_TARIFFS } from "../mac-daemon/taxi-selectors.ts";
 
 const T0 = Date.UTC(2026, 8, 17, 9, 0, 0);
 const OWNER = 777_000_333;
@@ -67,6 +71,28 @@ describe("parsing", () => {
     expect(normalizeTaxiTariff("Комфорт+")).toBe("comfortplus");
     expect(normalizeTaxiTariff("эконом")).toBe("econom");
     expect(normalizeTaxiTariff("vip")).toBeNull();
+  });
+
+  test("tariffs named by voice", () => {
+    const cases: Array<[string, string | null]> = [
+      ["комфорт плюс", "comfortplus"], ["Комфорт-плюс", "comfortplus"], ["comfort+", "comfortplus"],
+      ["тариф бизнес", "business"], ["Business", "business"], ["эконом класс", "econom"],
+      ["премьер", "premier"], ["Premier", "premier"], ["элит", "elite"], ["Élite", "elite"],
+      ["детский", "child"], ["с детским креслом", "child"], ["минивен", "minivan"], ["круиз", "cruise"],
+      ["премиум", null], ["классик", null], ["", null], ["эконом".repeat(20), null],
+    ];
+    for (const [said, key] of cases) expect([said, normalizeTaxiTariff(said)]).toEqual([said, key]);
+    for (const key of TAXI_TARIFF_KEYS) {
+      expect(normalizeTaxiTariff(key)).toBe(key);
+      expect(normalizeTaxiTariff(TAXI_TARIFFS[key])).toBe(key);
+    }
+  });
+
+  test("ORDER_TAXI schema lists every tariff", () => {
+    const tool = TOOLS.find((t) => t.name === "ORDER_TAXI")!;
+    const tariff = (tool.input_schema.properties as Record<string, { enum: string[] }>).tariff;
+    expect(tariff.enum).toEqual([...TAXI_TARIFF_KEYS]);
+    expect(Object.keys(TAXI_PAGE_TARIFFS)).toEqual([...TAXI_TARIFF_KEYS]);
   });
 
   test("daemon frame is strict", () => {
