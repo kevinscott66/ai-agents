@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { canonicalJson, limitsFromEnv, SignedActionRefusal, SignedActions } from "../lib/signed-actions.ts";
+import { canonicalJson, limitsFromEnv, maxRubFor, SignedActionRefusal, SignedActions } from "../lib/signed-actions.ts";
 
 const T0 = Date.UTC(2026, 8, 17, 9, 0, 0); // 12:00 по Москве
 
@@ -35,9 +35,20 @@ describe("canonical payload", () => {
     }
   });
   test("limits default to the owner decision and reject junk", () => {
-    expect(limitsFromEnv({})).toEqual({ maxRub: 1000, dailyMax: 5, deviationPct: 15 });
+    expect(limitsFromEnv({})).toEqual({
+      maxRub: 1000, dailyMax: 5, deviationPct: 15,
+      maxRubByService: { yandex_go: 1000, yandex_lavka: 3000, yandex_eda: 3000, yandex_market: 5000, yandex_delivery: 1000 },
+    });
     expect(() => limitsFromEnv({ PAID_ACTION_MAX_RUB: "1e3" })).toThrow();
     expect(() => limitsFromEnv({ PAID_ACTION_DAILY_MAX: "0" })).toThrow();
+    expect(() => limitsFromEnv({ PAID_ACTION_MAX_RUB_YANDEX_MARKET: "-1" })).toThrow();
+  });
+  test("each service has its own ceiling; unknown services fall back to maxRub", () => {
+    const limits = limitsFromEnv({ PAID_ACTION_MAX_RUB: "700", PAID_ACTION_MAX_RUB_YANDEX_LAVKA: "2500" });
+    expect(maxRubFor(limits, "yandex_lavka")).toBe(2500);
+    expect(maxRubFor(limits, "yandex_market")).toBe(5000);
+    expect(maxRubFor(limits, "something_else")).toBe(700);
+    expect(maxRubFor(limits, "constructor")).toBe(700);
   });
 });
 
@@ -145,6 +156,17 @@ describe("paid action attacks", () => {
     const slow = order();
     await gate.approve(slow.nonce, await owner.sign(slow.payload), T0 + 60_000);
     expect(await refusal(() => gate.claim(slow.nonce, slow.payload, T0 + 60_000 + 301_000))).toBe("expired");
+  });
+
+  test("amount ceiling is per service: groceries may cost more than a ride", async () => {
+    const { gate } = await setup({ ...limitsFromEnv({}), dailyMax: 5 });
+    const issue = (service: string, amountRub: number) =>
+      gate.issue({ service, action: "order", params: { item_01: "x" }, amountRub }, T0);
+    expect(await refusal(() => issue("yandex_go", 1001))).toBe("limit_amount");
+    expect(await refusal(() => issue("yandex_lavka", 3000))).toBe("passed");
+    expect(await refusal(() => issue("yandex_lavka", 3001))).toBe("limit_amount");
+    expect(await refusal(() => issue("yandex_market", 5000))).toBe("passed");
+    expect(await refusal(() => issue("unknown_shop", 1001))).toBe("limit_amount");
   });
 
   test("amount ceiling and daily limit hold, including across concurrent approvals", async () => {

@@ -20,7 +20,10 @@ export class SignedActionRefusal extends Error {
 }
 
 export interface SignedActionLimits {
+  /** Потолок для сервиса без своего значения в maxRubByService. */
   maxRub: number;
+  /** Потолок по сервису из payload (yandex_go, yandex_lavka…). */
+  maxRubByService?: Readonly<Record<string, number>>;
   dailyMax: number;
   deviationPct: number;
 }
@@ -64,12 +67,32 @@ function positiveInt(raw: string | undefined, fallback: number, name: string): n
   return value;
 }
 
+/** Потолки владельца (сентябрь 2026): продукты и еда дороже поездки, покупки на Маркете — ещё дороже. */
+export const SERVICE_MAX_RUB: Readonly<Record<string, number>> = {
+  yandex_go: 1000,
+  yandex_lavka: 3000,
+  yandex_eda: 3000,
+  yandex_market: 5000,
+  yandex_delivery: 1000,
+};
+
 export function limitsFromEnv(env: Record<string, string | undefined> = process.env): SignedActionLimits {
+  const maxRubByService: Record<string, number> = {};
+  for (const [service, fallback] of Object.entries(SERVICE_MAX_RUB)) {
+    const name = `PAID_ACTION_MAX_RUB_${service.toUpperCase()}`;
+    maxRubByService[service] = positiveInt(env[name], fallback, name);
+  }
   return {
     maxRub: positiveInt(env.PAID_ACTION_MAX_RUB, 1000, "PAID_ACTION_MAX_RUB"),
+    maxRubByService,
     dailyMax: positiveInt(env.PAID_ACTION_DAILY_MAX, 5, "PAID_ACTION_DAILY_MAX"),
     deviationPct: positiveInt(env.PAID_ACTION_PRICE_DEVIATION_PCT, 15, "PAID_ACTION_PRICE_DEVIATION_PCT"),
   };
+}
+
+export function maxRubFor(limits: SignedActionLimits, service: string): number {
+  const own = limits.maxRubByService;
+  return own && Object.hasOwn(own, service) ? own[service]! : limits.maxRub;
 }
 
 /** Канонический JSON: отсортированные ключи, без пробелов, только целые числа. */
@@ -190,7 +213,7 @@ export class SignedActions {
     if (!key) return refuse("no_active_key");
     const { service, action, params, amountRub } = input;
     if (!PARAM_KEY.test(service) || !PARAM_KEY.test(action) || !displayableParams(params) || !Number.isSafeInteger(amountRub) || amountRub <= 0) return refuse("payload_invalid");
-    if (amountRub > this.limits.maxRub) return refuse("limit_amount");
+    if (amountRub > maxRubFor(this.limits, service)) return refuse("limit_amount");
     if (this.spentToday(now) >= this.limits.dailyMax) return refuse("limit_daily");
     const nonce = randomBytes(32).toString("base64url");
     const maxFinal = Math.floor((amountRub * (100 + this.limits.deviationPct)) / 100);

@@ -22,7 +22,7 @@ import { parseUserIdList } from "../allowlist.ts";
 import type { PayloadByType } from "../action-payload.ts";
 import { sendShopToMac } from "../mac-bridge.ts";
 import { signedActions } from "../native-signing.ts";
-import { limitsFromEnv, SignedActionRefusal, type SignedActions } from "../signed-actions.ts";
+import { limitsFromEnv, maxRubFor, SignedActionRefusal, type SignedActions } from "../signed-actions.ts";
 import { log } from "../log.ts";
 import {
   normalizeShopQuery,
@@ -158,7 +158,7 @@ export async function quoteShop(input: Record<string, unknown>, ctx: ShopInlineC
       address: out.address,
       delivery_rub: out.delivery_rub,
       results: out.results,
-      max_rub: limitsFromEnv().maxRub,
+      max_rub: maxRubFor(limitsFromEnv(), SHOP_GATE_SERVICE[service]),
       valid_min: Math.round(SHOP_QUOTE_TTL_MS / 60_000),
       note:
         "Это поиск, не заказ. Для заказа — ORDER_FOOD с выбранными товарами: id, name и price_rub ровно из этого расчёта, qty — сколько просил владелец; " +

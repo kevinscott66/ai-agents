@@ -22,7 +22,7 @@ import { parseUserIdList } from "../allowlist.ts";
 import type { PayloadByType } from "../action-payload.ts";
 import { sendTaxiToMac } from "../mac-bridge.ts";
 import { signedActions } from "../native-signing.ts";
-import { limitsFromEnv, SignedActionRefusal, type SignedActions } from "../signed-actions.ts";
+import { limitsFromEnv, maxRubFor, SignedActionRefusal, type SignedActions } from "../signed-actions.ts";
 import { log } from "../log.ts";
 import {
   normalizeTaxiAddress,
@@ -138,7 +138,7 @@ export async function quoteTaxi(input: Record<string, unknown>, ctx: TaxiInlineC
       from,
       to,
       options: out.options.map((o) => ({ tariff: o.tariff, name: TAXI_TARIFFS[o.tariff], price_rub: o.price_rub, eta_min: o.eta_min })),
-      max_rub: limits.maxRub,
+      max_rub: maxRubFor(limits, TAXI_SERVICE),
       valid_min: Math.round(TAXI_QUOTE_TTL_MS / 60_000),
       note: "Это расчёт, не заказ. Для заказа — ORDER_TAXI с тем же from/to, выбранным tariff и его price_rub; дальше подтверждение в чате и подпись на телефоне.",
     };
