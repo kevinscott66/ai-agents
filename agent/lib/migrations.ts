@@ -1570,6 +1570,19 @@ export const MIGRATIONS: Migration[] = [
       for (const c of CHARACTERS) ins.run(c.key, c.key === "orchestrator" ? 1 : 0);
     },
   },
+  {
+    // Шаг 7: USERBOT_SEND_DM — личное сообщение от аккаунта владельца
+    // (lib/userbot-dm.ts). Только оркестратор и только с подтверждением; то же
+    // держит политика владельца (third_party_message), строка — второй рубеж.
+    name: "059_seed_userbot_send_dm",
+    up: (db) => {
+      const ins = db.prepare(
+        `INSERT OR IGNORE INTO permissions(agent_key, action_type, allowed, requires_approval)
+         VALUES (?, 'USERBOT_SEND_DM', ?, 1)`,
+      );
+      for (const c of CHARACTERS) ins.run(c.key, c.key === "orchestrator" ? 1 : 0);
+    },
+  },
 ];
 
 /**

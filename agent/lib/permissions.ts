@@ -44,6 +44,8 @@ export const ACTION_TYPES = [
   "MAC_STOP",
   // Закрытый список команд на Mac владельца (lib/mac-control.ts).
   "MAC_CONTROL",
+  // Личное сообщение человеку от аккаунта владельца (lib/userbot-dm.ts).
+  "USERBOT_SEND_DM",
   "SCHEDULE_POST",
   // Напоминания в чат-источник (lib/reminders.ts). LIST_REMINDERS — инлайновый.
   "CREATE_REMINDER",
@@ -158,6 +160,8 @@ export const CALLER_RESTRICTED: Record<string, string> = {
   MAC_RUN_CLAUDE: "orchestrator",
   MAC_STOP: "orchestrator",
   MAC_CONTROL: "orchestrator",
+  // Сообщение от личного аккаунта владельца человеку вне команды.
+  USERBOT_SEND_DM: "orchestrator",
   // Создание канала от имени владельца + назначение админов — действие реального
   // аккаунта; только лид (orchestrator) как контролёр процесса.
   CREATE_TEAM_CHANNEL: "orchestrator",

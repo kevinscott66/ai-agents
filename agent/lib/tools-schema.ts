@@ -3,7 +3,7 @@ import { nativeTurnContext } from "./native-context.ts";
  * C5/R-A: Anthropic tool_use схема + диспатчер.
  *
  * Аудит 2026-09-11: здесь было написано «все 12 инструментов идут через единый
- * `gateOrDispatch`». Неверно дважды. Инструментов в `TOOL_NAMES` двадцать восемь
+ * `gateOrDispatch`». Неверно дважды. Инструментов в `TOOL_NAMES` двадцать девять
  * (число сверяется тестом audit-2026-09-11-tool-counts: в круге 29 оно уже
  * успело протухнуть на два, пока список рос); тринадцать — это
  * `INLINE_TOOL_NAMES` из `constants.ts`, то есть ровно тот набор, который через
@@ -661,6 +661,19 @@ export const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "USERBOT_SEND_DM",
+    description:
+      "Личное сообщение человеку от реального аккаунта владельца (юзербот), только когда владелец сам попросил об этом в своём личном чате. Адресат — публичный Telegram username (@name или t.me/name); id, телефон и имя из контактов не принимаются — если username не знаешь, спроси владельца. Одно сообщение до 4096 символов, отправляется как есть, без разметки. КАЖДОЕ сообщение ждёт подтверждения владельца при любой автономии: покажи ему адресата и полный текст и не считай отправленным, пока не пришло одобрение. Для сообщений в чат команды — SEND_MESSAGE.",
+    input_schema: {
+      type: "object",
+      properties: {
+        username: { type: "string", description: "Публичный username получателя, например @ivan_petrov." },
+        text: { type: "string", description: "Полный текст сообщения, ровно в том виде, в каком он уйдёт." },
+      },
+      required: ["username", "text"],
+    },
+  },
+  {
     name: "GENERATE_SVG_IMAGE",
     description:
       "Напиши валидный SVG (width/height в px, тёмные тексты на светлом фоне или наоборот, viewBox), бэкенд отрендерит его в PNG и отправит как фото. Размер SVG ≤ 200KB. Полезно для постеров, баннеров, схем, инфографики, мокапов UI.",
@@ -822,6 +835,7 @@ export const TOOL_NAMES = new Set<string>([
   "MAC_RUN_CLAUDE",
   "MAC_STOP",
   "MAC_CONTROL",
+  "USERBOT_SEND_DM",
   // 2026-08-02: инструмент был объявлен в TOOLS, получил payload-валидатор и
   // case в диспатчере — но не попал сюда, поэтому executeTool отбивал его на
   // `unknown tool` ДО gateOrDispatch: ни строки в agent_actions, ни ошибки в
@@ -1634,7 +1648,8 @@ export async function executeTool(
   // apply the MAC_USER_IDS whitelist check. SEC-audit LOW-2: MAC_STOP also needs
   // it — without injection isUserAllowed(undefined) was always false, so the
   // emergency kill-switch was dead (failed closed). Inject for both.
-  if (at === "MAC_RUN_CLAUDE" || at === "MAC_STOP" || at === "MAC_CONTROL") {
+  // USERBOT_SEND_DM: хендлер по _userId сверяет, что просил владелец из своей лички.
+  if (at === "MAC_RUN_CLAUDE" || at === "MAC_STOP" || at === "MAC_CONTROL" || at === "USERBOT_SEND_DM") {
     const p = built.payload as { _userId?: string; _delegated?: boolean };
     p._userId = ctx.triggerUserId;
     // Аудит 2026-08-13: делегат теперь видит triggerUserId (раньше терял его и

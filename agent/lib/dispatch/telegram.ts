@@ -46,6 +46,8 @@ import { reserveUserbotFloodSlots } from "../rate-limits.ts";
 // Аудит 2026-08-07: гвард существовал с T-402, но не импортировался нигде,
 // кроме собственного теста — юзербот ходил в Telegram без лимита и бэкоффа.
 import { guardedUserbotCall } from "../userbot-flood.ts";
+import { parseUserbotDm } from "../userbot-dm.ts";
+import { parseUserIdList } from "../allowlist.ts";
 
 export type TelegramHandlerContext = {
   telegram?: Telegram;
@@ -274,6 +276,59 @@ function partialSendFailure(e: unknown): TelegramHandlerResult {
       `${e.message}. Части 1..${e.partsSent} уже доставлены — повтор их ` +
       `продублирует. Дошли остаток отдельным сообщением или сообщи человеку.`,
   };
+}
+
+/**
+ * Шаг 7: USERBOT_SEND_DM — личное сообщение человеку от аккаунта владельца.
+ *
+ * Подтверждение уже взял гейт (политика владельца, third_party_message), здесь
+ * — то, что гейт по payload не видит: выключатель, кто просил и откуда. Просить
+ * может только владелец (MINIAPP_ADMIN_USER_IDS, тот же список, что у подписи
+ * платных действий) и только в своей личке: prompt-injection в групповом чате
+ * не должен даже поставить заявку «напиши от владельца». Делегированный вызов
+ * отбивается по той же причине.
+ */
+export async function handleUserbotSendDm(
+  payload: PayloadByType["USERBOT_SEND_DM"],
+  ctx: TelegramHandlerContext,
+): Promise<TelegramHandlerResult> {
+  if (process.env.USERBOT_DM_ENABLED !== "true") {
+    return { ok: false, error: "USERBOT_SEND_DM выключен (USERBOT_DM_ENABLED)" };
+  }
+  if (ctx.agentKey !== "orchestrator") {
+    return { ok: false, error: `forbidden: USERBOT_SEND_DM is restricted to orchestrator (caller: ${ctx.agentKey})` };
+  }
+  const userId = payload._userId;
+  const owners = parseUserIdList(process.env.MINIAPP_ADMIN_USER_IDS);
+  if (payload._delegated === true || !userId || !owners.includes(Number(userId)) || String(ctx.chatId) !== userId) {
+    return { ok: false, error: "forbidden: личное сообщение от аккаунта владельца — только по его просьбе в его личном чате" };
+  }
+  const dm = parseUserbotDm(payload);
+  if (!dm) return { ok: false, error: "invalid USERBOT_SEND_DM payload" };
+  const ub = await resolveUserbotHandle(ctx);
+  if (!ub || ub.isNoop || !ub.sendDirectMessage) {
+    return { ok: false, error: "userbot not available" };
+  }
+  const handle = ub as UserbotHandle & Required<Pick<UserbotHandle, "sendDirectMessage">>;
+  try {
+    const sent = await guardedUserbotCall(ctx.agentKey, ctx.chatId, () => handle.sendDirectMessage(dm.username, dm.text));
+    return {
+      ok: true,
+      result: { via: "userbot", to: `@${dm.username}`, user_id: sent.user_id, name: sent.name, message_id: sent.message_id },
+    };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    // Отказ до отправки: адресат не тот, флуд-лимит — наружу ничего не ушло.
+    if (/^(recipient_|userbot rate limit)/.test(message) || /USERNAME_(NOT_OCCUPIED|INVALID)/.test(message)) {
+      return { ok: false, error: message };
+    }
+    // Ошибка на самой отправке: сообщение могло дойти (таймаут после записи).
+    return {
+      ok: false,
+      sideEffect: true,
+      error: `${message}. Сообщение могло быть доставлено — не повторяй, пусть владелец проверит переписку с @${dm.username}.`,
+    };
+  }
 }
 
 export async function handleSetReaction(

@@ -59,6 +59,16 @@ export interface UserbotHandle {
     },
   ): Promise<{ message_id: number }>;
   /**
+   * Шаг 7: личное сообщение человеку по публичному username (USERBOT_SEND_DM).
+   * Только пользователь — не бот, не канал, не группа и не сам владелец; текст
+   * уходит без разбора разметки. Необязателен: заглушки в тестах его не
+   * реализуют, и хендлер тогда отказывает.
+   */
+  sendDirectMessage?(
+    username: string,
+    text: string,
+  ): Promise<{ message_id: number; user_id: string; name: string }>;
+  /**
    * Создать broadcast-канал от имени владельца и сразу добавить указанных ботов
    * админами (право постинга). Возвращает chat_id в bot-API форме (-100…).
    */
@@ -124,7 +134,7 @@ export interface UserbotClientLike {
   deleteMessages(peer: any, ids: number[], opts: { revoke: boolean }): Promise<any>;
   getInputEntity(peer: any): Promise<any>;
   /** T-410: send a message as the owner account. */
-  sendMessage(peer: any, params: { message: string; replyTo?: number }): Promise<any>;
+  sendMessage(peer: any, params: { message: string; replyTo?: number; parseMode?: false }): Promise<any>;
   /** Высокоуровневая отправка файла (фото) с подписью и явными entities. */
   sendFile?(peer: any, params: any): Promise<any>;
   /**
@@ -170,6 +180,9 @@ const NOOP_HANDLE: UserbotHandle = {
     throw new Error("userbot not available");
   },
   async publishPost() {
+    throw new Error("userbot not available");
+  },
+  async sendDirectMessage() {
     throw new Error("userbot not available");
   },
   async stop() {},
@@ -534,6 +547,23 @@ export function buildHandle(client: UserbotClientLike, Api: any): UserbotHandle 
         unmarkSelfSend(chatId, registered, opts?.agentKey);
         throw e;
       }
+    },
+    async sendDirectMessage(username, text) {
+      // Резолвим сами, а не через getInputEntity(«@name»): нужно знать, КТО это,
+      // до отправки. Username мог перейти к боту или каналу, пока заявка ждала.
+      const res: any = await client.invoke(new Api.contacts.ResolveUsername({ username }));
+      const userId = res?.peer?.className === "PeerUser" ? String(res.peer.userId) : null;
+      const user = userId ? res.users?.find((u: any) => String(u.id) === userId) : null;
+      if (!user) throw new Error(`recipient_not_user: @${username} — не пользователь`);
+      if (user.bot) throw new Error(`recipient_is_bot: @${username} — бот`);
+      if (user.self) throw new Error(`recipient_is_self: @${username} — это сам владелец`);
+      if (user.deleted) throw new Error(`recipient_deleted: @${username} — аккаунт удалён`);
+      const peer = new Api.InputPeerUser({ userId: user.id, accessHash: user.accessHash });
+      // Эхо в ингест не регистрируем: личка не в allowlist, эха не будет, а
+      // висящая регистрация съела бы совпадающее сообщение владельца руками.
+      const sent = await client.sendMessage(peer, { message: text, parseMode: false });
+      const name = [user.firstName, user.lastName].filter(Boolean).join(" ") || `@${username}`;
+      return { message_id: extractMessageId(sent), user_id: userId!, name };
     },
     async createTeamChannel(title, about, botUsernames) {
       const res: any = await client.invoke(

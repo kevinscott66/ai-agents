@@ -14,6 +14,7 @@ import { closeGatedActionRow } from "./audit.ts";
 import { ruDateTime } from "./delabs-text.ts";
 import { formatMsk } from "./reminder-time.ts";
 import { describeMacControl, parseMacControl } from "./mac-control.ts";
+import { describeUserbotDm, parseUserbotDm } from "./userbot-dm.ts";
 import { approvalCategories, CATEGORY_LABEL } from "./approval-policy.ts";
 
 /**
@@ -522,6 +523,11 @@ const PREVIEW_BY_ACTION: Record<
       _delegated === true ? "вызов пришёл делегированием" : "",
     ]);
   },
+  // Кому и весь текст: владелец одобряет сообщение от своего имени.
+  USERBOT_SEND_DM: (p) => {
+    const dm = parseUserbotDm(p);
+    return dm ? describeUserbotDm(dm) : "некорректное личное сообщение";
+  },
   SPAWN_ROLE: (p) =>
     join([
       `новая роль «${str(p, "name") || "?"}»`,
@@ -650,6 +656,8 @@ export function approvalPreview(
   };
   const flat = pick().replace(/\s+/g, " ").trim();
   if (!flat) return "";
+  // Сообщение от имени владельца не обрезаем: одобрять половину текста нельзя.
+  if (actionType === "USERBOT_SEND_DM") return flat;
   return flat.length > limit ? `${flat.slice(0, limit - 1)}…` : flat;
 }
 

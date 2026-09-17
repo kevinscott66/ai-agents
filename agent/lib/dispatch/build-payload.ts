@@ -19,6 +19,7 @@ import {
   parseReminderAt,
   REMINDER_TEXT_MAX,
 } from "../reminder-time.ts";
+import { dmTextError, normalizeDmUsername } from "../userbot-dm.ts";
 import { MAC_CONTROL_COMMANDS, MAC_TITLE_MAX, parseMacControl, validMacTitle } from "../mac-control.ts";
 
 const ROLE_KEYS = CHARACTERS.map((c) => c.key);
@@ -925,6 +926,16 @@ export function buildPayload<T extends ActionType>(
         return { ok: false, error: `invalid ${command}: level 0..100, app alias [a-z0-9_-], event end after start and at most 24h` };
       }
       const payload: PayloadFor<"MAC_CONTROL"> = control;
+      return { ok: true, payload: payload as PayloadFor<T> };
+    }
+    case "USERBOT_SEND_DM": {
+      // Текст не триммим и не прогоняем через proseField: владелец одобряет
+      // ровно ту строку, что уйдёт, а проверка невидимых символов строже.
+      const username = normalizeDmUsername(i.username);
+      if (!username) return { ok: false, error: "username is required: public Telegram @username (5-32 chars, letters, digits, _)" };
+      const textError = dmTextError(i.text);
+      if (textError) return { ok: false, error: textError };
+      const payload: PayloadFor<"USERBOT_SEND_DM"> = { username, text: i.text as string };
       return { ok: true, payload: payload as PayloadFor<T> };
     }
     case "MAC_STOP": {

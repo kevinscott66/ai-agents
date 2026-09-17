@@ -32,6 +32,7 @@ import {
 } from "./dispatch/media.ts";
 import {
   handleSendMessage,
+  handleUserbotSendDm,
   handleSetReaction,
   handleEditMessage,
   handlePinMessage,
@@ -976,6 +977,10 @@ export async function dispatchAction<T extends ActionType>(
       case "MAC_STOP": {
         const p = payload as PayloadByType["MAC_STOP"];
         return await handleMacStop(p, ctx as MacHandlerContext);
+      }
+      case "USERBOT_SEND_DM": {
+        const p = payload as PayloadByType["USERBOT_SEND_DM"];
+        return await handleUserbotSendDm(p, ctx as TelegramHandlerContext);
       }
       case "MAC_CONTROL": {
         const p = payload as PayloadByType["MAC_CONTROL"];
