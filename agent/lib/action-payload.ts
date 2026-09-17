@@ -11,7 +11,7 @@ import type { MacControl } from "./mac-control.ts";
 import type { UserbotDm } from "./userbot-dm.ts";
 import type { DnsChange } from "./cloudflare-dns.ts";
 import type { TaxiTariff } from "./taxi.ts";
-import type { ShopService } from "./shop.ts";
+import type { ShopOptionPick, ShopService } from "./shop.ts";
 import type { DeliveryTariff } from "./delivery.ts";
 
 export interface SendMessagePayload {
@@ -289,7 +289,8 @@ export interface OrderFoodPayload {
   service: ShopService;
   /** Ресторан Еды — название ровно как в SHOP_QUOTE; у Лавки поля нет. */
   place?: string;
-  lines: Array<{ id: string; name: string; qty: number; price_rub: number }>;
+  /** price_rub — за штуку с доплатами за опции; options — только у блюд Еды, как в SHOP_QUOTE. */
+  lines: Array<{ id: string; name: string; qty: number; price_rub: number; options?: ShopOptionPick[] }>;
   delivery_rub: number;
   _userId?: string;
   _delegated?: boolean;

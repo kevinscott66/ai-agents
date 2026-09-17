@@ -10,7 +10,8 @@
  *
  * В Еде заказ собирается в одном ресторане: сервер присылает его ref, у блюд
  * нет своих страниц, и блюдо находится в меню ресторана по точному названию.
- * Блюдо с обязательным выбором опций агент не заказывает: `options_required`.
+ * Опции блюда (размер, соус, состав) отмечаются ровно по подписи; в корзине
+ * вариант блюда узнаётся по названию и опциям (edaVariantId).
  *
  * В Маркете товар — номер карточки `/card/<slug>/<номер>`: заказывается ровно
  * подписанная карточка, сниппеты без неё в расчёт не попадают. Доставка Маркета видна только на
@@ -37,8 +38,10 @@ import {
   SHOP_CANDIDATES_MAX,
   SHOP_PLACED_STATES,
   SHOP_PLACE_REF,
+  SHOP_QUOTE_CHOICES_MAX,
   SHOP_SESSION_TTL_MS,
   edaDishId,
+  edaVariantId,
   normalizeShopName,
   normalizeShopPlaceName,
   normalizeShopQuery,
@@ -48,6 +51,8 @@ import {
   type ShopQuoteResult,
   type ShopFailCode,
   type ShopLine,
+  type ShopOptionGroup,
+  type ShopOptionPick,
   type ShopOrderState,
   type ShopOutcome,
   type ShopPlace,
@@ -73,6 +78,8 @@ export interface SearchCard {
   name: string;
   price_rub: number | null;
   available: boolean;
+  /** Еда: группы опций блюда; price_rub — без доплат. */
+  options?: ShopOptionGroup[];
 }
 
 export interface ProductInfo {
@@ -107,7 +114,7 @@ export interface ShopItemRef {
 }
 
 /** Итог нажатия «в корзину»: блюдо просит выбрать опции или страница спросила что-то своё. */
-export type QtyResult = "ok" | "options_required" | "blocked";
+export type QtyResult = "ok" | "options_required" | "options_mismatch" | "blocked";
 
 /** Всё, что исполнитель делает со страницей. Тесты подставляют свою. */
 export interface ShopPage {
@@ -127,6 +134,10 @@ export interface ShopPage {
   product(): Promise<ProductInfo>;
   /** На странице товара: довести количество в корзине до qty (0 — убрать). */
   setProductQty(qty: number): Promise<QtyResult>;
+  /** Еда: окно блюда, отметить ровно picks, qty штук, «Добавить». */
+  addWithOptions?(qty: number, picks: ShopOptionPick[]): Promise<QtyResult>;
+  /** Еда: убрать из корзины строки этих вариантов. */
+  removeCartRows?(ids: string[]): Promise<void>;
   cart(): Promise<CartRow[]>;
   /** Открыть оформление из корзины; false — кнопки нет. */
   openCheckout(): Promise<boolean>;
@@ -173,7 +184,7 @@ export function checkShopProfile(dir: string | undefined, uid: number | undefine
 /** Отказы, к которым полезен скриншот: владелец видит, на чём встали. */
 const SCREENSHOT_CODES: readonly ShopFailCode[] = [
   "login_required", "address_required", "captcha", "unexpected_page", "place_not_found", "product_not_found", "product_mismatch",
-  "out_of_stock", "options_required", "cart_not_empty", "cart_mismatch", "price_unreadable", "price_changed", "checkout_unavailable",
+  "out_of_stock", "options_required", "options_mismatch", "cart_not_empty", "cart_mismatch", "price_unreadable", "price_changed", "checkout_unavailable",
   "payment_needs_owner", "pay_button_missing",
 ];
 
@@ -290,12 +301,16 @@ export class ShopRunner {
         }
         const delivery = await page.deliveryFee();
         const results: ShopQuoteResult[] = [];
+        let optionBudget = 0;
         for (const query of request.queries) {
           checkAborted();
           await page.openSearch(target, query);
           await this.guard(page);
           const candidates: ShopCandidate[] = [];
           for (const card of await page.searchCards()) {
+            const choices = (card.options ?? []).reduce((n, g) => n + g.choices.length, 0);
+            // Опции — только у блюд Еды, и ответ должен уместиться в хвост потока.
+            if (card.options && (!place || choices === 0 || optionBudget + choices > SHOP_QUOTE_CHOICES_MAX)) continue;
             const name = normalizeShopName(card.name);
             if (!card.available || card.price_rub === null || !name) continue;
             // id блюда Еды — производная ресторана и названия: другое — чужая карточка.
@@ -303,7 +318,8 @@ export class ShopRunner {
             // Сниппет Маркета без номера карточки — заказывать нечем.
             if (request.service === "market" && !MARKET_PRODUCT_ID.test(card.id)) continue;
             if (candidates.some((c) => c.id === card.id)) continue;
-            candidates.push({ id: card.id, name, price_rub: card.price_rub });
+            candidates.push({ id: card.id, name, price_rub: card.price_rub, ...(card.options ? { options: card.options } : {}) });
+            optionBudget += choices;
             if (candidates.length === SHOP_CANDIDATES_MAX) break;
           }
           results.push({ query, candidates });
@@ -394,10 +410,13 @@ export class ShopRunner {
       if (!info.name) throw new ShopError("product_not_found");
       if (normalizeShopName(info.name) !== line.name) throw new ShopError("product_mismatch");
       if (!info.available) throw new ShopError("out_of_stock");
-      if (info.price_rub === null) throw new ShopError("price_unreadable");
+      // У блюда с опциями на карточке «от N ₽»: цену сверит корзина и итог.
+      if (info.price_rub === null && !target.place) throw new ShopError("price_unreadable");
+      if (line.options && !target.place) throw new ShopError("product_mismatch");
       added.push(line);
-      const result = await page.setProductQty(line.qty);
-      if (result === "options_required") throw new ShopError("options_required");
+      // В Еде всегда через окно блюда: оно же скажет, что у блюда обязательный выбор.
+      const result = target.place ? await page.addWithOptions!(line.qty, line.options ?? []) : await page.setProductQty(line.qty);
+      if (result === "options_required" || result === "options_mismatch") throw new ShopError(result);
       if (result === "blocked") throw new ShopError("unexpected_page");
     }
     await page.openCart(target);
@@ -405,10 +424,11 @@ export class ShopRunner {
     const rows = await page.cart();
     const prepared: ShopPreparedLine[] = [];
     for (const line of lines) {
-      const row = rows.find((r) => r.id === line.id);
+      const id = cartId(target, line);
+      const row = rows.find((r) => r.id === id);
       if (!row || row.qty !== line.qty) throw new ShopError("cart_mismatch");
       if (row.price_rub === null) throw new ShopError("price_unreadable");
-      prepared.push({ id: line.id, qty: line.qty, price_rub: row.price_rub });
+      prepared.push({ id, qty: line.qty, price_rub: row.price_rub });
     }
     if (rows.length !== lines.length) throw new ShopError("cart_mismatch");
     return prepared;
@@ -439,7 +459,18 @@ export class ShopRunner {
   }
 
   /** Убрать то, что положил сам. Лучшее усилие: ошибки не перекрывают исходный отказ. */
-  private async clearLines(page: ShopPage, target: ShopTarget, lines: ReadonlyArray<ShopItemRef>) {
+  private async clearLines(page: ShopPage, target: ShopTarget, lines: ReadonlyArray<ShopLine>) {
+    if (target.place && lines.length) {
+      // В Еде блюдо с разными опциями — разные строки корзины: убираем строки своих вариантов.
+      try {
+        await page.openCart(target);
+        if ((await page.guard()) !== "ok") return;
+        await page.removeCartRows?.(lines.map((l) => cartId(target, l)));
+      } catch {
+        // лучшее усилие
+      }
+      return;
+    }
     for (const line of lines) {
       try {
         await page.openProduct(target, line);
@@ -465,6 +496,10 @@ export class ShopRunner {
     return state === "none" ? "unknown" : state;
   }
 }
+
+/** id строки корзины: в Еде — вариант блюда с опциями, иначе id товара. */
+export const cartId = (target: ShopTarget, line: ShopLine): string =>
+  target.place ? edaVariantId(target.place, line.name, (line.options ?? []).map((o) => o.name)) : line.id;
 
 export function shopErrorCode(error: unknown): string {
   return runnerErrorCode(error, "invalid_shop_request", "shop_failed");

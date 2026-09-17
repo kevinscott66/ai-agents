@@ -81,6 +81,9 @@ export function routeShopPage(pages: Record<ShopService, ShopPage>): ShopPage {
     searchCards: () => current.searchCards(),
     product: () => current.product(),
     setProductQty: (qty) => current.setProductQty(qty),
+    // Опции умеет только Еда; у остальных — отказ, а не молчаливый заказ без выбора.
+    addWithOptions: async (qty, picks) => (current.addWithOptions ? current.addWithOptions(qty, picks) : "options_required"),
+    removeCartRows: async (ids) => { await current.removeCartRows?.(ids); },
     cart: () => current.cart(),
     openCheckout: () => current.openCheckout(),
     checkout: () => current.checkout(),
