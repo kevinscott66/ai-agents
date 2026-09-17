@@ -27,6 +27,8 @@ export const TAXI_TEXT = {
   cancel: /^Отменить(?: заказ| поездку)?$/,
   cancelConfirm: /^(?:Да, отменить|Отменить поездку|Отменить заказ)$/,
   addressNotFound: /Адрес не найден|Ничего не нашлось|Не удалось найти/i,
+  // У «Детского» вместо «Заказать» появляется «Выбрать кресло» — заказ так не оформить.
+  choice: /^Выбрать /,
   tariffGroup: /^Выберите тариф/,
 };
 
@@ -69,4 +71,4 @@ export const TAXI_ETA_TEXT = /\d+\s*(?:ч\s*\d+\s*)?мин/;
 /** Сколько ждать смены состояния после нажатия «Заказать» и «Отменить». */
 export const TAXI_STATE_POLL = { attempts: 15, intervalMs: 1_000 };
 /** Сколько ждать точной цены после выбора адресов. */
-export const TAXI_PRICE_POLL = { attempts: 30, intervalMs: 500 };
+export const TAXI_PRICE_POLL = { attempts: 60, intervalMs: 500 };
