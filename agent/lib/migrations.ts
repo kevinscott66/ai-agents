@@ -1611,6 +1611,18 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    // Шаг 10a: ORDER_FOOD (lib/dispatch/shop.ts) — как такси: только
+    // оркестратор, только с подтверждением, затем подпись на телефоне.
+    name: "062_seed_shop",
+    up: (db) => {
+      const ins = db.prepare(
+        `INSERT OR IGNORE INTO permissions(agent_key, action_type, allowed, requires_approval)
+         VALUES (?, 'ORDER_FOOD', ?, 1)`,
+      );
+      for (const c of CHARACTERS) ins.run(c.key, c.key === "orchestrator" ? 1 : 0);
+    },
+  },
 ];
 
 /**

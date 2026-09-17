@@ -52,6 +52,8 @@ export const ACTION_TYPES = [
   // затем подпись на телефоне. TAXI_QUOTE и TAXI_STATUS — инлайновые.
   "ORDER_TAXI",
   "TAXI_CANCEL",
+  // Шаг 10a: ORDER_FOOD — Лавка, тот же путь. SHOP_QUOTE и SHOP_STATUS — инлайновые.
+  "ORDER_FOOD",
   "SCHEDULE_POST",
   // Напоминания в чат-источник (lib/reminders.ts). LIST_REMINDERS — инлайновый.
   "CREATE_REMINDER",
@@ -176,6 +178,9 @@ export const CALLER_RESTRICTED: Record<string, string> = {
   TAXI_CANCEL: "orchestrator",
   TAXI_QUOTE: "orchestrator",
   TAXI_STATUS: "orchestrator",
+  ORDER_FOOD: "orchestrator",
+  SHOP_QUOTE: "orchestrator",
+  SHOP_STATUS: "orchestrator",
   // Создание канала от имени владельца + назначение админов — действие реального
   // аккаунта; только лид (orchestrator) как контролёр процесса.
   CREATE_TEAM_CHANNEL: "orchestrator",

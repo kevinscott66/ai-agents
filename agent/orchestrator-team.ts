@@ -30,6 +30,7 @@ import { configureKnowledgeExtraction } from "./lib/native-knowledge-runtime.ts"
 import { configureNativeLead } from "./lib/native-api.ts";
 import { configureSigningCodeSender, registerSignedActionExecutor } from "./lib/native-signing.ts";
 import { configureTaxi, executeSignedTaxi } from "./lib/dispatch/taxi.ts";
+import { configureShop, executeSignedShop } from "./lib/dispatch/shop.ts";
 import { registerVoiceHandler } from "./orchestrator/voice-handler.ts";
 import { registerMessageHandler } from "./orchestrator/message-handler.ts";
 import { startBackgroundServices } from "./orchestrator/services.ts";
@@ -143,15 +144,17 @@ export async function buildBot(def: CharacterDef): Promise<RunningBot | null> {
     configureKnowledgeExtraction();
     configureSigningCodeSender(async (userId, text) => { await bot.telegram.sendMessage(userId, text); });
     // Шаг 9: итог подписанного заказа такси приходит владельцу в личку, отказ со страницы — со скриншотом.
-    configureTaxi({
-      notify: {
-        text: async (userId, text) => { await bot.telegram.sendMessage(userId, text); },
-        photo: async (userId, jpeg, caption) => {
-          await bot.telegram.sendPhoto(userId, { source: Buffer.from(jpeg, "base64") }, { caption });
-        },
+    // Шаг 10a: то же для Лавки. Исполнителей несколько: каждый берёт только свои nonce.
+    const signedNotify = {
+      text: async (userId: string, text: string) => { await bot.telegram.sendMessage(userId, text); },
+      photo: async (userId: string, jpeg: string, caption: string) => {
+        await bot.telegram.sendPhoto(userId, { source: Buffer.from(jpeg, "base64") }, { caption });
       },
-    });
+    };
+    configureTaxi({ notify: signedNotify });
+    configureShop({ notify: signedNotify });
     registerSignedActionExecutor(executeSignedTaxi);
+    registerSignedActionExecutor(executeSignedShop);
     configureNativeLead(async (userId, text, reply, history, media) => {
       const messageId = nativeMessageId--;
       const chat = { id: Number(userId), type: "private" as const };

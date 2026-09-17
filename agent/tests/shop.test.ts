@@ -1,0 +1,554 @@
+/**
+ * Шаг 10a: Яндекс Лавка. Всё на заглушках: страница, мост и Telegram
+ * подменены, настоящий браузер не запускается и заказ не делается.
+ */
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { chmodSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { approvalCategories } from "../lib/approval-policy.ts";
+import { approvalPreview } from "../lib/approvals.ts";
+import { buildPayload } from "../lib/dispatch/build-payload.ts";
+import {
+  configureShop,
+  executeSignedShop,
+  handleOrderFood,
+  hasPendingShopOrder,
+  quoteShop,
+  resetShopState,
+  shopStatus,
+} from "../lib/dispatch/shop.ts";
+import { SignedActions } from "../lib/signed-actions.ts";
+import {
+  describeOrderFood,
+  normalizeShopName,
+  normalizeShopService,
+  parseDeliveryRubles,
+  parseShopOutcome,
+  parseShopRequest,
+  parseShopRubles,
+  type ShopOrderState,
+  type ShopOutcome,
+  type ShopRequest,
+} from "../lib/shop.ts";
+import {
+  checkShopProfile,
+  ShopRunner,
+  type CheckoutInfo,
+  type ProductInfo,
+  type SearchCard,
+  type ShopGuard,
+  type ShopPage,
+} from "../mac-daemon/shop.ts";
+import { productIdFromHref } from "../mac-daemon/shop-playwright.ts";
+
+const T0 = Date.UTC(2026, 8, 17, 9, 0, 0);
+const OWNER = 777_000_444;
+const SESSION = "sess_0123456789abcdef";
+const MILK = { id: "moloko-3-2-1l", name: "Молоко 3,2% 1 л", price_rub: 99 };
+const BREAD = { id: "hleb-borodinskiy", name: "Хлеб Бородинский 300 г", price_rub: 65 };
+
+async function phone() {
+  const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
+  const spki = Buffer.from(await crypto.subtle.exportKey("spki", pair.publicKey)).toString("base64");
+  const sign = async (payload: string) =>
+    Buffer.from(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, pair.privateKey, new TextEncoder().encode(payload))).toString("base64");
+  return { spki, sign };
+}
+
+describe("parsing", () => {
+  test("prices, delivery, names and services", () => {
+    expect(parseShopRubles("99 ₽")).toBe(99);
+    expect(parseShopRubles("1 234 ₽")).toBe(1234);
+    expect(parseShopRubles("89,90 ₽")).toBe(90);
+    expect(parseShopRubles("89,00 ₽")).toBe(89);
+    expect(parseShopRubles("Итого 512 ₽")).toBe(512);
+    expect(parseShopRubles("99 ₽ вместо 109 ₽")).toBeNull();
+    expect(parseShopRubles("99")).toBeNull();
+    expect(parseDeliveryRubles("15–25 мин, 0 ₽")).toBe(0);
+    expect(parseDeliveryRubles("Доставка 149 ₽")).toBe(149);
+    expect(parseDeliveryRubles("бесплатно")).toBeNull();
+    expect(normalizeShopName("Моло­ко  3,2% 1 л")).toBe("Молоко 3,2% 1 л");
+    expect(normalizeShopName("Молоко​ 1 л")).toBeNull();
+    expect(normalizeShopService(undefined)).toBe("lavka");
+    expect(normalizeShopService("Лавка")).toBe("lavka");
+    expect(normalizeShopService("market")).toBeNull();
+    expect(productIdFromHref("/good/moloko-3-2-1l?from=search")).toBe("moloko-3-2-1l");
+    expect(productIdFromHref("https://evil.example.com/good/x")).toBeNull();
+  });
+
+  test("daemon frame is strict", () => {
+    const lines = [{ id: MILK.id, name: MILK.name, qty: 2 }];
+    expect(parseShopRequest({ op: "quote", service: "lavka", queries: ["молоко"] })).toEqual({ op: "quote", service: "lavka", queries: ["молоко"] });
+    expect(parseShopRequest({ op: "quote", service: "lavka", queries: [] })).toBeNull();
+    expect(parseShopRequest({ op: "prepare", session: SESSION, service: "lavka", lines })).toEqual({ op: "prepare", session: SESSION, service: "lavka", lines });
+    expect(parseShopRequest({ op: "prepare", session: SESSION, service: "lavka", lines: [...lines, ...lines] })).toBeNull();
+    expect(parseShopRequest({ op: "prepare", session: SESSION, service: "lavka", lines: [{ ...lines[0], qty: 21 }] })).toBeNull();
+    expect(parseShopRequest({ op: "prepare", session: SESSION, service: "lavka", lines: [{ ...lines[0], id: "../cart" }] })).toBeNull();
+    expect(parseShopRequest({ op: "confirm", session: SESSION, maxRub: 500, extra: 1 })).toBeNull();
+    expect(parseShopRequest({ op: "confirm", session: "short", maxRub: 500 })).toBeNull();
+    expect(parseShopRequest({ op: "status", service: "market" })).toBeNull();
+  });
+
+  test("daemon answer is checked, junk throws", () => {
+    expect(parseShopOutcome('{"ok":false,"code":"captcha","screenshot":"QUJD"}', "quote")).toEqual({ ok: false, code: "captcha", screenshot: "QUJD" });
+    expect(() => parseShopOutcome('{"ok":false,"code":"whatever"}', "quote")).toThrow("invalid_shop_result");
+    expect(() => parseShopOutcome('{"ok":true,"op":"confirm","state":"accepted"}', "prepare")).toThrow("invalid_shop_result");
+    expect(() => parseShopOutcome('{"ok":true,"op":"prepare","address":"Красная 1","lines":[],"total_rub":-1}', "prepare")).toThrow();
+  });
+
+  test("approval card matches what the phone signs", () => {
+    const p = { service: "lavka", lines: [{ ...MILK, qty: 2 }], delivery_rub: 0 };
+    expect(describeOrderFood(p, 15)).toBe(
+      "Яндекс Лавка: Молоко 3,2% 1 л × 2 — 198 ₽; доставка 0 ₽. Всего 198 ₽ (итог на странице — не больше 227 ₽), дальше — подпись на телефоне",
+    );
+    expect(describeOrderFood({ ...p, delivery_rub: "0" }, 15)).toBe("некорректный заказ");
+  });
+});
+
+/** Страница-заглушка: корзина, товары и оформление в памяти, журнал нажатий. */
+function fakePage() {
+  const s = {
+    guard: "ok" as ShopGuard,
+    address: "Краснодар, Красная 1" as string | null,
+    delivery: 0 as number | null,
+    cards: [
+      { id: MILK.id, name: `${MILK.name}`, price_rub: 99, available: true },
+      { id: "moloko-dorogoe", name: "Молоко фермерское 1 л", price_rub: 189, available: true },
+      { id: "moloko-net", name: "Молоко 2,5%", price_rub: 79, available: false },
+    ] as SearchCard[],
+    products: new Map<string, ProductInfo>([
+      [MILK.id, { name: MILK.name, price_rub: 99, available: true }],
+      [BREAD.id, { name: BREAD.name, price_rub: 65, available: true }],
+    ]),
+    cart: new Map<string, number>(),
+    checkout: null as Partial<CheckoutInfo> | null,
+    current: "",
+    state: "none" as ShopOrderState,
+    stateAfterPay: "accepted" as ShopOrderState,
+    clicks: [] as string[],
+    shots: 0,
+  };
+  const total = () => [...s.cart].reduce((sum, [id, qty]) => sum + qty * (s.products.get(id)?.price_rub ?? 0), 0) + (s.delivery ?? 0);
+  const page: ShopPage = {
+    openHome: async () => { s.current = "home"; },
+    openSearch: async () => { s.current = "search"; },
+    openProduct: async (_svc, id) => { s.current = id; },
+    openCart: async () => { s.current = "cart"; },
+    openOrders: async () => { s.current = "orders"; },
+    guard: async () => s.guard,
+    address: async () => s.address,
+    deliveryFee: async () => s.delivery,
+    searchCards: async () => s.cards.map((c) => ({ ...c })),
+    product: async () => s.products.get(s.current) ?? { name: null, price_rub: null, available: false },
+    setProductQty: async (qty) => {
+      s.clicks.push(`qty:${s.current}:${qty}`);
+      if (qty === 0) s.cart.delete(s.current); else s.cart.set(s.current, qty);
+    },
+    cart: async () => [...s.cart].map(([id, qty]) => ({ id, qty, price_rub: s.products.get(id)?.price_rub ?? null })),
+    openCheckout: async () => { s.current = "checkout"; return s.cart.size > 0; },
+    checkout: async () => ({ total_rub: total(), blocked: false, saved_card: true, pay_button: true, ...s.checkout }),
+    clickPay: async () => { s.clicks.push("pay"); s.state = s.stateAfterPay; },
+    orderState: async () => s.state,
+    screenshot: async () => { s.shots++; return "U0NSRUVO"; },
+    probe: async () => "",
+  };
+  return { s, page };
+}
+
+function runner(page: ShopPage, env: Record<string, string> = { SHOP_ENABLED: "true", SHOP_PROFILE_DIR: "/profile" }, now = () => T0) {
+  return new ShopRunner(env, {
+    launch: async () => ({ page: () => page, close: async () => {} }),
+    checkProfile: (dir) => dir ?? "",
+    now,
+    sleep: async () => {},
+    idleMs: 60_000,
+  });
+}
+
+describe("mac runner", () => {
+  const prepare: ShopRequest = {
+    op: "prepare",
+    session: SESSION,
+    service: "lavka",
+    lines: [{ id: MILK.id, name: MILK.name, qty: 2 }, { id: BREAD.id, name: BREAD.name, qty: 1 }],
+  };
+
+  test("disabled by default, nothing is launched", async () => {
+    let launched = false;
+    const r = new ShopRunner({}, { launch: async () => { launched = true; throw new Error("no"); } });
+    expect(await r.run({ op: "status", service: "lavka" })).toEqual({ ok: false, code: "shop_disabled" });
+    expect(launched).toBe(false);
+  });
+
+  test("quote lists available priced items and never touches the cart", async () => {
+    const { s, page } = fakePage();
+    const r = runner(page);
+    expect(await r.run({ op: "quote", service: "lavka", queries: ["молоко"] })).toEqual({
+      ok: true,
+      op: "quote",
+      address: "Краснодар, Красная 1",
+      delivery_rub: 0,
+      results: [{ query: "молоко", candidates: [MILK, { id: "moloko-dorogoe", name: "Молоко фермерское 1 л", price_rub: 189 }] }],
+    });
+    expect(s.clicks).toEqual([]);
+    await r.close();
+  });
+
+  test("no address, captcha or login: stop with a screenshot, nothing is touched", async () => {
+    const { s, page } = fakePage();
+    const r = runner(page);
+    s.address = null;
+    expect(await r.run(prepare)).toEqual({ ok: false, code: "address_required", screenshot: "U0NSRUVO" });
+    s.address = "Краснодар, Красная 1";
+    for (const guard of ["captcha", "login_required"] as const) {
+      s.guard = guard;
+      expect(await r.run(prepare)).toEqual({ ok: false, code: guard, screenshot: "U0NSRUVO" });
+    }
+    expect(s.clicks).toEqual([]);
+    await r.close();
+  });
+
+  test("a cart with someone else's items is refused as is", async () => {
+    const { s, page } = fakePage();
+    s.cart.set("chuzhoe", 1);
+    const r = runner(page);
+    expect((await r.run(prepare) as { code: string }).code).toBe("cart_not_empty");
+    expect(s.clicks).toEqual([]);
+    expect([...s.cart]).toEqual([["chuzhoe", 1]]);
+    await r.close();
+  });
+
+  test("renamed product: refusal, screenshot before cleanup, added items removed", async () => {
+    const { s, page } = fakePage();
+    s.products.set(BREAD.id, { name: "Хлеб Бородинский 250 г", price_rub: 65, available: true });
+    let cartAtShot = -1;
+    page.screenshot = async () => { cartAtShot = s.cart.size; return "U0NSRUVO"; };
+    const r = runner(page);
+    expect(await r.run(prepare)).toEqual({ ok: false, code: "product_mismatch", screenshot: "U0NSRUVO" });
+    expect(cartAtShot).toBe(1);
+    expect(s.cart.size).toBe(0);
+    expect(s.clicks).toEqual([`qty:${MILK.id}:2`, `qty:${MILK.id}:0`]);
+    await r.close();
+  });
+
+  test("no saved card or blocked checkout never becomes a click", async () => {
+    for (const [checkout, code] of [
+      [{ saved_card: false }, "payment_needs_owner"],
+      [{ blocked: true }, "checkout_unavailable"],
+      [{ total_rub: null }, "price_unreadable"],
+      [{ pay_button: false }, "pay_button_missing"],
+    ] as const) {
+      const { s, page } = fakePage();
+      s.checkout = checkout;
+      const r = runner(page);
+      expect((await r.run(prepare) as { code: string }).code).toBe(code);
+      expect(s.clicks).not.toContain("pay");
+      expect(s.cart.size).toBe(0);
+      await r.close();
+    }
+  });
+
+  test("prepare fills the cart; confirm pays once when the total holds", async () => {
+    const { s, page } = fakePage();
+    const r = runner(page);
+    expect(await r.run(prepare)).toEqual({
+      ok: true,
+      op: "prepare",
+      address: "Краснодар, Красная 1",
+      lines: [{ id: MILK.id, qty: 2, price_rub: 99 }, { id: BREAD.id, qty: 1, price_rub: 65 }],
+      total_rub: 263,
+    });
+    expect(await r.run({ op: "confirm", session: SESSION, maxRub: 302 })).toEqual({ ok: true, op: "confirm", state: "accepted" });
+    expect(s.clicks.filter((c) => c === "pay")).toHaveLength(1);
+    expect(await r.run({ op: "confirm", session: SESSION, maxRub: 302 })).toEqual({ ok: false, code: "session_unknown" });
+    expect(s.clicks.filter((c) => c === "pay")).toHaveLength(1);
+    await r.close();
+  });
+
+  test("total above the signed ceiling: no click, cart cleared, session gone", async () => {
+    const { s, page } = fakePage();
+    const r = runner(page);
+    await r.run(prepare);
+    s.delivery = 99;
+    expect(await r.run({ op: "confirm", session: SESSION, maxRub: 302 })).toEqual({ ok: false, code: "price_changed", price_rub: 362, screenshot: "U0NSRUVO" });
+    expect(s.clicks).not.toContain("pay");
+    expect(s.cart.size).toBe(0);
+    expect(await r.run({ op: "confirm", session: SESSION, maxRub: 1000 })).toEqual({ ok: false, code: "session_unknown" });
+    await r.close();
+  });
+
+  test("cart changed between prepare and confirm: refusal", async () => {
+    const { s, page } = fakePage();
+    const r = runner(page);
+    await r.run(prepare);
+    s.cart.set(MILK.id, 3);
+    expect((await r.run({ op: "confirm", session: SESSION, maxRub: 1000 }) as { code: string }).code).toBe("cart_mismatch");
+    expect(s.clicks).not.toContain("pay");
+    await r.close();
+  });
+
+  test("session expires, foreign sessions are refused, abandon clears", async () => {
+    let now = T0;
+    const { s, page } = fakePage();
+    const r = runner(page, undefined, () => now);
+    await r.run(prepare);
+    expect(await r.run({ op: "confirm", session: "other_0123456789abcd", maxRub: 1000 })).toEqual({ ok: false, code: "session_unknown" });
+    expect((await r.run({ ...prepare, session: "other_0123456789abcd" }) as { code: string }).code).toBe("shop_busy");
+    expect(await r.run({ op: "abandon", session: SESSION })).toEqual({ ok: true, op: "abandon" });
+    expect(s.cart.size).toBe(0);
+    await r.run(prepare);
+    now += 5 * 60_000 + 1;
+    expect(await r.run({ op: "confirm", session: SESSION, maxRub: 1000 })).toEqual({ ok: false, code: "session_unknown" });
+    expect(s.clicks).not.toContain("pay");
+    await r.close();
+  });
+
+  test("after the click the page state decides", async () => {
+    const { s, page } = fakePage();
+    s.stateAfterPay = "none";
+    const r = runner(page);
+    await r.run(prepare);
+    expect(await r.run({ op: "confirm", session: SESSION, maxRub: 1000 })).toEqual({ ok: true, op: "confirm", state: "unknown" });
+    s.state = "delivering";
+    expect(await r.run({ op: "status", service: "lavka" })).toEqual({ ok: true, op: "status", state: "delivering" });
+    await r.close();
+  });
+
+  test("profile must be private", () => {
+    const dir = mkdtempSync(join(tmpdir(), "shop-profile-"));
+    try {
+      chmodSync(dir, 0o755);
+      expect(() => checkShopProfile(dir)).toThrow("profile_insecure");
+      chmodSync(dir, 0o700);
+      expect(checkShopProfile(dir)).toBe(dir);
+      expect(() => checkShopProfile("relative/dir")).toThrow("profile_missing");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+const ENV_KEYS = ["SHOP_ENABLED", "MINIAPP_ADMIN_USER_IDS"] as const;
+const savedEnv = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
+
+type Script = Partial<Record<ShopRequest["op"], ShopOutcome | Error>>;
+
+async function harness(script: Script, limits = { maxRub: 1000, dailyMax: 5, deviationPct: 15 }) {
+  const gate = new SignedActions(new Database(":memory:"), limits);
+  const owner = await phone();
+  const { keyId, code } = await gate.registerKey("iphone", owner.spki, T0);
+  gate.activateKey(keyId, code, T0);
+  const requests: ShopRequest[] = [];
+  const texts: string[] = [];
+  const photos: string[] = [];
+  const restore = configureShop({
+    gate: () => gate,
+    now: () => T0,
+    session: () => SESSION,
+    send: async (request) => {
+      requests.push(request);
+      const out = script[request.op];
+      if (out instanceof Error) return { ok: false, stdout: "", error: out.message };
+      if (!out) return { ok: false, stdout: "", error: "unexpected_op" };
+      return { ok: true, stdout: JSON.stringify(out) };
+    },
+    notify: {
+      text: async (_u, text) => { texts.push(text); },
+      photo: async (_u, _jpeg, caption) => { photos.push(caption); },
+    },
+  });
+  const ctx = { agentKey: "orchestrator", chatId: OWNER, triggerUserId: String(OWNER) };
+  const quote = () => quoteShop({ queries: ["молоко", "хлеб"] }, ctx);
+  const order = (lines = [{ ...MILK, qty: 2 }], delivery_rub = 0) =>
+    handleOrderFood({ service: "lavka", lines, delivery_rub, _userId: String(OWNER) }, { agentKey: "orchestrator", chatId: OWNER });
+  const sign = async () => {
+    const { nonce, payload } = gate.pending(T0).at(-1)!;
+    await gate.approve(nonce, await owner.sign(payload), T0);
+    return nonce;
+  };
+  const status = (nonce: string) => (gate.db.query("SELECT status FROM signed_actions WHERE nonce=?").get(nonce) as { status: string }).status;
+  return { gate, requests, texts, photos, restore, ctx, quote, order, sign, status };
+}
+
+const ADDRESS = "Краснодар, Красная 1";
+const QUOTE: ShopOutcome = {
+  ok: true,
+  op: "quote",
+  address: ADDRESS,
+  delivery_rub: 0,
+  results: [{ query: "молоко", candidates: [MILK] }, { query: "хлеб", candidates: [BREAD] }],
+};
+const PREPARED: ShopOutcome = { ok: true, op: "prepare", address: ADDRESS, lines: [{ id: MILK.id, qty: 2, price_rub: 99 }], total_rub: 198 };
+
+describe("server flow", () => {
+  let h: Awaited<ReturnType<typeof harness>> | null = null;
+  beforeEach(() => {
+    resetShopState();
+    process.env.SHOP_ENABLED = "true";
+    process.env.MINIAPP_ADMIN_USER_IDS = `123,${OWNER}`;
+  });
+  afterEach(() => {
+    h?.restore();
+    h = null;
+    resetShopState();
+    for (const k of ENV_KEYS) {
+      if (savedEnv[k] === undefined) delete process.env[k]; else process.env[k] = savedEnv[k];
+    }
+  });
+
+  test("owner only, own chat, not delegated, orchestrator only", async () => {
+    h = await harness({ quote: QUOTE, status: { ok: true, op: "status", state: "none" } });
+    expect((await quoteShop({ queries: ["молоко"] }, { ...h.ctx, chatId: -100 })).ok).toBe(false);
+    expect((await quoteShop({ queries: ["молоко"] }, { ...h.ctx, agentKey: "qa" })).ok).toBe(false);
+    expect((await quoteShop({ queries: ["молоко"] }, { ...h.ctx, triggerUserId: "555", chatId: 555 })).ok).toBe(false);
+    expect((await quoteShop({ queries: ["молоко"] }, { ...h.ctx, delegationChain: ["orchestrator", "devops"] })).ok).toBe(false);
+    expect((await handleOrderFood({ service: "lavka", lines: [{ ...MILK, qty: 1 }], delivery_rub: 0, _userId: String(OWNER), _delegated: true }, { agentKey: "orchestrator", chatId: OWNER })).ok).toBe(false);
+    expect((await quoteShop({ queries: [] }, h.ctx)).ok).toBe(false);
+    expect(h.requests).toEqual([]);
+    expect(await shopStatus({}, h.ctx)).toMatchObject({ ok: true, state: "none" });
+    process.env.SHOP_ENABLED = "false";
+    expect((await shopStatus({}, h.ctx)).ok).toBe(false);
+  });
+
+  test("order requires a fresh matching quote and issues a nonce, nothing is ordered yet", async () => {
+    h = await harness({ quote: QUOTE });
+    expect((await h.order()).ok).toBe(false);
+    expect(await h.quote()).toMatchObject({ ok: true, address: ADDRESS, delivery_rub: 0 });
+    expect((await h.order([{ ...MILK, price_rub: 89, qty: 2 }])).ok).toBe(false);
+    expect((await h.order([{ ...MILK, name: "Молоко 1 л", qty: 2 }])).ok).toBe(false);
+    expect((await h.order([{ id: "net-v-raschete", name: "Сыр", price_rub: 10, qty: 1 }])).ok).toBe(false);
+    expect((await h.order(undefined, 149)).ok).toBe(false);
+    const res = await h.order([{ ...MILK, qty: 2 }, { ...BREAD, qty: 1 }]);
+    expect(res).toMatchObject({ ok: true, result: { status: "awaiting_signature", amount_rub: 263, max_final_rub: 302 } });
+    const { nonce, payload } = h.gate.pending(T0).at(-1)!;
+    expect(JSON.parse(payload)).toMatchObject({
+      service: "yandex_lavka",
+      action: "order_food",
+      amount_rub: 263,
+      params: {
+        store: "Яндекс Лавка",
+        address: ADDRESS,
+        item_01: "Молоко 3,2% 1 л × 2 — 198 ₽",
+        item_02: "Хлеб Бородинский 300 г × 1 — 65 ₽",
+        delivery_rub: 0,
+      },
+    });
+    expect(hasPendingShopOrder(nonce)).toBe(true);
+    expect(h.requests.map((r) => r.op)).toEqual(["quote"]);
+  });
+
+  test("gate refusals come back readable", async () => {
+    h = await harness({ quote: QUOTE }, { maxRub: 150, dailyMax: 5, deviationPct: 15 });
+    await h.quote();
+    const res = await h.order();
+    expect(res.ok).toBe(false);
+    expect((res as { error: string }).error).toContain("лимита");
+  });
+
+  test("signed order: prepare with signed lines, total check, one confirm, success", async () => {
+    h = await harness({ quote: QUOTE, prepare: PREPARED, confirm: { ok: true, op: "confirm", state: "accepted" } });
+    await h.quote();
+    await h.order();
+    const nonce = await h.sign();
+    await executeSignedShop(nonce);
+    expect(h.requests.map((r) => r.op)).toEqual(["quote", "prepare", "confirm"]);
+    expect(h.requests[1]).toEqual({ op: "prepare", session: SESSION, service: "lavka", lines: [{ id: MILK.id, name: MILK.name, qty: 2 }] });
+    expect(h.requests[2]).toEqual({ op: "confirm", session: SESSION, maxRub: 227 });
+    expect(h.status(nonce)).toBe("executed");
+    expect(h.texts).toHaveLength(1);
+    expect(h.texts[0]).toContain("заказ оформлен");
+    await executeSignedShop(nonce);
+    expect(h.requests).toHaveLength(3);
+  });
+
+  test("total above the ceiling: abandon, no confirm, aborted", async () => {
+    h = await harness({ quote: QUOTE, prepare: { ...PREPARED, total_rub: 300 }, abandon: { ok: true, op: "abandon" } });
+    await h.quote();
+    await h.order();
+    const nonce = await h.sign();
+    await executeSignedShop(nonce);
+    expect(h.requests.map((r) => r.op)).toEqual(["quote", "prepare", "abandon"]);
+    expect(h.status(nonce)).toBe("aborted");
+    expect(h.texts[0]).toContain("300");
+  });
+
+  test("delivery address changed on the site: abandon, aborted", async () => {
+    h = await harness({ quote: QUOTE, prepare: { ...PREPARED, address: "Москва, Тверская 1" }, abandon: { ok: true, op: "abandon" } });
+    await h.quote();
+    await h.order();
+    const nonce = await h.sign();
+    await executeSignedShop(nonce);
+    expect(h.requests.map((r) => r.op)).toEqual(["quote", "prepare", "abandon"]);
+    expect(h.status(nonce)).toBe("aborted");
+    expect(h.texts[0]).toContain("адрес");
+  });
+
+  test("captcha before payment: aborted, owner gets the screenshot", async () => {
+    h = await harness({ quote: QUOTE, prepare: { ok: false, code: "captcha", screenshot: "U0NSRUVO" } });
+    await h.quote();
+    await h.order();
+    const nonce = await h.sign();
+    await executeSignedShop(nonce);
+    expect(h.requests.map((r) => r.op)).toEqual(["quote", "prepare"]);
+    expect(h.status(nonce)).toBe("aborted");
+    expect(h.photos).toHaveLength(1);
+    expect(h.photos[0]).toContain("капч");
+  });
+
+  test("bridge failure on confirm: failed, counted, never retried", async () => {
+    h = await harness({ quote: QUOTE, prepare: PREPARED, confirm: new Error("mac_timeout") });
+    await h.quote();
+    await h.order();
+    const nonce = await h.sign();
+    await executeSignedShop(nonce);
+    expect(h.requests.map((r) => r.op)).toEqual(["quote", "prepare", "confirm"]);
+    expect(h.status(nonce)).toBe("failed");
+    expect(h.texts[0]).toContain("Не знаю");
+  });
+
+  test("pre-payment refusal on confirm aborts; unclear state after the click fails", async () => {
+    h = await harness({ quote: QUOTE, prepare: PREPARED, confirm: { ok: false, code: "price_changed", price_rub: 400 } });
+    await h.quote();
+    await h.order();
+    let nonce = await h.sign();
+    await executeSignedShop(nonce);
+    expect(h.status(nonce)).toBe("aborted");
+    h.restore();
+
+    h = await harness({ quote: QUOTE, prepare: PREPARED, confirm: { ok: true, op: "confirm", state: "payment_pending" } });
+    resetShopState();
+    await h.quote();
+    await h.order();
+    nonce = await h.sign();
+    await executeSignedShop(nonce);
+    expect(h.status(nonce)).toBe("failed");
+    expect(h.texts[0]).toContain("Не знаю");
+  });
+
+  test("foreign nonce is ignored", async () => {
+    h = await harness({});
+    await executeSignedShop("x".repeat(43));
+    expect(h.requests).toEqual([]);
+    expect(h.texts).toEqual([]);
+  });
+});
+
+describe("chat approval", () => {
+  test("order is money; preview shows the ceiling", () => {
+    const payload = { service: "lavka", lines: [{ ...MILK, qty: 2 }], delivery_rub: 0 };
+    expect(approvalCategories("ORDER_FOOD", payload)).toEqual(["money"]);
+    expect(approvalPreview("ORDER_FOOD", payload)).toContain("не больше 227 ₽");
+  });
+
+  test("buildPayload normalizes and rejects junk", () => {
+    const line = { id: MILK.id, name: "Молоко  3,2% 1 л", qty: 2, price_rub: 99 };
+    expect(buildPayload("ORDER_FOOD", { service: "лавка", lines: [line], delivery_rub: 0 }, { agentKey: "orchestrator" }))
+      .toEqual({ ok: true, payload: { service: "lavka", lines: [{ ...MILK, qty: 2 }], delivery_rub: 0 } });
+    expect(buildPayload("ORDER_FOOD", { service: "lavka", lines: [{ ...line, qty: "2" }], delivery_rub: 0 }, { agentKey: "orchestrator" }).ok).toBe(false);
+    expect(buildPayload("ORDER_FOOD", { service: "lavka", lines: [line, line], delivery_rub: 0 }, { agentKey: "orchestrator" }).ok).toBe(false);
+    expect(buildPayload("ORDER_FOOD", { service: "market", lines: [line], delivery_rub: 0 }, { agentKey: "orchestrator" }).ok).toBe(false);
+    expect(buildPayload("ORDER_FOOD", { service: "lavka", lines: [], delivery_rub: 0 }, { agentKey: "orchestrator" }).ok).toBe(false);
+  });
+});

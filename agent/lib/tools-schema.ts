@@ -3,9 +3,9 @@ import { nativeTurnContext } from "./native-context.ts";
  * C5/R-A: Anthropic tool_use схема + диспатчер.
  *
  * Аудит 2026-09-11: здесь было написано «все 12 инструментов идут через единый
- * `gateOrDispatch`». Неверно дважды. Инструментов в `TOOL_NAMES` тридцать два
+ * `gateOrDispatch`». Неверно дважды. Инструментов в `TOOL_NAMES` тридцать три
  * (число сверяется тестом audit-2026-09-11-tool-counts: в круге 29 оно уже
- * успело протухнуть на два, пока список рос); шестнадцать — это
+ * успело протухнуть на два, пока список рос); восемнадцать — это
  * `INLINE_TOOL_NAMES` из `constants.ts`, то есть ровно тот набор, который через
  * `gateOrDispatch` как раз НЕ идёт: ни CALLER_RESTRICTED, ни строка permissions
  * к ним не применяются (см. разбор инлайновой ветки в `executeTool` ниже).
@@ -27,6 +27,7 @@ import { getErrorMessage } from "./errors.ts";
 import { INLINE_TOOL_NAMES } from "./constants.ts";
 import { listCloudflareDns } from "./dispatch/cloudflare.ts";
 import { quoteTaxi, taxiStatus } from "./dispatch/taxi.ts";
+import { quoteShop, shopStatus } from "./dispatch/shop.ts";
 import Anthropic from "@anthropic-ai/sdk";
 import type { Telegram } from "telegraf";
 import type { ActionType } from "./permissions.ts";
@@ -746,6 +747,55 @@ export const TOOLS: Anthropic.Tool[] = [
     input_schema: { type: "object", properties: {} },
   },
   {
+    name: "SHOP_QUOTE",
+    description:
+      "Поиск товаров в Яндекс Лавке через браузер на Mac владельца: адрес доставки из профиля, стоимость доставки и до трёх подходящих товаров с ценой на каждый запрос. Ничего не кладёт в корзину и не заказывает. Только когда владелец сам попросил в своём личном чате. Расчёт действует 15 минут.",
+    input_schema: {
+      type: "object",
+      properties: {
+        service: { type: "string", enum: ["lavka"], description: "Магазин; по умолчанию lavka." },
+        queries: {
+          type: "array",
+          items: { type: "string" },
+          description: "Что искать: по строке на товар, как сказал владелец («молоко 3,2%», «бананы»). До 10.",
+        },
+      },
+      required: ["queries"],
+    },
+  },
+  {
+    name: "ORDER_FOOD",
+    description:
+      "Заказать продукты в Яндекс Лавке по свежему расчёту SHOP_QUOTE: id, name и price_rub каждого товара — ровно из расчёта, qty — сколько просил владелец, delivery_rub — доставка из расчёта. Если по запросу несколько вариантов и владелец не назвал конкретный — спроси. Заказ ждёт подтверждения в чате, затем подписи Face ID на телефоне; результат придёт отдельным сообщением. Пока он не пришёл, не говори «заказано». Лимиты: сумма и число заказов в день ограничены сервером, итог на странице не может вырасти больше чем на 15%.",
+    input_schema: {
+      type: "object",
+      properties: {
+        service: { type: "string", enum: ["lavka"] },
+        lines: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string", description: "id товара из SHOP_QUOTE." },
+              name: { type: "string", description: "Название ровно как в SHOP_QUOTE." },
+              qty: { type: "number", description: "Количество, 1..20." },
+              price_rub: { type: "number", description: "Цена за штуку из SHOP_QUOTE, целые рубли." },
+            },
+            required: ["id", "name", "qty", "price_rub"],
+          },
+        },
+        delivery_rub: { type: "number", description: "Доставка из SHOP_QUOTE, целые рубли." },
+      },
+      required: ["service", "lines", "delivery_rub"],
+    },
+  },
+  {
+    name: "SHOP_STATUS",
+    description:
+      "Read-only: состояние последнего заказа в Яндекс Лавке на Mac владельца — принят, собирается, курьер в пути, доставлен, отменён. Только для владельца в его личном чате.",
+    input_schema: { type: "object", properties: { service: { type: "string", enum: ["lavka"] } } },
+  },
+  {
     name: "GENERATE_SVG_IMAGE",
     description:
       "Напиши валидный SVG (width/height в px, тёмные тексты на светлом фоне или наоборот, viewBox), бэкенд отрендерит его в PNG и отправит как фото. Размер SVG ≤ 200KB. Полезно для постеров, баннеров, схем, инфографики, мокапов UI.",
@@ -911,6 +961,7 @@ export const TOOL_NAMES = new Set<string>([
   "CLOUDFLARE_DNS",
   "ORDER_TAXI",
   "TAXI_CANCEL",
+  "ORDER_FOOD",
   // 2026-08-02: инструмент был объявлен в TOOLS, получил payload-валидатор и
   // case в диспатчере — но не попал сюда, поэтому executeTool отбивал его на
   // `unknown tool` ДО gateOrDispatch: ни строки в agent_actions, ни ошибки в
@@ -1577,6 +1628,12 @@ export async function executeTool(
   if (name === "TAXI_STATUS") {
     return fmt(await taxiStatus(ctx));
   }
+  if (name === "SHOP_QUOTE") {
+    return fmt(await quoteShop(i, ctx));
+  }
+  if (name === "SHOP_STATUS") {
+    return fmt(await shopStatus(i, ctx));
+  }
   if (name === "LIST_REMINDERS") {
     // Нативный клиент — не Telegram-чат, напоминаний у него нет.
     if (nativeTurnContext.getStore()) {
@@ -1732,10 +1789,10 @@ export async function executeTool(
   // apply the MAC_USER_IDS whitelist check. SEC-audit LOW-2: MAC_STOP also needs
   // it — without injection isUserAllowed(undefined) was always false, so the
   // emergency kill-switch was dead (failed closed). Inject for both.
-  // USERBOT_SEND_DM, CLOUDFLARE_DNS и такси: хендлер по _userId сверяет, что просил владелец из своей лички.
+  // USERBOT_SEND_DM, CLOUDFLARE_DNS, такси и Лавка: хендлер по _userId сверяет, что просил владелец из своей лички.
   if (
     at === "MAC_RUN_CLAUDE" || at === "MAC_STOP" || at === "MAC_CONTROL" || at === "USERBOT_SEND_DM" ||
-    at === "CLOUDFLARE_DNS" || at === "ORDER_TAXI" || at === "TAXI_CANCEL"
+    at === "CLOUDFLARE_DNS" || at === "ORDER_TAXI" || at === "TAXI_CANCEL" || at === "ORDER_FOOD"
   ) {
     const p = built.payload as { _userId?: string; _delegated?: boolean };
     p._userId = ctx.triggerUserId;

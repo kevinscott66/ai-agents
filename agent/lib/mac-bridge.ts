@@ -322,6 +322,7 @@ import { log, scrubSecretString } from "./log.ts";
 import { safeTick } from "./safe-timer.ts";
 import type { MacControl } from "./mac-control.ts";
 import type { TaxiRequest } from "./taxi.ts";
+import type { ShopRequest } from "./shop.ts";
 import {
   DEFAULT_MAC_BRIDGE_HOST,
   DEFAULT_MAC_BRIDGE_PORT,
@@ -472,10 +473,22 @@ export function sendTaxiToMac(request: TaxiRequest, userId: string | undefined, 
 
 export const MAC_TAXI_TIMEOUT_MS = 90_000;
 
-type ShortRequest = { operation: "calendar_today" | "open_workspace" } | { control: MacControl } | { taxi: TaxiRequest };
+/**
+ * Операция покупки на Mac (шаг 10). Условия те же, что у такси; таймаут ещё
+ * длиннее: prepare открывает страницу каждой позиции и оформление.
+ */
+export function sendShopToMac(request: ShopRequest, userId: string | undefined, chatId: number): Promise<MacRunResult> {
+  if (!userId || !isUserAllowed(userId) || String(chatId) !== userId || chatId <= 0) return Promise.reject(new Error("forbidden"));
+  if (!isMacOnline()) return Promise.reject(new Error("mac_offline"));
+  return sendMacRequest({ shop: request });
+}
+
+export const MAC_SHOP_TIMEOUT_MS = 180_000;
+
+type ShortRequest = { operation: "calendar_today" | "open_workspace" } | { control: MacControl } | { taxi: TaxiRequest } | { shop: ShopRequest };
 
 function sendMacRequest(req: MacRunRequest | ShortRequest): Promise<MacRunResult> {
-  const short = "operation" in req || "control" in req || "taxi" in req;
+  const short = "operation" in req || "control" in req || "taxi" in req || "shop" in req;
   return new Promise<MacRunResult>((resolve, reject) => {
     if (!activeSocket) {
       reject(new Error("mac_offline"));
@@ -497,7 +510,7 @@ function sendMacRequest(req: MacRunRequest | ShortRequest): Promise<MacRunResult
         cancelOnMac(id);
         p.reject(new Error("mac_timeout"));
       }
-    }, "taxi" in req ? MAC_TAXI_TIMEOUT_MS : short ? 30_000 : _readRunTimeoutMs());
+    }, "taxi" in req ? MAC_TAXI_TIMEOUT_MS : "shop" in req ? MAC_SHOP_TIMEOUT_MS : short ? 30_000 : _readRunTimeoutMs());
     pending.set(id, {
       id,
       stdout: "",
@@ -526,6 +539,8 @@ function sendMacRequest(req: MacRunRequest | ShortRequest): Promise<MacRunResult
             type: "control", id, control: req.control,
           } : "taxi" in req ? {
             type: "taxi", id, request: req.taxi,
+          } : "shop" in req ? {
+            type: "shop", id, request: req.shop,
           } : {
             type: req.provider === "codex" ? "run_codex" : "run",
             id,

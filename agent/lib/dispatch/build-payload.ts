@@ -22,6 +22,7 @@ import {
 import { dmTextError, normalizeDmUsername } from "../userbot-dm.ts";
 import { buildDnsChange, parseDnsProtected, parseDnsZones } from "../cloudflare-dns.ts";
 import { normalizeTaxiAddress, normalizeTaxiTariff, TAXI_ADDRESS_MAX, TAXI_TARIFF_KEYS } from "../taxi.ts";
+import { normalizeShopName, normalizeShopService, parseOrderFood, SHOP_ITEMS_MAX, SHOP_QTY_MAX } from "../shop.ts";
 import { MAC_CONTROL_COMMANDS, MAC_TITLE_MAX, parseMacControl, validMacTitle } from "../mac-control.ts";
 
 const ROLE_KEYS = CHARACTERS.map((c) => c.key);
@@ -965,6 +966,26 @@ export function buildPayload<T extends ActionType>(
     }
     case "TAXI_CANCEL": {
       const payload: PayloadFor<"TAXI_CANCEL"> = {};
+      return { ok: true, payload: payload as PayloadFor<T> };
+    }
+    case "ORDER_FOOD": {
+      const service = normalizeShopService(i.service);
+      if (!service) return { ok: false, error: "service must be: lavka" };
+      if (!Array.isArray(i.lines) || i.lines.length < 1 || i.lines.length > SHOP_ITEMS_MAX) {
+        return { ok: false, error: `lines — от 1 до ${SHOP_ITEMS_MAX} товаров из SHOP_QUOTE` };
+      }
+      const lines = i.lines.map((l) => {
+        const o = (l && typeof l === "object" ? l : {}) as Record<string, unknown>;
+        return { id: o.id, name: normalizeShopName(o.name), qty: o.qty, price_rub: o.price_rub };
+      });
+      const parsed = parseOrderFood({ service, lines, delivery_rub: i.delivery_rub ?? 0 });
+      if (!parsed) {
+        return {
+          ok: false,
+          error: `каждый товар — {id, name, price_rub} ровно из SHOP_QUOTE и qty 1..${SHOP_QTY_MAX}, без повторов; delivery_rub — целые рубли из расчёта`,
+        };
+      }
+      const payload: PayloadFor<"ORDER_FOOD"> = parsed;
       return { ok: true, payload: payload as PayloadFor<T> };
     }
     case "MAC_STOP": {

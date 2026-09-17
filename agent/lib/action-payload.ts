@@ -11,6 +11,7 @@ import type { MacControl } from "./mac-control.ts";
 import type { UserbotDm } from "./userbot-dm.ts";
 import type { DnsChange } from "./cloudflare-dns.ts";
 import type { TaxiTariff } from "./taxi.ts";
+import type { ShopService } from "./shop.ts";
 
 export interface SendMessagePayload {
   chatId?: number;
@@ -279,6 +280,18 @@ export interface OrderTaxiPayload {
   _delegated?: boolean;
 }
 
+/**
+ * ORDER_FOOD: товары из SHOP_QUOTE (id, название и цена ровно из расчёта),
+ * количество и доставка. Хендлер сверяет всё это с расчётом ещё раз.
+ */
+export interface OrderFoodPayload {
+  service: ShopService;
+  lines: Array<{ id: string; name: string; qty: number; price_rub: number }>;
+  delivery_rub: number;
+  _userId?: string;
+  _delegated?: boolean;
+}
+
 export interface MacRunClaudePayload {
   allowFallback?: boolean;
   provider?: "claude" | "codex";
@@ -455,6 +468,7 @@ export type PayloadByType = {
   CLOUDFLARE_DNS: CloudflareDnsPayload;
   ORDER_TAXI: OrderTaxiPayload;
   TAXI_CANCEL: { _userId?: string; _delegated?: boolean };
+  ORDER_FOOD: OrderFoodPayload;
   SCHEDULE_POST: SchedulePostPayload;
   CREATE_REMINDER: CreateReminderPayload;
   CANCEL_REMINDER: CancelReminderPayload;

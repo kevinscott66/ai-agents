@@ -192,4 +192,6 @@ export const INLINE_TOOL_NAMES = new Set<string>([
   "CLOUDFLARE_DNS_LIST",
   "TAXI_QUOTE",
   "TAXI_STATUS",
+  "SHOP_QUOTE",
+  "SHOP_STATUS",
 ]);
