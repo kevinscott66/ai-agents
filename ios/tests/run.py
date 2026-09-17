@@ -98,3 +98,20 @@ print("PASS: voice silence boundary and lossless UTF16-safe neural speech chunks
 ''')
     subprocess.run(['xcrun', 'swiftc', '-module-cache-path', str(temp / 'cache'), str(temp / 'VoicePolicy.swift'), '-o', str(temp / 'test')], check=True, timeout=90)
     subprocess.run([str(temp / 'test')], check=True, timeout=15)
+
+# Hybrid dictation must never overwrite a draft the user edited after dictating.
+with tempfile.TemporaryDirectory(prefix='agent-dictation-tests-') as scratch:
+    temp = Path(scratch)
+    source = (root / 'Agent/Voice.swift').read_text()
+    source = source[source.index('enum DictationDraft {'):source.index('/// Пишет буферы микрофона')]
+    (temp / 'Dictation.swift').write_text('import Foundation\n' + source + '''
+precondition(DictationDraft.replacement(draft: "привет клод", spoken: "привет клод", refined: " Привет, Claude. ") == "Привет, Claude.")
+precondition(DictationDraft.replacement(draft: "", spoken: "", refined: "Текст только с сервера") == "Текст только с сервера")
+precondition(DictationDraft.replacement(draft: "привет клод, поправил", spoken: "привет клод", refined: "Привет, Claude.") == nil)
+precondition(DictationDraft.replacement(draft: "", spoken: "привет клод", refined: "Привет, Claude.") == nil)
+precondition(DictationDraft.replacement(draft: "привет", spoken: "привет", refined: "  ") == nil)
+precondition(DictationDraft.replacement(draft: "Привет.", spoken: "Привет.", refined: "Привет.") == nil)
+print("PASS: dictation refinement replaces only an untouched draft with non-empty different text")
+''')
+    subprocess.run(['xcrun','swiftc','-module-cache-path',str(temp/'cache'),str(temp/'Dictation.swift'),'-o',str(temp/'test')],check=True,timeout=90)
+    subprocess.run([str(temp/'test')],check=True,timeout=15)
