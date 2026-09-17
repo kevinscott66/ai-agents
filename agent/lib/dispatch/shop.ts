@@ -23,12 +23,10 @@
  * Ожидающие подписи заявки живут в памяти процесса — как у такси
  * (lib/dispatch/taxi.ts): рестарт их теряет, слот дневного лимита остаётся занят.
  */
-import { randomBytes } from "node:crypto";
-import { parseUserIdList } from "../allowlist.ts";
 import type { PayloadByType } from "../action-payload.ts";
 import { sendShopToMac } from "../mac-bridge.ts";
 import { signedActions } from "../native-signing.ts";
-import { limitsFromEnv, maxRubFor, SignedActionRefusal, type SignedActions } from "../signed-actions.ts";
+import { limitsFromEnv, maxRubFor, type SignedActions } from "../signed-actions.ts";
 import { log } from "../log.ts";
 import {
   MARKET_DELIVERY_MAX,
@@ -58,17 +56,27 @@ import {
   type ShopService,
 } from "../shop.ts";
 import type { HandlerResult } from "./helpers.ts";
+import {
+  askYandexMac,
+  errorText,
+  gateIssueError,
+  inlineDelegated,
+  newYandexSession,
+  refusalCode,
+  serialQueue,
+  yandexOwnerRefusal,
+  yandexTeller,
+  type MacReply,
+  type YandexNotifier,
+} from "./yandex-common.ts";
 
 export type ShopHandlerContext = { agentKey: string; chatId: number };
 export type ShopInlineContext = { agentKey: string; chatId: number; triggerUserId?: string; delegationChain?: string[] };
 
-export type ShopNotifier = {
-  text: (userId: string, text: string) => Promise<void>;
-  photo: (userId: string, jpegBase64: string, caption: string) => Promise<void>;
-};
+export type ShopNotifier = YandexNotifier;
 
 export type ShopDeps = {
-  send: (request: ShopRequest, userId: string, chatId: number) => Promise<{ ok: boolean; stdout: string; error?: string }>;
+  send: (request: ShopRequest, userId: string, chatId: number) => Promise<MacReply>;
   gate: () => SignedActions;
   notify?: ShopNotifier;
   now: () => number;
@@ -79,7 +87,7 @@ const defaults: ShopDeps = {
   send: sendShopToMac,
   gate: signedActions,
   now: Date.now,
-  session: () => randomBytes(24).toString("base64url"),
+  session: newYandexSession,
 };
 let deps: ShopDeps = { ...defaults };
 
@@ -118,39 +126,29 @@ const quotes = new Map<string, Quote>();
 /** nonce → заявка, ждущая подписи. */
 const pendingOrders = new Map<string, PendingOrder>();
 /** Исполнитель один: второй заказ ждёт, пока первый не закончится. */
-let queue: Promise<void> = Promise.resolve();
+const executor = serialQueue();
 
 export function resetShopState() {
   quotes.clear();
   pendingOrders.clear();
-  queue = Promise.resolve();
+  executor.reset();
 }
 
+const OWNER_POLICY = { enabled: shopEnabled, disabledText: "покупки выключены (SHOP_ENABLED)", scope: "shopping", ownerNoun: "покупки" };
+
 function ownerRefusal(agentKey: string, chatId: number, userId: string | undefined, delegated: boolean): string | null {
-  if (!shopEnabled()) return "покупки выключены (SHOP_ENABLED)";
-  if (agentKey !== "orchestrator") return `forbidden: shopping is restricted to orchestrator (caller: ${agentKey})`;
-  const owners = parseUserIdList(process.env.MINIAPP_ADMIN_USER_IDS);
-  if (delegated || !userId || !owners.includes(Number(userId)) || String(chatId) !== userId) {
-    return "forbidden: покупки — только по просьбе владельца в его личном чате";
-  }
-  return null;
+  return yandexOwnerRefusal(OWNER_POLICY, agentKey, chatId, userId, delegated);
 }
 
 export type ShopToolResult = { ok: boolean } & Record<string, unknown>;
 
-const inlineDelegated = (ctx: ShopInlineContext) => (ctx.delegationChain ?? []).some((k) => k !== ctx.agentKey);
-
 /** Запрос к Mac → проверенный ответ. Ошибка моста — исключение с её кодом. */
-async function askMac(request: ShopRequest, userId: string, chatId: number): Promise<ShopOutcome> {
-  const res = await deps.send(request, userId, chatId);
-  if (!res.ok) throw new Error(res.error ?? "shop_failed");
-  return parseShopOutcome(res.stdout, request.op);
+function askMac(request: ShopRequest, userId: string, chatId: number): Promise<ShopOutcome> {
+  return askYandexMac<ShopRequest, ShopOutcome>(deps.send, parseShopOutcome, "shop_failed", request, userId, chatId);
 }
 
 const failText = (o: Extract<ShopOutcome, { ok: false }>) =>
   `${SHOP_FAIL_LABEL[o.code]}${o.price_rub ? ` (на странице ${o.price_rub} ₽)` : ""}`;
-
-const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /** SHOP_QUOTE: что нашлось по запросам. Ничего не кладёт в корзину; расчёт живёт SHOP_QUOTE_TTL_MS. */
 export async function quoteShop(input: Record<string, unknown>, ctx: ShopInlineContext): Promise<ShopToolResult> {
@@ -218,13 +216,6 @@ export async function shopStatus(input: Record<string, unknown>, ctx: ShopInline
     return { ok: false, error: errorText(e) };
   }
 }
-
-const GATE_TEXT: Partial<Record<string, string>> = {
-  no_active_key: "на телефоне нет активного ключа подписи — владелец регистрирует его в приложении",
-  limit_amount: "сумма выше лимита на один заказ (PAID_ACTION_MAX_RUB)",
-  limit_daily: "дневной лимит платных действий исчерпан",
-  payload_invalid: "заявка не проходит проверку гейта",
-};
 
 /** Позиции заявки → параметры подписи: магазин, ресторан, адрес, товары, доставка. */
 function gateParams(quote: Quote, lines: OrderLines, deliveryRub: number): Record<string, string | number> {
@@ -301,33 +292,18 @@ async function issueShopOrder(service: ShopService, payload: OrderInput, ctx: Sh
       },
     };
   } catch (e) {
-    if (e instanceof SignedActionRefusal) return { ok: false, error: GATE_TEXT[e.code] ?? e.code };
-    return { ok: false, error: errorText(e) };
+    return { ok: false, error: gateIssueError(e) };
   }
 }
 
-async function tell(userId: string, text: string, screenshot?: string) {
-  const notify = deps.notify;
-  if (!notify) {
-    log.warn("[shop] notifier is not configured", { text });
-    return;
-  }
-  try {
-    if (screenshot) await notify.photo(userId, screenshot, text);
-    else await notify.text(userId, text);
-  } catch (error) {
-    log.error("[shop] notify failed", { error: String(error) });
-  }
-}
+const tell = yandexTeller("shop", () => deps.notify);
 
 const PRE_ORDER: readonly string[] = SHOP_PRE_ORDER_CODES;
 const GATE_SERVICES: readonly string[] = Object.values(SHOP_GATE_SERVICE);
 
 /** Исполнитель подписанного заказа. Зовётся из native-signing после approve. */
 export function executeSignedShop(nonce: string): Promise<void> {
-  const run = queue.then(() => runSignedShop(nonce));
-  queue = run.catch(() => {});
-  return run;
+  return executor.run(() => runSignedShop(nonce));
 }
 
 async function runSignedShop(nonce: string): Promise<void> {
@@ -347,7 +323,7 @@ async function runSignedShop(nonce: string): Promise<void> {
     }
     maxFinal = claimed.maxFinalRub;
   } catch (e) {
-    await tell(userId, `${store}: заказ не сделан — подпись не принята (${e instanceof SignedActionRefusal ? e.code : errorText(e)}).`);
+    await tell(userId, `${store}: заказ не сделан — подпись не принята (${refusalCode(e)}).`);
     return;
   }
 
@@ -392,7 +368,7 @@ async function runSignedShop(nonce: string): Promise<void> {
     gate.checkFinal(nonce, prepared.total_rub, deps.now());
   } catch (e) {
     await abandon();
-    const code = e instanceof SignedActionRefusal ? e.code : errorText(e);
+    const code = refusalCode(e);
     await tell(userId, code === "price_deviation"
       ? `${store}: заказ не сделан — итог вырос до ${prepared.total_rub} ₽, подписано не больше ${maxFinal} ₽. Пересчитай и подпиши заново.`
       : `${store}: заказ не сделан — сверка итога не прошла (${code}).`);

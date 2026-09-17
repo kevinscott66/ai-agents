@@ -17,12 +17,10 @@
  * остаётся в гейте, подпись по нему проходит, но исполнять некому — строка
  * `approved` при этом занимает слот дневного лимита до конца дня.
  */
-import { randomBytes } from "node:crypto";
-import { parseUserIdList } from "../allowlist.ts";
 import type { PayloadByType } from "../action-payload.ts";
 import { sendTaxiToMac } from "../mac-bridge.ts";
 import { signedActions } from "../native-signing.ts";
-import { limitsFromEnv, maxRubFor, SignedActionRefusal, type SignedActions } from "../signed-actions.ts";
+import { limitsFromEnv, maxRubFor, type SignedActions } from "../signed-actions.ts";
 import { log } from "../log.ts";
 import {
   normalizeTaxiAddress,
@@ -39,6 +37,19 @@ import {
   type TaxiTariff,
 } from "../taxi.ts";
 import type { HandlerResult } from "./helpers.ts";
+import {
+  askYandexMac,
+  errorText,
+  gateIssueError,
+  inlineDelegated,
+  newYandexSession,
+  refusalCode,
+  serialQueue,
+  yandexOwnerRefusal,
+  yandexTeller,
+  type MacReply,
+  type YandexNotifier,
+} from "./yandex-common.ts";
 
 export const TAXI_SERVICE = "yandex_go";
 export const TAXI_ACTION = "order_taxi";
@@ -46,13 +57,10 @@ export const TAXI_ACTION = "order_taxi";
 export type TaxiHandlerContext = { agentKey: string; chatId: number };
 export type TaxiInlineContext = { agentKey: string; chatId: number; triggerUserId?: string; delegationChain?: string[] };
 
-export type TaxiNotifier = {
-  text: (userId: string, text: string) => Promise<void>;
-  photo: (userId: string, jpegBase64: string, caption: string) => Promise<void>;
-};
+export type TaxiNotifier = YandexNotifier;
 
 export type TaxiDeps = {
-  send: (request: TaxiRequest, userId: string, chatId: number) => Promise<{ ok: boolean; stdout: string; error?: string }>;
+  send: (request: TaxiRequest, userId: string, chatId: number) => Promise<MacReply>;
   gate: () => SignedActions;
   notify?: TaxiNotifier;
   now: () => number;
@@ -63,7 +71,7 @@ const defaults: TaxiDeps = {
   send: sendTaxiToMac,
   gate: signedActions,
   now: Date.now,
-  session: () => randomBytes(24).toString("base64url"),
+  session: newYandexSession,
 };
 let deps: TaxiDeps = { ...defaults };
 
@@ -84,40 +92,30 @@ const quotes = new Map<string, Quote>();
 /** nonce → заявка, ждущая подписи. */
 const pendingOrders = new Map<string, PendingOrder>();
 /** Исполнитель один: второй заказ ждёт, пока первый не закончится. */
-let queue: Promise<void> = Promise.resolve();
+const executor = serialQueue();
 
 export function resetTaxiState() {
   quotes.clear();
   pendingOrders.clear();
-  queue = Promise.resolve();
+  executor.reset();
 }
 
+const OWNER_POLICY = { enabled: taxiEnabled, disabledText: "такси выключено (TAXI_ENABLED)", scope: "taxi", ownerNoun: "такси" };
+
 function ownerRefusal(agentKey: string, chatId: number, userId: string | undefined, delegated: boolean): string | null {
-  if (!taxiEnabled()) return "такси выключено (TAXI_ENABLED)";
-  if (agentKey !== "orchestrator") return `forbidden: taxi is restricted to orchestrator (caller: ${agentKey})`;
-  const owners = parseUserIdList(process.env.MINIAPP_ADMIN_USER_IDS);
-  if (delegated || !userId || !owners.includes(Number(userId)) || String(chatId) !== userId) {
-    return "forbidden: такси — только по просьбе владельца в его личном чате";
-  }
-  return null;
+  return yandexOwnerRefusal(OWNER_POLICY, agentKey, chatId, userId, delegated);
 }
 
 export type TaxiToolResult = { ok: boolean } & Record<string, unknown>;
 
 
-const inlineDelegated = (ctx: TaxiInlineContext) => (ctx.delegationChain ?? []).some((k) => k !== ctx.agentKey);
-
 /** Запрос к Mac → проверенный ответ. Ошибка моста — исключение с её кодом. */
-async function askMac<Op extends TaxiRequest["op"]>(request: TaxiRequest & { op: Op }, userId: string, chatId: number): Promise<TaxiOutcome> {
-  const res = await deps.send(request, userId, chatId);
-  if (!res.ok) throw new Error(res.error ?? "taxi_failed");
-  return parseTaxiOutcome(res.stdout, request.op);
+function askMac<Op extends TaxiRequest["op"]>(request: TaxiRequest & { op: Op }, userId: string, chatId: number): Promise<TaxiOutcome> {
+  return askYandexMac<TaxiRequest, TaxiOutcome>(deps.send, parseTaxiOutcome, "taxi_failed", request, userId, chatId);
 }
 
 const failText = (o: Extract<TaxiOutcome, { ok: false }>) =>
   `${TAXI_FAIL_LABEL[o.code]}${o.price_rub ? ` (на странице ${o.price_rub} ₽)` : ""}`;
-
-const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /** TAXI_QUOTE: цены по тарифам. Ничего не заказывает; расчёт живёт TAXI_QUOTE_TTL_MS. */
 export async function quoteTaxi(input: Record<string, unknown>, ctx: TaxiInlineContext): Promise<TaxiToolResult> {
@@ -161,13 +159,6 @@ export async function taxiStatus(ctx: TaxiInlineContext): Promise<TaxiToolResult
   }
 }
 
-const GATE_TEXT: Partial<Record<string, string>> = {
-  no_active_key: "на телефоне нет активного ключа подписи — владелец регистрирует его в приложении",
-  limit_amount: "сумма выше лимита на один заказ (PAID_ACTION_MAX_RUB)",
-  limit_daily: "дневной лимит платных действий исчерпан",
-  payload_invalid: "заявка не проходит проверку гейта",
-};
-
 /**
  * ORDER_TAXI после одобрения в чате: сверка с расчётом и заявка в гейт.
  * Сам заказ не делается — его сделает исполнитель после подписи.
@@ -204,8 +195,7 @@ export async function handleOrderTaxi(payload: PayloadByType["ORDER_TAXI"], ctx:
       },
     };
   } catch (e) {
-    if (e instanceof SignedActionRefusal) return { ok: false, error: GATE_TEXT[e.code] ?? e.code };
-    return { ok: false, error: errorText(e) };
+    return { ok: false, error: gateIssueError(e) };
   }
 }
 
@@ -224,27 +214,13 @@ export async function handleTaxiCancel(payload: PayloadByType["TAXI_CANCEL"], ct
   }
 }
 
-async function tell(userId: string, text: string, screenshot?: string) {
-  const notify = deps.notify;
-  if (!notify) {
-    log.warn("[taxi] notifier is not configured", { text });
-    return;
-  }
-  try {
-    if (screenshot) await notify.photo(userId, screenshot, text);
-    else await notify.text(userId, text);
-  } catch (error) {
-    log.error("[taxi] notify failed", { error: String(error) });
-  }
-}
+const tell = yandexTeller("taxi", () => deps.notify);
 
 const PRE_ORDER: readonly string[] = TAXI_PRE_ORDER_CODES;
 
 /** Исполнитель подписанного заказа. Зовётся из native-signing после approve. */
 export function executeSignedTaxi(nonce: string): Promise<void> {
-  const run = queue.then(() => runSignedTaxi(nonce));
-  queue = run.catch(() => {});
-  return run;
+  return executor.run(() => runSignedTaxi(nonce));
 }
 
 async function runSignedTaxi(nonce: string): Promise<void> {
@@ -263,7 +239,7 @@ async function runSignedTaxi(nonce: string): Promise<void> {
     }
     maxFinal = claimed.maxFinalRub;
   } catch (e) {
-    await tell(userId, `Такси не заказано: подпись не принята (${e instanceof SignedActionRefusal ? e.code : errorText(e)}).`);
+    await tell(userId, `Такси не заказано: подпись не принята (${refusalCode(e)}).`);
     return;
   }
 
@@ -289,7 +265,7 @@ async function runSignedTaxi(nonce: string): Promise<void> {
     gate.checkFinal(nonce, prepared.price_rub, deps.now());
   } catch (e) {
     await deps.send({ op: "abandon", session }, userId, chatId).catch(() => {});
-    const code = e instanceof SignedActionRefusal ? e.code : errorText(e);
+    const code = refusalCode(e);
     await tell(userId, code === "price_deviation"
       ? `Такси не заказано: цена выросла до ${prepared.price_rub} ₽, подписано не больше ${maxFinal} ₽. Пересчитай и подпиши заново.`
       : `Такси не заказано: сверка цены не прошла (${code}).`);
