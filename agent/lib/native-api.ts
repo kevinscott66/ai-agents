@@ -1,4 +1,5 @@
 import { voiceApi } from './native-voice.ts';
+import { signingApi } from './native-signing.ts';
 import { compactNativeKnowledge, knowledgePrompt, knowledgeState, scopedKnowledgeReader } from "./native-knowledge-runtime.ts";
 import { attachmentId, parseUpload, locationValue, readMediaJson, type NativeMediaInput } from './native-media.ts';
 import { nativeAccess, type NativeAccess } from './native-access.ts';
@@ -29,6 +30,7 @@ export async function nativeApi(req: Request, injectedStore?: NativeAccess): Pro
     void req.body?.cancel().catch(() => {});
     return json({ error: 'unauthorized' }, 401);
   }
+  if (path.startsWith('/api/native/signing/') && identity) return signingApi(req,identity.userId,()=>process.env.NATIVE_APP_ENABLED==='true' && store.authenticate(token)?.userId===identity.userId && permitted(identity.userId));
   if (path.startsWith('/api/native/voice/') && identity) return voiceApi(req,identity.userId,()=>process.env.NATIVE_APP_ENABLED==='true' && store.authenticate(token)?.userId===identity.userId && permitted(identity.userId));
   let body: Record<string, unknown> = {};
   if (req.method === 'POST') {
