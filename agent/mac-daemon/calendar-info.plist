@@ -3,6 +3,8 @@
 <plist version="1.0"><dict>
 <key>CFBundleIdentifier</key><string>tech.dobropalm.agent.calendar</string>
 <key>CFBundleName</key><string>Агент — Календарь</string>
-<key>NSCalendarsFullAccessUsageDescription</key><string>Агент читает события дня для вашей личной утренней сводки.</string>
-<key>NSCalendarsUsageDescription</key><string>Агент читает события дня для вашей личной утренней сводки.</string>
+<key>NSCalendarsFullAccessUsageDescription</key><string>Агент читает события дня для вашей личной утренней сводки и добавляет события по вашей просьбе.</string>
+<key>NSCalendarsUsageDescription</key><string>Агент читает события дня для вашей личной утренней сводки и добавляет события по вашей просьбе.</string>
+<key>NSRemindersFullAccessUsageDescription</key><string>Агент показывает и добавляет напоминания по вашей просьбе.</string>
+<key>NSRemindersUsageDescription</key><string>Агент показывает и добавляет напоминания по вашей просьбе.</string>
 </dict></plist>

@@ -320,6 +320,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { SECOND_MS, MINUTE_MS } from "./time-constants.ts";
 import { log, scrubSecretString } from "./log.ts";
 import { safeTick } from "./safe-timer.ts";
+import type { MacControl } from "./mac-control.ts";
 import {
   DEFAULT_MAC_BRIDGE_HOST,
   DEFAULT_MAC_BRIDGE_PORT,
@@ -447,7 +448,21 @@ export function sendAssistantToMac(operation: "calendar_today" | "open_workspace
   return sendMacRequest({ operation });
 }
 
-function sendMacRequest(req: MacRunRequest | { operation: "calendar_today" | "open_workspace" }): Promise<MacRunResult> {
+/**
+ * Команда MAC_CONTROL. Те же условия, что у помощника: владелец из
+ * MAC_USER_IDS и только его личный чат — чужой или групповой чат не может
+ * заблокировать, усыпить или выключить его машину.
+ */
+export function sendControlToMac(control: MacControl, userId: string | undefined, chatId: number): Promise<MacRunResult> {
+  if (!userId || !isUserAllowed(userId) || String(chatId) !== userId || chatId <= 0) return Promise.reject(new Error("forbidden"));
+  if (!isMacOnline()) return Promise.reject(new Error("mac_offline"));
+  return sendMacRequest({ control });
+}
+
+type ShortRequest = { operation: "calendar_today" | "open_workspace" } | { control: MacControl };
+
+function sendMacRequest(req: MacRunRequest | ShortRequest): Promise<MacRunResult> {
+  const short = "operation" in req || "control" in req;
   return new Promise<MacRunResult>((resolve, reject) => {
     if (!activeSocket) {
       reject(new Error("mac_offline"));
@@ -469,7 +484,7 @@ function sendMacRequest(req: MacRunRequest | { operation: "calendar_today" | "op
         cancelOnMac(id);
         p.reject(new Error("mac_timeout"));
       }
-    }, "operation" in req ? 30_000 : _readRunTimeoutMs());
+    }, short ? 30_000 : _readRunTimeoutMs());
     pending.set(id, {
       id,
       stdout: "",
@@ -479,7 +494,7 @@ function sendMacRequest(req: MacRunRequest | { operation: "calendar_today" | "op
       resolve,
       reject,
       timer,
-      onProgress: "operation" in req ? undefined : req.onProgress,
+      onProgress: "project" in req ? req.onProgress : undefined,
     });
     const dropRun = (err: Error): void => {
       const p = pending.get(id);
@@ -494,6 +509,8 @@ function sendMacRequest(req: MacRunRequest | { operation: "calendar_today" | "op
         sendBridgeFrame(activeSocket,
           JSON.stringify("operation" in req ? {
             type: "assistant", id, operation: req.operation,
+          } : "control" in req ? {
+            type: "control", id, control: req.control,
           } : {
             type: req.provider === "codex" ? "run_codex" : "run",
             id,

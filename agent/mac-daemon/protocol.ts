@@ -19,6 +19,8 @@
  * рассинхрон версий моста и демона выглядит именно так.
  */
 
+import { parseMacControl, type MacControl } from "../lib/mac-control.ts";
+
 /** Режимы разрешений, которые понимает демон (их пять, у CLI — четыре). */
 export const RUN_MODES = [
   "ask",
@@ -82,8 +84,19 @@ export interface AssistantMsg {
   operation: "calendar_today" | "open_workspace";
 }
 
+/**
+ * Команда из закрытого списка MAC_CONTROL. Кривая команда — тот же отказ,
+ * что и неизвестный тип: демон исполняет только то, что разобрал сам.
+ */
+export interface ControlMsg {
+  type: "control";
+  id: string;
+  control: MacControl;
+}
+
 export type BridgeMsg =
   | AssistantMsg
+  | ControlMsg
   | RunMsg
   | PingMsg
   | AuthOkMsg
@@ -125,6 +138,11 @@ export function parseBridgeMsg(raw: unknown): ParsedMsg {
       if (!isNonEmptyString(m.id) || m.id.length > 100) return null;
       if (m.operation !== "calendar_today" && m.operation !== "open_workspace") return null;
       return { type: "assistant", id: m.id, operation: m.operation };
+    case "control": {
+      if (!isNonEmptyString(m.id) || m.id.length > 100) return null;
+      const control = parseMacControl(m.control);
+      return control ? { type: "control", id: m.id, control } : null;
+    }
     case "ping":
       return { type: "ping" };
     case "auth_challenge":

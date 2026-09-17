@@ -13,6 +13,7 @@ import type { Database } from "bun:sqlite";
 import { db } from "./db.ts";
 import { log } from "./log.ts";
 import { logAction } from "./audit.ts";
+import { approvalPolicyReason } from "./approval-policy.ts";
 
 export type AutonomyMode = "locked" | "manual" | "semi_auto" | "auto";
 
@@ -41,6 +42,8 @@ export const ACTION_TYPES = [
   "LIST_RECENT_MESSAGES",
   "MAC_RUN_CLAUDE",
   "MAC_STOP",
+  // Закрытый список команд на Mac владельца (lib/mac-control.ts).
+  "MAC_CONTROL",
   "SCHEDULE_POST",
   // Напоминания в чат-источник (lib/reminders.ts). LIST_REMINDERS — инлайновый.
   "CREATE_REMINDER",
@@ -154,6 +157,7 @@ export const CALLER_RESTRICTED: Record<string, string> = {
   // must not be the sole gate for RCE on the owner's machine).
   MAC_RUN_CLAUDE: "orchestrator",
   MAC_STOP: "orchestrator",
+  MAC_CONTROL: "orchestrator",
   // Создание канала от имени владельца + назначение админов — действие реального
   // аккаунта; только лид (orchestrator) как контролёр процесса.
   CREATE_TEAM_CHANNEL: "orchestrator",
@@ -300,7 +304,7 @@ export function isDelegatedMacAction(
   actionType: ActionType,
   payload: unknown,
 ): boolean {
-  if (actionType !== "MAC_RUN_CLAUDE" && actionType !== "MAC_STOP") return false;
+  if (actionType !== "MAC_RUN_CLAUDE" && actionType !== "MAC_STOP" && actionType !== "MAC_CONTROL") return false;
   return (payload as { _delegated?: unknown } | undefined)?._delegated === true;
 }
 
@@ -325,7 +329,8 @@ export function payloadForcesApproval(
   if (isDelegatedMacAction(actionType, payload)) {
     return "delegated Mac action requires approval";
   }
-  return null;
+  // Деньги, DNS, main, удаление, выключение, сообщения третьим — lib/approval-policy.ts.
+  return approvalPolicyReason(actionType, payload);
 }
 
 /**

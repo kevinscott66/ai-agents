@@ -236,8 +236,12 @@ describe("голос владельца: человек обязателен в 
   });
 
   test("без флага те же действия в auto проходят без человека", () => {
+    // Кроме удаления: политика владельца (lib/approval-policy.ts) требует
+    // человека на любое DELETE_MESSAGE, от чьего бы имени оно ни шло.
     for (const actionType of USERBOT_FORCE_APPROVAL) {
-      expect(payloadForcesApproval(actionType, {})).toBeNull();
+      const reason = payloadForcesApproval(actionType, {});
+      if (actionType === "DELETE_MESSAGE") expect(reason).toContain("удаление");
+      else expect(reason).toBeNull();
     }
   });
 

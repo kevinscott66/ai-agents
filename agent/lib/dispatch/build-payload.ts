@@ -19,6 +19,7 @@ import {
   parseReminderAt,
   REMINDER_TEXT_MAX,
 } from "../reminder-time.ts";
+import { MAC_CONTROL_COMMANDS, MAC_TITLE_MAX, parseMacControl, validMacTitle } from "../mac-control.ts";
 
 const ROLE_KEYS = CHARACTERS.map((c) => c.key);
 const ROLE_KEYS_SET = new Set<string>(ROLE_KEYS);
@@ -887,6 +888,43 @@ export function buildPayload<T extends ActionType>(
         chatId,
         id,
       };
+      return { ok: true, payload: payload as PayloadFor<T> };
+    }
+    case "MAC_CONTROL": {
+      // Время приходит строкой, как у CREATE_REMINDER (без смещения — МСК), и
+      // превращается в мс здесь; дальше команду сверяет строгий parseMacControl.
+      const command = typeof i.command === "string" ? i.command : "";
+      if (!(MAC_CONTROL_COMMANDS as readonly string[]).includes(command)) {
+        return { ok: false, error: `command must be one of: ${MAC_CONTROL_COMMANDS.join(", ")}` };
+      }
+      const raw: Record<string, unknown> = { command };
+      if (command === "volume") raw.level = i.level;
+      if (command === "open_app") raw.app = typeof i.app === "string" ? i.app.trim().toLowerCase() : i.app;
+      if (command === "reminder_add" || command === "event_add") {
+        if (!validMacTitle(i.title)) return { ok: false, error: `title is required: one line, up to ${MAC_TITLE_MAX} chars` };
+        raw.title = (i.title as string).trim();
+      }
+      const time = (field: string, key: string): string | null => {
+        const at = parseReminderAt(i[field]);
+        if (!at.ok) return at.error.replace(/^at\b/, field);
+        const win = checkReminderWindow(at.at, Date.now());
+        if (!win.ok) return win.error.replace(/^at\b/, field);
+        raw[key] = at.at;
+        return null;
+      };
+      if (command === "reminder_add" && i.due !== undefined) {
+        const err = time("due", "dueAt");
+        if (err) return { ok: false, error: err };
+      }
+      if (command === "event_add") {
+        const err = time("start", "startAt") ?? time("end", "endAt");
+        if (err) return { ok: false, error: err };
+      }
+      const control = parseMacControl(raw);
+      if (!control) {
+        return { ok: false, error: `invalid ${command}: level 0..100, app alias [a-z0-9_-], event end after start and at most 24h` };
+      }
+      const payload: PayloadFor<"MAC_CONTROL"> = control;
       return { ok: true, payload: payload as PayloadFor<T> };
     }
     case "MAC_STOP": {

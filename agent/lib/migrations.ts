@@ -1555,6 +1555,21 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    // Шаг 6: MAC_CONTROL — закрытый список команд на Mac владельца
+    // (lib/mac-control.ts). Только оркестратор, без апрува по таблице: команды
+    // обратимые и уходят лишь из личного чата владельца (sendControlToMac).
+    // Выключение, перезагрузка и делегированный вызов требуют подтверждения
+    // при любой автономии — это payloadForcesApproval, а не эта строка.
+    name: "058_seed_mac_control",
+    up: (db) => {
+      const ins = db.prepare(
+        `INSERT OR IGNORE INTO permissions(agent_key, action_type, allowed, requires_approval)
+         VALUES (?, 'MAC_CONTROL', ?, 0)`,
+      );
+      for (const c of CHARACTERS) ins.run(c.key, c.key === "orchestrator" ? 1 : 0);
+    },
+  },
 ];
 
 /**

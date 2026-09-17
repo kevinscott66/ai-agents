@@ -73,6 +73,7 @@ import {
 import {
   handleMacRunClaude,
   handleMacStop,
+  handleMacControl,
   type MacHandlerContext,
   type MacBridge,
 } from "./dispatch/mac.ts";
@@ -975,6 +976,10 @@ export async function dispatchAction<T extends ActionType>(
       case "MAC_STOP": {
         const p = payload as PayloadByType["MAC_STOP"];
         return await handleMacStop(p, ctx as MacHandlerContext);
+      }
+      case "MAC_CONTROL": {
+        const p = payload as PayloadByType["MAC_CONTROL"];
+        return await handleMacControl(p, ctx as MacHandlerContext);
       }
       case "COMMENT_TASK": {
         const p = payload as PayloadByType["COMMENT_TASK"];

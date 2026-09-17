@@ -3,7 +3,7 @@ import { nativeTurnContext } from "./native-context.ts";
  * C5/R-A: Anthropic tool_use схема + диспатчер.
  *
  * Аудит 2026-09-11: здесь было написано «все 12 инструментов идут через единый
- * `gateOrDispatch`». Неверно дважды. Инструментов в `TOOL_NAMES` двадцать семь
+ * `gateOrDispatch`». Неверно дважды. Инструментов в `TOOL_NAMES` двадцать восемь
  * (число сверяется тестом audit-2026-09-11-tool-counts: в круге 29 оно уже
  * успело протухнуть на два, пока список рос); тринадцать — это
  * `INLINE_TOOL_NAMES` из `constants.ts`, то есть ровно тот набор, который через
@@ -640,6 +640,27 @@ export const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "MAC_CONTROL",
+    description:
+      "Команда из закрытого списка на личном Mac владельца, только в его личном чате: lock (экран), sleep, volume (level 0..100), mute, unmute, open_app (app — короткий псевдоним из списка владельца, например notes; путь или bundle id не принимаются), reminders (показать незавершённые напоминания), reminder_add (title, необязательный due), event_add (title, start, end — не длиннее 24 часов), shutdown, restart. Время — как у CREATE_REMINDER: ISO со смещением или «2026-09-18 10:00» по Москве. shutdown и restart всегда ждут подтверждения владельца. Для произвольной работы с файлами и проектами — MAC_RUN_CLAUDE, а не этот инструмент.",
+    input_schema: {
+      type: "object",
+      properties: {
+        command: {
+          type: "string",
+          enum: ["lock", "sleep", "volume", "mute", "unmute", "open_app", "reminders", "reminder_add", "event_add", "shutdown", "restart"],
+        },
+        level: { type: "number", description: "Громкость 0..100, только для volume." },
+        app: { type: "string", description: "Псевдоним приложения, только для open_app." },
+        title: { type: "string", description: "Название напоминания или события, до 200 символов." },
+        due: { type: "string", description: "Срок напоминания, необязательно." },
+        start: { type: "string", description: "Начало события." },
+        end: { type: "string", description: "Конец события." },
+      },
+      required: ["command"],
+    },
+  },
+  {
     name: "GENERATE_SVG_IMAGE",
     description:
       "Напиши валидный SVG (width/height в px, тёмные тексты на светлом фоне или наоборот, viewBox), бэкенд отрендерит его в PNG и отправит как фото. Размер SVG ≤ 200KB. Полезно для постеров, баннеров, схем, инфографики, мокапов UI.",
@@ -800,6 +821,7 @@ export const TOOL_NAMES = new Set<string>([
   "LIST_RECENT_MESSAGES",
   "MAC_RUN_CLAUDE",
   "MAC_STOP",
+  "MAC_CONTROL",
   // 2026-08-02: инструмент был объявлен в TOOLS, получил payload-валидатор и
   // case в диспатчере — но не попал сюда, поэтому executeTool отбивал его на
   // `unknown tool` ДО gateOrDispatch: ни строки в agent_actions, ни ошибки в
@@ -1612,7 +1634,7 @@ export async function executeTool(
   // apply the MAC_USER_IDS whitelist check. SEC-audit LOW-2: MAC_STOP also needs
   // it — without injection isUserAllowed(undefined) was always false, so the
   // emergency kill-switch was dead (failed closed). Inject for both.
-  if (at === "MAC_RUN_CLAUDE" || at === "MAC_STOP") {
+  if (at === "MAC_RUN_CLAUDE" || at === "MAC_STOP" || at === "MAC_CONTROL") {
     const p = built.payload as { _userId?: string; _delegated?: boolean };
     p._userId = ctx.triggerUserId;
     // Аудит 2026-08-13: делегат теперь видит triggerUserId (раньше терял его и
