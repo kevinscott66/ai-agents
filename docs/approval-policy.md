@@ -21,12 +21,23 @@
 | `push_main` | `REVIEW_AND_MERGE_PR`; промпт с `git push … main`, force-push, «пуш в main» |
 | `delete` | `DELETE_MESSAGE`; промпт с `rm -rf`, `git reset --hard`, `drop table`, «удали» |
 | `shutdown` | `MAC_CONTROL` с `shutdown`/`restart`; промпт про shutdown/reboot/«выключи мак» |
-| `third_party_message` | `SEND_MESSAGE`, `SET_REACTION`, `DELETE_MESSAGE` с `via_userbot: true`; промпт «отправь сообщение», «напиши ему» |
+| `third_party_message` | `USERBOT_SEND_DM` (личное сообщение по @username); `SEND_MESSAGE`, `SET_REACTION`, `DELETE_MESSAGE` с `via_userbot: true`; промпт «отправь сообщение», «напиши ему» |
 
 Правила для промпта `MAC_RUN_CLAUDE` — эвристика, а не песочница: они не
 применяются к `mode: "plan"` (план ничего не исполняет), и их можно обойти
 переформулировкой. Это пол, а не единственный рубеж: остаются
 `MAC_DENIED_PROMPT_PATTERNS`, права macOS и ревью изменений.
+
+## Личные сообщения от аккаунта владельца
+
+`USERBOT_SEND_DM {username, text}` (`agent/lib/userbot-dm.ts`):
+
+- выключено до `USERBOT_DM_ENABLED=true`;
+- только оркестратор, только по просьбе владельца (`MINIAPP_ADMIN_USER_IDS`) в его личном чате, не делегированием;
+- адресат — только публичный @username: не id и не телефон; перед отправкой проверяется, что это человек, а не бот, канал или сам владелец;
+- одно сообщение до 4096 символов без разметки; невидимые и управляющие символы — отказ;
+- карточка подтверждения показывает адресата и весь текст без обрезки;
+- лимиты: 20 заявок в час и общее анти-flood ведро аккаунта.
 
 ## Что вне политики
 

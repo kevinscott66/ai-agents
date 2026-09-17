@@ -56,6 +56,9 @@ const RULES: Record<string, { perAgent?: BucketRule; global?: BucketRule }> = {
   SET_REACTION: { perAgent: { windowMs: MINUTE_MS, max: DEFAULT_SET_REACTION_RATE_LIMIT } },
   DELEGATE_TO_ROLE: { perAgent: { windowMs: MINUTE_MS, max: 6 } },
   WRITE_WIKI: { perAgent: { windowMs: MINUTE_MS, max: 5 } },
+  // Личные сообщения от аккаунта владельца: каждое одобряется руками, но
+  // цикл заявок не должен заваливать очередь и аккаунт. 20 в час.
+  USERBOT_SEND_DM: { perAgent: { windowMs: HOUR_MS, max: 20 } },
 };
 
 const ALL_AGENT_TOOLS_RULE: BucketRule = { windowMs: MINUTE_MS, max: 60 };

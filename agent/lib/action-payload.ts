@@ -8,6 +8,7 @@
 import type { ActionType } from "./permissions.ts";
 import type { TaskStatus } from "./tasks.ts";
 import type { MacControl } from "./mac-control.ts";
+import type { UserbotDm } from "./userbot-dm.ts";
 
 export interface SendMessagePayload {
   chatId?: number;
@@ -253,6 +254,13 @@ export interface WriteWikiPayload {
  */
 export type MacControlPayload = MacControl & { _userId?: string; _delegated?: boolean };
 
+/**
+ * Личное сообщение от аккаунта владельца (lib/userbot-dm.ts). `username` уже
+ * нормализован; `_userId`/`_delegated` дописывает tool-loop — хендлер по ним
+ * проверяет, что просил сам владелец из своей лички.
+ */
+export type UserbotSendDmPayload = UserbotDm & { _userId?: string; _delegated?: boolean };
+
 export interface MacRunClaudePayload {
   allowFallback?: boolean;
   provider?: "claude" | "codex";
@@ -425,6 +433,7 @@ export type PayloadByType = {
    */
   MAC_STOP: { _userId?: string; _delegated?: boolean };
   MAC_CONTROL: MacControlPayload;
+  USERBOT_SEND_DM: UserbotSendDmPayload;
   SCHEDULE_POST: SchedulePostPayload;
   CREATE_REMINDER: CreateReminderPayload;
   CANCEL_REMINDER: CancelReminderPayload;
