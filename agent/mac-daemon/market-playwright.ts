@@ -2,8 +2,8 @@
  * ShopPage Яндекс Маркета поверх Playwright. Вкладка и помощники — общие с
  * Лавкой (shop-playwright.ts), вёрстка — только из market-selectors.ts.
  *
- * Товар — `<modelId>-<sku>`: у Маркета одна модель продаётся в разных
- * вариантах, и заказываем ровно подписанный sku. Если после «В корзину»
+ * Товар — номер карточки `/card/<slug>/<номер>`: у каждого варианта (объём,
+ * цвет) своя карточка, заказываем ровно подписанную. Если после «В корзину»
  * страница просит выбрать размер или цвет — отказ `options_required`, если
  * открылось своё окно — окно закрывается, товар не заказывается. Оплата — только
  * сохранённой картой: «при получении» агент не выбирает.
@@ -27,7 +27,7 @@ import {
 import { hostMatches, NAV_TIMEOUT_MS, pageKit, QTY_CLICKS_MAX, UI_TIMEOUT_MS, visible, wait } from "./shop-playwright.ts";
 import type { CartRow, SearchCard, ShopPage } from "./shop.ts";
 
-/** `/card/<slug>/<modelId>?sku=<sku>` или `/product--<slug>/<modelId>?sku=<sku>` → `modelId-sku`. */
+/** `/card/<slug>/<номер>?…` → номер карточки. Параметры ссылки (рекламные метки, оффер) не важны. */
 export function marketIdFromHref(href: unknown): string | null {
   if (typeof href !== "string") return null;
   let url: URL;
@@ -37,17 +37,11 @@ export function marketIdFromHref(href: unknown): string | null {
     return null;
   }
   if (url.origin !== MARKET_ORIGIN) return null;
-  const m = url.pathname.match(/^\/(?:card\/[^/]+|product--[^/]+|product)\/(\d+)\/?$/);
-  const sku = url.searchParams.get("sku");
-  if (!m || !sku) return null;
-  const id = `${m[1]}-${sku}`;
-  return MARKET_PRODUCT_ID.test(id) ? id : null;
+  const m = url.pathname.match(/^\/card\/[^/]+\/(\d+)\/?$/);
+  return m && MARKET_PRODUCT_ID.test(m[1]!) ? m[1]! : null;
 }
 
-export const marketUrlFor = (id: string) => {
-  const [model, sku] = id.split("-");
-  return marketProductUrl(model!, sku!);
-};
+export const marketUrlFor = (id: string) => marketProductUrl(id);
 
 export function marketShopPage(page: any): ShopPage {
   const { bodyText, goto, text, totalNear, screenshot, probe, stateFromBody } = pageKit(page);
@@ -81,7 +75,7 @@ export function marketShopPage(page: any): ShopPage {
     async address() {
       const label = await text(page.locator(MARKET_TESTID.addressButton).first());
       if (!label || MARKET_TEXT.addressUnset.test(label)) return null;
-      const s = label.replace(/\s+/g, " ").trim();
+      const s = label.replace(/\s+/g, " ").replace(MARKET_TEXT.addressPrefix, "").replace(/ ,/g, ",").trim();
       return s.length >= 3 && s.length <= 200 ? s : null;
     },
     // Доставка Маркета зависит от продавцов и видна только на оформлении.
@@ -115,7 +109,8 @@ export function marketShopPage(page: any): ShopPage {
       if (!name) return { name: null, price_rub: null, available: false };
       const offerVisible = await visible(offer(), UI_TIMEOUT_MS);
       const offerText = offerVisible ? (await text(offer())) ?? "" : "";
-      const price = parseShopRubles(await text(offer().locator(MARKET_TESTID.productPrice).first()));
+      // Цена оффера — первая на странице: ниже идут цены похожих товаров.
+      const price = parseShopRubles(await text(page.locator(MARKET_TESTID.productPrice).first()));
       return { name, price_rub: price, available: offerVisible && !MARKET_TEXT.outOfStock.test(offerText) };
     },
     async setProductQty(qty) {

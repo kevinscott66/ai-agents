@@ -6,8 +6,11 @@
  * сверяются на живом профиле владельца: `bun mac-daemon/taxi.ts probe`
  * печатает дерево доступности текущей страницы. Если локатор не нашёл
  * элемент, исполнитель останавливается с отказом и скриншотом — догадок нет.
+ *
+ * Сверено на живом профиле в сентябре 2026: поля «Откуда» и «Куда?», тарифы —
+ * radio внутри radiogroup «Выберите тариф» с текстом «10 мин Эконом Цена 654 ₽».
  */
-import type { TaxiOrderState } from "../lib/taxi.ts";
+import type { TaxiOrderState, TaxiTariff } from "../lib/taxi.ts";
 
 export const TAXI_START_URL = "https://taxi.yandex.ru/";
 
@@ -23,15 +26,25 @@ export const TAXI_TEXT = {
   cancel: /^Отменить(?: заказ| поездку)?$/,
   cancelConfirm: /^(?:Да, отменить|Отменить поездку|Отменить заказ)$/,
   addressNotFound: /Адрес не найден|Ничего не нашлось|Не удалось найти/i,
+  tariffGroup: /^Выберите тариф/,
 };
+
+/** Название тарифа на странице; «Бизнес» там латиницей. */
+export const TAXI_PAGE_TARIFFS: Record<TaxiTariff, string> = {
+  econom: "Эконом",
+  comfort: "Комфорт",
+  comfortplus: "Комфорт+",
+  business: "Business",
+  minivan: "Минивэн",
+};
+
+/** «Цена от 135 ₽» — минимальная цена, пока не выбрано «Куда»; заказывать по ней нельзя. */
+export const TAXI_PRICE_FROM = /от\s*\d/;
 
 /** Капча и антибот. Страницу с ними не трогаем вовсе — только скриншот. */
 export const TAXI_CAPTCHA_URL = /showcaptcha|\/captcha|checkcaptcha/i;
 export const TAXI_CAPTCHA_TEXT = /Я не робот|Подтвердите, что запросы отправляли вы|SmartCaptcha|Вы не робот\?/i;
 export const TAXI_CAPTCHA_FRAME = /captcha/i;
-
-/** Подсказки адреса: первая из выпадающего списка. */
-export const TAXI_SUGGESTION_ROLES = ["option", "listitem"] as const;
 
 /** Порядок важен: более поздние стадии проверяются раньше. */
 export const TAXI_STATE_TEXT: ReadonlyArray<[TaxiOrderState, RegExp]> = [
@@ -50,3 +63,5 @@ export const TAXI_ETA_TEXT = /\d+\s*(?:ч\s*\d+\s*)?мин/;
 
 /** Сколько ждать смены состояния после нажатия «Заказать» и «Отменить». */
 export const TAXI_STATE_POLL = { attempts: 15, intervalMs: 1_000 };
+/** Сколько ждать точной цены после выбора адресов. */
+export const TAXI_PRICE_POLL = { attempts: 30, intervalMs: 500 };

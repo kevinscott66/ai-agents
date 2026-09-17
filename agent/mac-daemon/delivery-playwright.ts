@@ -3,20 +3,23 @@
  * профилем доставки. Устроен как taxi-playwright.ts: playwright-core грузится
  * динамически, никаких «стелс»-приёмов, капча — остановка и скриншот.
  *
- * Локаторы НЕ сверены (см. delivery-selectors.ts).
+ * Что сверено, а что нет — в delivery-selectors.ts.
  */
 import { parseEtaMinutes, TAXI_SCREENSHOT_B64_MAX } from "../lib/taxi.ts";
-import { DELIVERY_TARIFFS, DELIVERY_TARIFF_KEYS, type DeliveryTariff } from "../lib/delivery.ts";
+import { DELIVERY_TARIFF_KEYS, type DeliveryTariff } from "../lib/delivery.ts";
 import {
   DELIVERY_CAPTCHA_FRAME,
   DELIVERY_CAPTCHA_TEXT,
   DELIVERY_CAPTCHA_URL,
   DELIVERY_ETA_TEXT,
   DELIVERY_LOGIN_HOSTS,
+  DELIVERY_OFFER_ETA,
+  DELIVERY_OFFER_INPUT,
+  DELIVERY_OFFERS,
   DELIVERY_ORDER_HOSTS,
+  DELIVERY_PRICE_POLL,
   DELIVERY_START_URL,
   DELIVERY_STATE_TEXT,
-  DELIVERY_SUGGESTION_ROLES,
   DELIVERY_TEXT,
 } from "./delivery-selectors.ts";
 import type { DeliveryBrowser, DeliveryEnv, DeliveryPage, DeliveryTariffRow } from "./delivery.ts";
@@ -24,14 +27,15 @@ import { parseTariffCard } from "./taxi.ts";
 import {
   ariaProbe,
   bodyText as pageBodyText,
+  fillAddress,
   hostMatches,
   jpegScreenshot,
   launchProfileChrome,
   NAV_TIMEOUT_MS,
-  readTariffCards,
   UI_TIMEOUT_MS,
   visible,
   wait,
+  waitFor,
 } from "./playwright-kit.ts";
 
 export async function launchPlaywrightDelivery(env: DeliveryEnv, profileDir: string, opts: { headless?: boolean } = {}): Promise<DeliveryBrowser> {
@@ -49,18 +53,26 @@ export function playwrightDeliveryPage(page: any): DeliveryPage {
   const field = (name: RegExp) =>
     page.getByRole("textbox", { name }).or(page.getByPlaceholder(name)).first();
   const orderLocator = () => page.getByRole("button", { name: DELIVERY_TEXT.order }).first();
+  /** Варианты срока: значение radio и текст ближайшего предка, где этот radio единственный. */
+  const readOffers = (): Promise<Array<{ value: string; checked: boolean; text: string }>> =>
+    page.evaluate((selector: string) => {
+      const doc = (globalThis as any).document;
+      return [...doc.querySelectorAll(selector)].map((input: any) => {
+        let box: any = input;
+        while (box.parentElement && box.parentElement.querySelectorAll(selector).length === 1) box = box.parentElement;
+        return { value: String(input.value), checked: input.checked === true, text: String(box.innerText ?? "").replace(/\s+/g, " ").slice(0, 200) };
+      });
+    }, DELIVERY_OFFER_INPUT).catch(() => []);
+  const offerEta = (text: string): number | null => {
+    const m = text.match(DELIVERY_OFFER_ETA);
+    if (!m || (!m[1] && !m[2])) return null;
+    return Number(m[1] ?? 0) * 60 + Number(m[2] ?? 0);
+  };
 
   return {
     async open() {
       await page.goto(DELIVERY_START_URL, { waitUntil: "domcontentloaded" });
       await page.waitForLoadState("load", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
-      const tab = page.getByRole("tab", { name: DELIVERY_TEXT.tab })
-        .or(page.getByRole("button", { name: DELIVERY_TEXT.tab }))
-        .or(page.getByRole("link", { name: DELIVERY_TEXT.tab })).first();
-      if (await visible(tab, 3_000)) {
-        await tab.click();
-        await wait(700);
-      }
     },
     url: () => String(page.url()),
     async guard() {
@@ -75,47 +87,41 @@ export function playwrightDeliveryPage(page: any): DeliveryPage {
       return "ok";
     },
     async setRoute(from, to) {
-      for (const [name, address] of [[DELIVERY_TEXT.from, from], [DELIVERY_TEXT.to, to]] as const) {
-        const input = field(name);
+      const boxes = page.getByRole("textbox", { name: DELIVERY_TEXT.address });
+      for (const [i, address] of [[0, from], [1, to]] as const) {
+        const input = boxes.nth(i);
         if (!(await visible(input, UI_TIMEOUT_MS))) return false;
-        await input.click();
-        await input.fill("");
-        await input.fill(address);
+        if (!(await fillAddress(page, input, address))) return false;
         if (DELIVERY_TEXT.addressNotFound.test(await bodyText())) return false;
-        let picked = false;
-        for (const role of DELIVERY_SUGGESTION_ROLES) {
-          const option = page.getByRole(role).first();
-          if (await visible(option, role === DELIVERY_SUGGESTION_ROLES[0] ? UI_TIMEOUT_MS : 1_000)) {
-            await option.click();
-            picked = true;
-            break;
-          }
-        }
-        if (!picked) return false;
-        await wait(700);
       }
-      await page.waitForLoadState("networkidle", { timeout: UI_TIMEOUT_MS }).catch(() => {});
+      await waitFor(async () => (await readOffers()).some((o) => /₽/.test(o.text)), DELIVERY_PRICE_POLL.attempts, DELIVERY_PRICE_POLL.intervalMs);
       return true;
     },
     async tariffs() {
-      const labels = DELIVERY_TARIFF_KEYS.map((k) => [k, DELIVERY_TARIFFS[k]]);
-      const cards = await readTariffCards(page, labels);
-      return cards
-        .filter((c) => (DELIVERY_TARIFF_KEYS as string[]).includes(c.tariff))
-        .map((c): DeliveryTariffRow => ({ tariff: c.tariff as DeliveryTariff, selected: c.selected === true, ...parseTariffCard(c.text) }));
+      const offers = await readOffers();
+      return DELIVERY_TARIFF_KEYS.flatMap((tariff): DeliveryTariffRow[] => {
+        const offer = offers.find((o) => o.value === DELIVERY_OFFERS[tariff]);
+        if (!offer || !/₽/.test(offer.text)) return [];
+        return [{ tariff, selected: offer.checked, price_rub: parseTariffCard(offer.text).price_rub, eta_min: offerEta(offer.text) }];
+      });
     },
     async selectTariff(tariff) {
-      await page.getByText(DELIVERY_TARIFFS[tariff], { exact: true }).first().click();
+      const value = DELIVERY_OFFERS[tariff];
+      if (!value) return;
+      await page.locator(`${DELIVERY_OFFER_INPUT}[value="${value}"]`).first().check({ force: true }).catch(() => {});
       await wait(700);
     },
     async contactRequired() {
-      const input = field(DELIVERY_TEXT.contact);
-      if (!(await visible(input, 1_000))) return false;
-      try {
-        return String(await input.inputValue()).trim() === "";
-      } catch {
-        return true;
+      // Телефонов два — отправителя и получателя; пустой любой из них — стоп.
+      for (const input of await page.getByRole("textbox", { name: DELIVERY_TEXT.contact }).all()) {
+        if (!(await visible(input))) continue;
+        try {
+          if (String(await input.inputValue()).trim() === "") return true;
+        } catch {
+          return true;
+        }
       }
+      return false;
     },
     async setComment(comment) {
       const input = field(DELIVERY_TEXT.comment);

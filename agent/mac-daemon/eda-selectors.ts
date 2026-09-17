@@ -1,20 +1,20 @@
 /**
  * Всё, что знает о вёрстке Яндекс Еды, — здесь и только здесь.
  *
- * Сверено на публичных страницах без входа (сентябрь 2026): ссылки ресторанов
- * `/r/<бренд>?placeSlug=<slug>`, заголовок сниппета ресторана и карточки меню
- * `product-card-v2-*` (название, цена, вес, кнопка «В корзину»).
+ * Сверено (сентябрь 2026, публичные страницы и живой профиль с адресом): ссылки
+ * ресторанов `/r/<бренд>?placeSlug=<slug>`, заголовки ресторанов на главной и в
+ * поиске, поиск `/search?query=`, адрес в шапке, «Доставка N ₽» на странице
+ * ресторана и карточки меню `product-card-v2-*` (название, цена, вес, «В корзину»).
  *
- * НЕ сверено — видно только после входа и выбора адреса, а живой осмотр сайта
- * агентом не разрешён: страница поиска ресторанов, адрес в шапке, счётчик и
- * «минус» на карточке, корзина, оформление, оплата и статус заказа. Их сверяет
+ * НЕ сверено — видно только после «В корзину», а корзину агент не трогает:
+ * счётчик и «минус» на карточке, корзина, оформление, оплата и статус заказа. Их сверяет
  * владелец: `bun mac-daemon/shop.ts probe eda`, правится только этот файл. Не
  * нашёл элемент — отказ до оплаты со скриншотом, догадок нет.
  */
 import type { ShopOrderState } from "../lib/shop.ts";
 
 export const EDA_ORIGIN = "https://eda.yandex.ru";
-/** НЕ сверено: маршрут поиска. Если пусто — адаптер берёт рестораны с главной. */
+/** Поиск ресторанов; ничего не нашлось — адаптер берёт рестораны с главной. */
 export const edaSearchUrl = (query: string) => `${EDA_ORIGIN}/search?query=${encodeURIComponent(query)}`;
 /** НЕ сверено. */
 export const EDA_ORDERS_URL = `${EDA_ORIGIN}/orders`;
@@ -25,7 +25,8 @@ export const EDA_LOGIN_HOSTS = [/^passport\.yandex\.ru$/, /^sso\.passport\.yande
 export const EDA_TESTID = {
   // сверено
   placeLink: 'a[href^="/r/"]',
-  placeTitle: '[data-testid="place-snippet-title"]',
+  // сниппет на главной и заголовок карточки в поиске
+  placeTitle: '[data-testid="place-snippet-title"], [data-testid="place-header-title"]',
   dishCard: '[data-testid="product-card-v2-root"]',
   dishTitle: '[data-testid="product-card-v2-title"]',
   dishPrice: '[data-testid="product-card-v2-price"]',
@@ -34,7 +35,6 @@ export const EDA_TESTID = {
   // НЕ сверено
   dishMinus: '[data-testid="product-card-v2-counter-decrease-btn"]',
   dishCounter: '[data-testid="product-card-v2-counter-value"]',
-  addressButton: '[data-testid="header-address-button"]',
   cart: '[data-testid="cart"]',
   cartItem: '[data-testid="cart-item"]',
   cartItemTitle: '[data-testid="cart-item-title"]',
@@ -47,11 +47,14 @@ export const EDA_TEXT = {
   addressUnset: /Укажите адрес/i,
   signIn: /^Войти$/,
   addressModal: /Куда доставить заказ\?/i,
+  /** Адрес в шапке — кнопка без testid; остальные кнопки шапки узнаём по названию. */
+  headerNotAddress: /^(?:Уведомления|Корзина|Профиль|Войти|Укажите адрес)?$/i,
+  // НЕ сверено
+  deliveryFee: /Доставка\s+(\d{1,5})\s?₽/i,
   // НЕ сверено
   outOfStock: /Нет в наличии|Закончил(?:ся|ась|ось|ись)|Недоступно|Стоп-лист/i,
   placeClosed: /Ресторан закрыт|Сейчас закрыт|Не принимает заказы|Откроется в/i,
   freeDelivery: /Бесплатная доставка|Доставка 0 ₽/i,
-  deliveryFee: /Доставка\s+(\d{1,5})\s?₽/i,
   cartEmpty: /В корзине пока пусто|Корзина пуста|В корзине пока ничего нет/i,
   checkout: /^(?:Оформить(?: заказ)?|К оформлению|Перейти к оформлению|Далее)/,
   pay: /^(?:Оплатить|Заказать и оплатить|Оформить и оплатить)/,

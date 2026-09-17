@@ -24,6 +24,7 @@ import {
   edaSearchUrl,
 } from "./eda-selectors.ts";
 import { hostMatches, NAV_TIMEOUT_MS, pageKit, QTY_CLICKS_MAX, UI_TIMEOUT_MS, visible, wait } from "./shop-playwright.ts";
+import { waitFor } from "./playwright-kit.ts";
 import type { CartRow, SearchCard, ShopPage } from "./shop.ts";
 
 export const edaPlaceUrl = (ref: string) => {
@@ -196,16 +197,25 @@ export function edaShopPage(page: any): ShopPage {
       return "ok";
     },
     async address() {
+      // Шапка сначала рисуется скелетом: ждём, пока появится кнопка с адресом.
+      const buttons = page.getByRole("banner").first().getByRole("button");
+      let label: string | undefined;
+      await waitFor(async () => {
+        const texts: string[] = await buttons.allInnerTexts().catch(() => []);
+        label = texts.map((t) => t.replace(/\s+/g, " ").replace(/ ,/g, ",").trim()).find((t) => !EDA_TEXT.headerNotAddress.test(t));
+        return label !== undefined || EDA_TEXT.addressUnset.test(texts.join("\n"));
+      }, 20, 500);
       if (EDA_TEXT.addressModal.test(await bodyText())) return null;
-      const label = await text(page.locator(EDA_TESTID.addressButton).first());
       if (!label || EDA_TEXT.addressUnset.test(label)) return null;
-      const s = label.replace(/\s+/g, " ").trim();
-      return s.length >= 3 && s.length <= 200 ? s : null;
+      return label.length >= 3 && label.length <= 200 ? label : null;
     },
     async deliveryFee() {
-      const body = await bodyText();
-      if (EDA_TEXT.freeDelivery.test(body)) return 0;
-      const m = body.match(EDA_TEXT.deliveryFee);
+      // Панель корзины — после длинного меню, за пределами обрезанного bodyText.
+      const fee = page.getByText(EDA_TEXT.deliveryFee).first();
+      const free = page.getByText(EDA_TEXT.freeDelivery).first();
+      await visible(fee.or(free).first(), UI_TIMEOUT_MS);
+      if (await visible(free)) return 0;
+      const m = ((await text(fee)) ?? "").match(EDA_TEXT.deliveryFee);
       return m ? Number(m[1]) : null;
     },
     async searchCards() {

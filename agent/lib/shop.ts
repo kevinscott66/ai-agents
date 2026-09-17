@@ -58,8 +58,8 @@ const SESSION = /^[A-Za-z0-9_-]{16,64}$/;
 export const SHOP_PRODUCT_ID = /^[a-z0-9][a-z0-9-]{0,159}$/;
 /** Ресторан Еды: `<бренд>:<placeSlug>` из ссылки `/r/<бренд>?placeSlug=<placeSlug>`. */
 export const SHOP_PLACE_REF = /^[a-z0-9][a-z0-9_-]{0,79}:[a-z0-9][a-z0-9_-]{0,79}$/;
-/** Товар Маркета: `<modelId>-<sku>` из ссылки `/card/<slug>/<modelId>?sku=<sku>`. Подмножество SHOP_PRODUCT_ID. */
-export const MARKET_PRODUCT_ID = /^[1-9]\d{0,19}-[1-9]\d{0,19}$/;
+/** Товар Маркета: номер карточки из ссылки `/card/<slug>/<номер>`. Подмножество SHOP_PRODUCT_ID. */
+export const MARKET_PRODUCT_ID = /^[1-9]\d{0,19}$/;
 
 /**
  * У блюд Еды нет своих страниц: блюдо — это название в меню ресторана. id
@@ -267,10 +267,13 @@ export function parseShopRubles(text: unknown): number | null {
   return isRub(value) ? value : null;
 }
 
-/** «5–10 мин, 0 ₽» или «Доставка 149 ₽» → стоимость доставки; иначе null. */
+/**
+ * «5–10 мин, 0 ₽» или «Доставка 149 ₽» → стоимость доставки; иначе null.
+ * Диапазон «0–59 ₽» (цена зависит от суммы корзины) → верхняя граница.
+ */
 export function parseDeliveryRubles(text: unknown): number | null {
   if (typeof text !== "string" || text.length > 80) return null;
-  const m = text.replace(/[\u00a0\u202f\u2009]/g, " ").match(/(?:^|[\s,])(\d{1,5})\s?₽\s*$/);
+  const m = text.replace(/[\u00a0\u202f\u2009]/g, " ").match(/(?:^|[\s,])(?:\d{1,5}\s?[–-]\s?)?(\d{1,5})\s?₽\s*$/);
   if (!m) return null;
   const value = Number(m[1]);
   return isFee(value) ? value : null;

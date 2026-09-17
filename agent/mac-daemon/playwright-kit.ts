@@ -97,27 +97,45 @@ export async function ariaProbe(page: any): Promise<string> {
 }
 
 /**
- * Карточки тарифов Яндекс Go (такси и доставка): элемент с точным названием
- * тарифа и ближайший предок, где есть цена; выбран ли тариф — по aria и классам.
+ * Вписать адрес и выбрать первую подсказку. Список подсказок у Яндекса есть
+ * ещё до ввода (история поездок), и он сменяется не сразу, поэтому ждём, пока
+ * список станет другим и перестанет меняться; кликнуть по старому списку —
+ * значит поехать по чужому адресу. Подсказок нет — false.
  */
-export function readTariffCards(page: any, labels: string[][]): Promise<Array<{ tariff: string; text: string; selected: boolean }>> {
-  return page.evaluate((pairs: string[][]) => {
-    const doc = (globalThis as any).document;
-    const out: Array<{ tariff: string; text: string; selected: boolean }> = [];
-    const isSelected = (el: any) =>
-      el.getAttribute("aria-selected") === "true" || el.getAttribute("aria-checked") === "true" ||
-      el.getAttribute("aria-pressed") === "true" || /(?:^|[\s_-])(?:selected|active|checked)(?:$|[\s_-])/i.test(String(el.className ?? ""));
-    for (const [tariff, label] of pairs) {
-      const leaf = [...doc.querySelectorAll("body *")].find((el: any) =>
-        el.children.length === 0 && String(el.textContent ?? "").trim() === label && el.getClientRects().length > 0);
-      if (!leaf) continue;
-      let card: any = leaf;
-      for (let i = 0; i < 4 && card && !String(card.innerText ?? "").includes("₽"); i++) card = card.parentElement;
-      if (!card || !String(card.innerText ?? "").includes("₽")) continue;
-      let selected = false;
-      for (let el: any = leaf, i = 0; el && i < 6; el = el.parentElement, i++) selected ||= isSelected(el);
-      out.push({ tariff, text: String(card.innerText).slice(0, 200), selected });
+export async function fillAddress(page: any, input: any, address: string): Promise<boolean> {
+  const options = page.getByRole("option");
+  const listText = async () => {
+    try {
+      return (await options.allInnerTexts()).join("\n");
+    } catch {
+      return "";
     }
-    return out;
-  }, labels);
+  };
+  await input.click();
+  await input.fill("");
+  await wait(300);
+  const stale = await listText();
+  await input.fill(address);
+  let seen = "";
+  for (let i = 0; i < ADDRESS_POLL.attempts; i++) {
+    await wait(ADDRESS_POLL.intervalMs);
+    const now = await listText();
+    if (now && now !== stale && now === seen) break;
+    seen = now;
+  }
+  if (!seen || seen === stale) return false;
+  await options.first().click();
+  await wait(700);
+  return true;
+}
+
+const ADDRESS_POLL = { attempts: 24, intervalMs: 250 };
+
+/** Ждать, пока `check` не вернёт true; не дождались — false. */
+export async function waitFor(check: () => Promise<boolean>, attempts = 30, intervalMs = 500): Promise<boolean> {
+  for (let i = 0; i < attempts; i++) {
+    if (await check().catch(() => false)) return true;
+    await wait(intervalMs);
+  }
+  return false;
 }

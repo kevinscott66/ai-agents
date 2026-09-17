@@ -74,6 +74,8 @@ describe("parsing", () => {
     expect(parseShopRubles("99")).toBeNull();
     expect(parseDeliveryRubles("15–25 мин, 0 ₽")).toBe(0);
     expect(parseDeliveryRubles("Доставка 149 ₽")).toBe(149);
+    expect(parseDeliveryRubles("5–10 мин, 0–59 ₽")).toBe(59);
+    expect(parseDeliveryRubles("0-59 ₽")).toBe(59);
     expect(parseDeliveryRubles("бесплатно")).toBeNull();
     expect(normalizeShopName("Моло­ко  3,2% 1 л")).toBe("Молоко 3,2% 1 л");
     expect(normalizeShopName("Молоко​ 1 л")).toBeNull();
@@ -811,23 +813,24 @@ describe("eda: server flow", () => {
   });
 });
 
-const CHARGER = { id: "123456789-100200300", name: "Зарядное устройство USB-C 65 Вт", price_rub: 2490 };
-const CABLE = { id: "987654321-400500600", name: "Кабель USB-C 1 м", price_rub: 590 };
+const CHARGER = { id: "123456789", name: "Зарядное устройство USB-C 65 Вт", price_rub: 2490 };
+const CABLE = { id: "987654321", name: "Кабель USB-C 1 м", price_rub: 590 };
 
 describe("market: parsing and page helpers", () => {
   test("service names, product ids and links", () => {
     expect(normalizeShopService("Маркет")).toBe("market");
     expect(normalizeShopService("яндекс.маркет")).toBe("market");
-    expect(marketIdFromHref("/card/zaryadka/123456789?sku=100200300&do-waremd5=x")).toBe(CHARGER.id);
-    expect(marketIdFromHref("https://market.yandex.ru/product--zaryadka/123456789?sku=100200300")).toBe(CHARGER.id);
-    expect(marketIdFromHref("/card/zaryadka/123456789")).toBeNull();
-    expect(marketIdFromHref("/card/zaryadka/123456789?sku=abc")).toBeNull();
-    expect(marketIdFromHref("https://evil.example.com/card/x/123456789?sku=1")).toBeNull();
+    expect(marketIdFromHref("/card/zaryadka/123456789?ogV=333&do-waremd5=x&sponsored=1")).toBe(CHARGER.id);
+    expect(marketIdFromHref("https://market.yandex.ru/card/zaryadka/123456789")).toBe(CHARGER.id);
+    expect(marketIdFromHref("/product--zaryadka/123456789?sku=100200300")).toBeNull();
+    expect(marketIdFromHref("/card/zaryadka/0123")).toBeNull();
+    expect(marketIdFromHref("/card/zaryadka/12ab")).toBeNull();
+    expect(marketIdFromHref("https://evil.example.com/card/x/123456789")).toBeNull();
     expect(marketIdFromHref(null)).toBeNull();
-    expect(marketUrlFor(CHARGER.id)).toBe("https://market.yandex.ru/product/123456789?sku=100200300");
+    expect(marketUrlFor(CHARGER.id)).toBe("https://market.yandex.ru/card/x/123456789");
   });
 
-  test("daemon frame: market lines need a model-sku id, no place", () => {
+  test("daemon frame: market lines need a card number id, no place", () => {
     const lines = [{ id: CHARGER.id, name: CHARGER.name, qty: 1 }];
     expect(parseShopRequest({ op: "prepare", session: SESSION, service: "market", lines })).toEqual({ op: "prepare", session: SESSION, service: "market", lines });
     expect(parseShopRequest({ op: "prepare", session: SESSION, service: "market", lines: [{ ...lines[0], id: "zaryadka" }] })).toBeNull();

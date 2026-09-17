@@ -1,18 +1,21 @@
 /**
  * Всё, что знает о вёрстке Яндекс Маркета, — здесь и только здесь.
  *
- * НИЧЕГО не сверено на живом сайте: агент Маркет не осматривал. Маршруты,
- * data-auto и подписи ниже — отправная точка; сверяет владелец на своём
- * профиле (`bun mac-daemon/shop.ts probe market`), правится только этот файл.
+ * Сверено на живом профиле (сентябрь 2026): поиск, сниппеты, ссылки
+ * `/card/<slug>/<номер>`, пункт доставки в шапке, заголовок, цена и «В корзину»
+ * на карточке. Маршрут `/product/<номер>` уводит на капчу — не использовать.
+ *
+ * НЕ сверено (видно только после «В корзину», а корзину агент не трогает):
+ * счётчик на карточке, корзина, оформление, оплата и статусы заказа. Сверяет
+ * владелец (`bun mac-daemon/shop.ts probe market`), правится только этот файл.
  * Не нашёл элемент — отказ до оплаты со скриншотом, догадок нет.
  */
 import type { ShopOrderState } from "../lib/shop.ts";
 
 export const MARKET_ORIGIN = "https://market.yandex.ru";
 export const marketSearchUrl = (query: string) => `${MARKET_ORIGIN}/search?text=${encodeURIComponent(query)}`;
-/** Товар по modelId и sku; slug в пути Маркет подставляет сам. */
-export const marketProductUrl = (model: string, sku: string) =>
-  `${MARKET_ORIGIN}/product/${encodeURIComponent(model)}?sku=${encodeURIComponent(sku)}`;
+/** Карточка по номеру; настоящий slug Маркет подставляет сам редиректом. */
+export const marketProductUrl = (id: string) => `${MARKET_ORIGIN}/card/x/${encodeURIComponent(id)}`;
 export const MARKET_CART_URL = `${MARKET_ORIGIN}/my/cart`;
 export const MARKET_ORDERS_URL = `${MARKET_ORIGIN}/my/orders`;
 
@@ -20,26 +23,30 @@ export const MARKET_HOSTS = [/^market\.yandex\.ru$/];
 export const MARKET_LOGIN_HOSTS = [/^passport\.yandex\.ru$/, /^sso\.passport\.yandex\.ru$/];
 
 export const MARKET_TESTID = {
+  // сверено
   snippet: '[data-zone-name="productSnippet"]',
-  snippetLink: 'a[href*="sku="]',
+  snippetLink: 'a[href^="/card/"]',
   snippetTitle: '[data-auto="snippet-title"]',
   snippetPrice: '[data-auto="snippet-price-current"]',
   productTitle: 'h1[data-auto="productCardTitle"]',
-  productOffer: '[data-auto="default-offer"]',
+  productOffer: '[data-auto="default-offer-actions"]',
   productPrice: '[data-auto="snippet-price-current"]',
   cartButton: '[data-auto="cartButton"]',
+  addressButton: '[data-zone-name="deliveryPoint"]',
+  // НЕ сверено
   qtyValue: '[data-auto="cartButton"] [data-auto="amount"]',
   qtyPlus: '[data-auto="cartButton"] [data-auto="increase"]',
   qtyMinus: '[data-auto="cartButton"] [data-auto="decrease"]',
-  addressButton: '[data-auto="deliveryAddressButton"]',
   cartItem: '[data-auto="cartItem"]',
-  cartItemLink: 'a[href*="sku="]',
+  cartItemLink: 'a[href^="/card/"]',
   cartItemQty: '[data-auto="amount"]',
   cartItemPrice: '[data-auto="price-value"]',
 };
 
 export const MARKET_TEXT = {
   addressUnset: /Укажите адрес|Выберите адрес|Куда доставить/i,
+  /** Сверено: «Пункт выдачи · улица …» — тип точки перед адресом. */
+  addressPrefix: /^(?:Пункт выдачи|Курьером|Доставка)\s*·\s*/i,
   signIn: /^Войти$/,
   addToCart: /^(?:В корзину|Добавить в корзину)$/,
   outOfStock: /Нет в продаже|Нет в наличии|Раскупили|Товар закончился/i,
