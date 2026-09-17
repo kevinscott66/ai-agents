@@ -54,16 +54,23 @@ export function playwrightTaxiPage(page: any): TaxiPage {
     page.getByRole("textbox", { name }).or(page.getByPlaceholder(name)).first();
   const orderLocator = () => page.getByRole("button", { name: TAXI_TEXT.order }).first();
   const radios = () => page.getByRole("radiogroup", { name: TAXI_TEXT.tariffGroup }).first().getByRole("radio");
-  const lines = (text: string) => text.split("\n").map((l) => l.trim());
-  const tariffRadio = (tariff: TaxiTariff) =>
-    radios().filter({ has: page.getByText(TAXI_PAGE_TARIFFS[tariff], { exact: true }) }).first();
+  // «Élite» может прийти и составным символом, и буквой с отдельным акцентом.
+  const lines = (text: string) => text.normalize("NFC").split("\n").map((l) => l.trim());
+  const cardTariff = (text: string) => TAXI_TARIFF_KEYS.find((k) => lines(text).includes(TAXI_PAGE_TARIFFS[k].normalize("NFC"))) ?? null;
+  /** Radio тарифа — по тому же разбору строк, что и расчёт: что посчитали, то и нажимаем. */
+  const tariffRadio = async (tariff: TaxiTariff) => {
+    for (const radio of await radios().all()) {
+      if (cardTariff(String(await radio.innerText().catch(() => ""))) === tariff) return radio;
+    }
+    return null;
+  };
   /** Карточка тарифа: radio, в тексте которого есть строка с точным названием. */
   type Card = { tariff: TaxiTariff | null; text: string; selected: boolean };
   const readCards = async (): Promise<Card[]> => {
     const out: Card[] = [];
     for (const radio of await radios().all()) {
       const text = String(await radio.innerText().catch(() => ""));
-      const tariff = TAXI_TARIFF_KEYS.find((k) => lines(text).includes(TAXI_PAGE_TARIFFS[k])) ?? null;
+      const tariff = cardTariff(text);
       const selected = (await radio.getAttribute("aria-checked").catch(() => null)) === "true";
       out.push({ tariff, text: text.replace(/\s+/g, " ").slice(0, 200), selected });
     }
@@ -108,7 +115,8 @@ export function playwrightTaxiPage(page: any): TaxiPage {
         });
     },
     async selectTariff(tariff) {
-      await tariffRadio(tariff).click();
+      // Нет radio — выбор не меняется, и runner увидит это при сверке selected.
+      await (await tariffRadio(tariff))?.click();
       await wait(700);
     },
     async orderButton() {
