@@ -7,13 +7,13 @@
  */
 import { Database } from "bun:sqlite";
 import { createHash, randomBytes, randomInt, randomUUID, timingSafeEqual } from "node:crypto";
-import { HOUR_MS, MINUTE_MS, SECOND_MS } from "./time-constants.ts";
+import { DAY_MS, HOUR_MS, MINUTE_MS, SECOND_MS } from "./time-constants.ts";
 
 export type SignedActionError =
   | "key_invalid" | "key_unknown" | "key_not_pending" | "code_invalid" | "code_expired" | "code_attempts"
   | "no_active_key" | "payload_invalid" | "limit_amount" | "limit_daily"
   | "nonce_unknown" | "nonce_used" | "expired" | "key_revoked" | "signature_invalid"
-  | "payload_mismatch" | "price_deviation" | "registration_limit";
+  | "payload_mismatch" | "price_deviation" | "price_unchecked" | "registration_limit";
 
 export class SignedActionRefusal extends Error {
   constructor(readonly code: SignedActionError) { super(code); }
@@ -25,16 +25,34 @@ export interface SignedActionLimits {
   deviationPct: number;
 }
 
-type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
+/** Параметры плоские: телефон показывает каждый целиком, вложенное показать нельзя. */
+export type SignedParams = Record<string, string | number>;
 
 const CODE_TTL_MS = 10 * MINUTE_MS;
 const CODE_ATTEMPTS = 5;
 /** Каждая регистрация шлёт владельцу сообщение с кодом — ограничиваем, чтобы не заспамить. */
 const REGISTRATIONS_PER_HOUR = 3;
+/** И за сутки: 10 ключей × 5 попыток — не больше 50 догадок из миллиона кодов. */
+const REGISTRATIONS_PER_DAY = 10;
 const APPROVE_TTL_MS = 2 * MINUTE_MS;
 const CLAIM_WINDOW_MS = 5 * MINUTE_MS;
 /** Статусы, которые расходуют дневной лимит: деньги могли уйти. */
 const SPENDING = ["approved", "executing", "executed", "failed"];
+
+const PARAM_KEY = /^[a-z0-9_]{1,40}$/;
+/**
+ * Управляющие и невидимые символы: U+202E переворачивает строку на экране,
+ * U+200B и переводы строк прячут хвост. На карточке было бы не то, что подписано.
+ * Та же проверка — в ios/Agent/Signing.swift.
+ */
+const HIDDEN_CHARS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+
+function displayableParams(params: unknown): params is SignedParams {
+  if (typeof params !== "object" || params === null || Object.getPrototypeOf(params) !== Object.prototype) return false;
+  const entries = Object.entries(params);
+  return entries.length <= 20 && entries.every(([key, value]) => PARAM_KEY.test(key) &&
+    (typeof value === "string" ? value.length <= 300 && !HIDDEN_CHARS.test(value) : Number.isSafeInteger(value)));
+}
 
 const refuse = (code: SignedActionError): never => { throw new SignedActionRefusal(code); };
 const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -108,8 +126,10 @@ export class SignedActions {
         created INTEGER NOT NULL, activated INTEGER, revoked INTEGER);
       CREATE TABLE IF NOT EXISTS signed_actions(nonce TEXT PRIMARY KEY, key_id TEXT NOT NULL, payload TEXT NOT NULL,
         status TEXT NOT NULL, amount_rub INTEGER NOT NULL, max_final_rub INTEGER NOT NULL, day TEXT,
-        issued INTEGER NOT NULL, expires INTEGER NOT NULL, approved INTEGER, finished INTEGER);
+        issued INTEGER NOT NULL, expires INTEGER NOT NULL, approved INTEGER, finished INTEGER, final_rub INTEGER);
       CREATE INDEX IF NOT EXISTS signed_actions_day ON signed_actions(day, status);`);
+    const columns = db.query("PRAGMA table_info(signed_actions)").all() as { name: string }[];
+    if (!columns.some((column) => column.name === "final_rub")) db.run("ALTER TABLE signed_actions ADD COLUMN final_rub INTEGER");
     // Процесс упал посреди выполнения: результат неизвестен, повторять нельзя.
     db.query("UPDATE signed_actions SET status='failed', finished=? WHERE status='executing'").run(Date.now());
   }
@@ -119,8 +139,8 @@ export class SignedActions {
     const spki = strictBase64(spkiBase64);
     if (!spki || spki.length > 512 || !device.trim()) return refuse("key_invalid");
     try { await importKey(spki); } catch { return refuse("key_invalid"); }
-    const recent = (this.db.query("SELECT COUNT(*) AS n FROM signed_action_keys WHERE created>?").get(now - HOUR_MS) as { n: number }).n;
-    if (recent >= REGISTRATIONS_PER_HOUR) return refuse("registration_limit");
+    const since = (window: number) => (this.db.query("SELECT COUNT(*) AS n FROM signed_action_keys WHERE created>?").get(now - window) as { n: number }).n;
+    if (since(HOUR_MS) >= REGISTRATIONS_PER_HOUR || since(DAY_MS) >= REGISTRATIONS_PER_DAY) return refuse("registration_limit");
     const keyId = randomUUID();
     const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
     this.db.query("INSERT INTO signed_action_keys(id,device,spki,status,code_hash,code_expires,created) VALUES(?,?,?,'pending',?,?,?)")
@@ -165,11 +185,11 @@ export class SignedActions {
   }
 
   /** Фиксирует действие и выдаёт байты, которые телефон покажет и подпишет. */
-  issue(input: { service: string; action: string; params: Record<string, Json>; amountRub: number }, now = Date.now()): { nonce: string; payload: string } {
+  issue(input: { service: string; action: string; params: SignedParams; amountRub: number }, now = Date.now()): { nonce: string; payload: string } {
     const key = this.db.query("SELECT id FROM signed_action_keys WHERE status='active'").get() as { id: string } | null;
     if (!key) return refuse("no_active_key");
     const { service, action, params, amountRub } = input;
-    if (!/^[a-z0-9_]{1,40}$/.test(service) || !/^[a-z0-9_]{1,40}$/.test(action) || !Number.isSafeInteger(amountRub) || amountRub <= 0) return refuse("payload_invalid");
+    if (!PARAM_KEY.test(service) || !PARAM_KEY.test(action) || !displayableParams(params) || !Number.isSafeInteger(amountRub) || amountRub <= 0) return refuse("payload_invalid");
     if (amountRub > this.limits.maxRub) return refuse("limit_amount");
     if (this.spentToday(now) >= this.limits.dailyMax) return refuse("limit_daily");
     const nonce = randomBytes(32).toString("base64url");
@@ -190,9 +210,10 @@ export class SignedActions {
     return row ?? refuse("nonce_unknown");
   }
 
-  /** Действия, ждущие подписи: телефон показывает карточку по байтам payload. */
+  /** Действия, ждущие подписи активным ключом: телефон показывает карточку по байтам payload. */
   pending(now = Date.now()): { nonce: string; payload: string }[] {
-    return this.db.query("SELECT nonce, payload FROM signed_actions WHERE status='issued' AND expires>=? ORDER BY issued LIMIT 20").all(now) as { nonce: string; payload: string }[];
+    return this.db.query(`SELECT a.nonce, a.payload FROM signed_actions a JOIN signed_action_keys k ON k.id=a.key_id AND k.status='active'
+      WHERE a.status='issued' AND a.expires>=? ORDER BY a.issued LIMIT 20`).all(now) as { nonce: string; payload: string }[];
   }
 
   /** Отказ владельца. Подпись не нужна: отказ ничего не тратит. */
@@ -227,7 +248,7 @@ export class SignedActions {
   }
 
   /** Исполнитель забирает действие; его payload должен совпасть с подписанным побайтово. */
-  claim(nonce: string, payload: string, now = Date.now()): { service: string; action: string; params: Record<string, Json>; amountRub: number; maxFinalRub: number } {
+  claim(nonce: string, payload: string, now = Date.now()): { service: string; action: string; params: SignedParams; amountRub: number; maxFinalRub: number } {
     return this.db.transaction(() => {
       const action = this.row(nonce);
       if (action.status !== "approved") return refuse("nonce_used");
@@ -244,13 +265,19 @@ export class SignedActions {
   checkFinal(nonce: string, finalRub: number, now = Date.now()): void {
     const action = this.row(nonce);
     if (action.status !== "executing") return refuse("nonce_used");
-    if (Number.isSafeInteger(finalRub) && finalRub > 0 && finalRub <= action.max_final_rub) return;
+    if (Number.isSafeInteger(finalRub) && finalRub > 0 && finalRub <= action.max_final_rub) {
+      this.db.query("UPDATE signed_actions SET final_rub=? WHERE nonce=?").run(finalRub, nonce);
+      return;
+    }
     this.db.query("UPDATE signed_actions SET status='aborted', finished=? WHERE nonce=? AND status='executing'").run(now, nonce);
     refuse("price_deviation");
   }
 
+  /** Успех засчитывается только после пройденной сверки цены: исполнитель мог её пропустить. */
   complete(nonce: string, ok: boolean, now = Date.now()): void {
-    const changed = this.db.query("UPDATE signed_actions SET status=?, finished=? WHERE nonce=? AND status='executing'").run(ok ? "executed" : "failed", now, nonce);
-    if (!changed.changes) refuse("nonce_used");
+    const changed = this.db.query("UPDATE signed_actions SET status=?, finished=? WHERE nonce=? AND status='executing' AND (? OR final_rub IS NOT NULL)")
+      .run(ok ? "executed" : "failed", now, nonce, ok ? 0 : 1);
+    if (changed.changes) return;
+    refuse(this.row(nonce).status === "executing" ? "price_unchecked" : "nonce_used");
   }
 }

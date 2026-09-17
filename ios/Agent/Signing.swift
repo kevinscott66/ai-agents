@@ -35,11 +35,18 @@ struct SignedActionPayload: Equatable {
               let rawParams = root["params"] as? [String: Any], rawParams.count <= 20 else { throw AgentError.message("Некорректные параметры платного действия") }
         var params: [String: String] = [:]
         for (key, value) in rawParams {
-            if let text = value as? String, text.count <= 300 { params[key] = text }
+            guard key.range(of: #"^[a-z0-9_]{1,40}$"#, options: .regularExpression) != nil else { throw AgentError.message("Некорректные параметры платного действия") }
+            if let text = value as? String, text.count <= 300, !hasHiddenCharacters(text) { params[key] = text }
             else if let number = SignedCanonicalJSON.integer(value) { params[key] = String(number) }
             else { throw AgentError.message("Параметр «\(key)» нельзя показать полностью. Подписывать нельзя.") }
         }
         return SignedActionPayload(nonce: nonce, keyId: expectedKey, service: service, action: action, params: params, amountRub: amount, maxFinalRub: maxFinal, issuedAt: issued, expiresAt: expires)
+    }
+
+    /// Управляющие и невидимые символы (U+202E, U+200B, переводы строк) показали бы на карточке
+    /// не то, что подписывается. Та же проверка — HIDDEN_CHARS в agent/lib/signed-actions.ts.
+    static func hasHiddenCharacters(_ text: String) -> Bool {
+        text.unicodeScalars.contains { [.control, .format, .lineSeparator, .paragraphSeparator].contains($0.properties.generalCategory) }
     }
 
     var title: String {
@@ -117,6 +124,7 @@ enum SigningRefusal {
             "signature_invalid": "Подпись не принята. Действие отменено.",
             "expired": "Срок подтверждения истёк. Действие не выполнено.",
             "nonce_used": "Действие уже подтверждено или отменено.",
+            "price_unchecked": "Исполнитель не сверил итоговую цену. Действие не засчитано.",
             "nonce_unknown": "Действие не найдено.",
             "key_revoked": "Ключ этого iPhone отозван. Привяжите его заново.",
             "limit_daily": "Дневной лимит платных действий исчерпан.",

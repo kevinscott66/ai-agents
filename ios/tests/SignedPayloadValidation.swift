@@ -22,6 +22,13 @@ import CryptoKit
         rejects(valid.replacingOccurrences(of: #""expires_at":1789627818"#, with: #""expires_at":1789628818"#))
         rejects(valid.replacingOccurrences(of: #""tariff":"econom""#, with: #""tariff":{"a":"b"}"#))
         rejects(valid.replacingOccurrences(of: #""v":1"#, with: #""v":2"#))
+        // Невидимые символы и ключи, которые сервер тоже отвергает (signed-actions-attacks.test.ts).
+        for code in [0x202E, 0x200B, 0x2066, 0xFEFF, 0x2028] {
+            rejects(valid.replacingOccurrences(of: "Аэропорт", with: "Аэро" + String(UnicodeScalar(code)!) + "порт"))
+        }
+        rejects(valid.replacingOccurrences(of: #""Аэропорт""#, with: #""Аэро\nпорт""#))
+        rejects(valid.replacingOccurrences(of: #""tariff":"econom""#, with: #""Tariff":"econom""#))
+        precondition(!SignedActionPayload.hasHiddenCharacters("ул. «Красная», 1/2 — подъезд 3 😀"))
         let tricky = "a\"\\\n" + String(UnicodeScalar(1)) + String(UnicodeScalar(0x1F)) + "ё/😀"
         precondition(SignedCanonicalJSON.string(tricky) == #""a\"\\\n\u0001\u001fё/😀""#)
         // JavaScript сортирует ключи по UTF-16: "😀" (D83D) раньше "ｚ" (FF5A), хотя по скалярам наоборот.
