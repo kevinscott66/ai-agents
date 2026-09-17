@@ -282,6 +282,7 @@ struct RootView: View {
     @State private var activeMediaJob: UUID?
 
     @StateObject private var approvals = ChatApprovals()
+    @StateObject private var signing = SignedActionsModel()
     // Адреса сервера по умолчанию нет: репозиторий публичный, адрес задаётся при подключении.
     @AppStorage("server") private var server = ""
     @Environment(\.scenePhase) private var scenePhase
@@ -320,7 +321,7 @@ struct RootView: View {
         // the initial inactive ScenePhase and never starts fetching confirmations.
         .task(id: server + (scenePhase == .active ? "|active" : "|inactive")) {
             while !Task.isCancelled {
-                if scenePhase == .active { await approvals.refresh(server: server, conversation: model.conversationId); await model.synchronize(server: server) }
+                if scenePhase == .active { await approvals.refresh(server: server, conversation: model.conversationId); await signing.refresh(server: server); await model.synchronize(server: server) }
                 do { try await Task.sleep(for: .seconds(5)) } catch { break }
             }
         }
@@ -433,7 +434,7 @@ struct RootView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 if model.remoteBusy && !model.busy { Text("Агент выполняет запрос с другого устройства. Ответ появится в соответствующем диалоге.").font(.footnote).foregroundStyle(.secondary).padding() }
-                if model.lines.isEmpty && approvals.visibleItems.isEmpty {
+                if model.lines.isEmpty && approvals.visibleItems.isEmpty && signing.items.isEmpty {
                     VStack(spacing: 14) {
                         Spacer(minLength: 140)
                         Text("Чем помочь?").font(.system(size: 30, weight: .semibold)).tracking(-0.7)
@@ -484,6 +485,11 @@ struct RootView: View {
                         }
                         ForEach(approvals.visibleItems.filter { item in !model.lines.contains(where: { $0.id == "approval:" + item.id + ":result" }) }) { item in
                             approvalCard(item)
+                        }
+                        ForEach(signing.items) { item in
+                            SignedActionCard(item: item, outcome: signing.outcomes[item.nonce], working: signing.working.contains(item.nonce),
+                                             approve: { Task { await signing.approve(item, server: server) } },
+                                             reject: { Task { await signing.reject(item, server: server) } }).id("signed-" + item.nonce)
                         }
                         ForEach(model.generations.filter { $0.state != "completed" }) { job in GenerationCanvas(status: job.state).id(job.id) }
                         if model.busy && !model.generations.contains(where: { $0.state == "running" }) { HStack(spacing: 10) { ProgressView(); Text("Агент работает").font(.subheadline).foregroundStyle(.secondary) } }
@@ -655,6 +661,7 @@ struct SettingsView: View {
                 }.disabled(pairing || connectionLocked || code.isEmpty)
                 Text(status).font(.footnote)
             }
+            SigningKeySection(server: server)
             Section("Голос") { NavigationLink("Голос помощника") { VoiceSettingsView() } }
             Section("Сеть") {
                 NavigationLink("OpenFlux · работа при белых списках") { OpenFluxSettingsView(server: server) }

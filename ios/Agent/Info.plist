@@ -6,13 +6,14 @@
 <key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
 <key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.1.21</string>
-<key>CFBundleVersion</key><string>22</string>
+<key>CFBundleShortVersionString</key><string>0.1.22</string>
+<key>CFBundleVersion</key><string>23</string>
 <key>LSRequiresIPhoneOS</key><true/>
 <key>UILaunchScreen</key><dict/>
 <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string></array>
 <key>NSMicrophoneUsageDescription</key><string>Агент использует микрофон, когда вы включаете голосовой ввод.</string>
 <key>NSSpeechRecognitionUsageDescription</key><string>Агент преобразует вашу речь в текст запроса. Перед отправкой текст можно проверить.</string>
+<key>NSFaceIDUsageDescription</key><string>Face ID подтверждает подпись платных действий, например заказа такси.</string>
 <key>NSCameraUsageDescription</key><string>Камера нужна, чтобы прикрепить фото к вашему сообщению Агенту.</string>
 <key>NSLocationWhenInUseUsageDescription</key><string>Агент получает геопозицию только по вашему запросу, чтобы приложить её к сообщению.</string>
 </dict></plist>

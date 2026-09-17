@@ -4,6 +4,7 @@ The model is read from production source on every run; no copied implementation.
 Only UI wrappers and speech output are removed; API responses are controlled.
 """
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 
@@ -45,6 +46,19 @@ with tempfile.TemporaryDirectory(prefix='agent-approvals-tests-') as scratch:
     (temp / 'Approvals.swift').write_text(fixture)
     subprocess.run(['xcrun', 'swiftc', '-parse-as-library', '-module-cache-path', str(temp / 'cache'), str(temp / 'Approvals.swift'), '-o', str(temp / 'test')], check=True, timeout=90)
     subprocess.run([str(temp / 'test')], check=True, timeout=15)
+
+# Signed paid actions: canonical payload check, and the server verifies an iPhone-format key and signature.
+with tempfile.TemporaryDirectory(prefix='agent-signing-tests-') as scratch:
+    temp = Path(scratch)
+    source = (root / 'Agent/Signing.swift').read_text().split('// MARK: - Secure Enclave')[0].replace('import SwiftUI', 'import Foundation').replace('import LocalAuthentication', '')
+    (temp / 'Signing.swift').write_text(source)
+    subprocess.run(['xcrun', 'swiftc', '-module-cache-path', str(temp/'cache'), str(root/'Agent/API.swift'), str(temp/'Signing.swift'), str(root/'tests/SignedPayloadValidation.swift'), '-o', str(temp/'test')], check=True, timeout=90)
+    sample = subprocess.run([str(temp/'test')], check=True, timeout=15, capture_output=True, text=True).stdout
+    if shutil.which('bun'):
+        verify = (root / 'tests/signed-verify.ts').read_text().replace('SIGNED_ACTIONS', str(root.parent / 'agent/lib/signed-actions.ts'))
+        (temp / 'verify.ts').write_text(verify)
+        subprocess.run(['bun', str(temp/'verify.ts')], input=sample, check=True, timeout=30, text=True, cwd=root.parent / 'agent')
+    print('PASS: signed payload is canonical, fully shown, and an iPhone signature verifies on the server')
 
 # Exercise full-string monetary parsing without SwiftUI or clipboard access.
 with tempfile.TemporaryDirectory(prefix='agent-transfer-tests-') as scratch:
