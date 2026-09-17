@@ -69,6 +69,7 @@ import {
   type RawOptionGroup,
 } from "../mac-daemon/eda-playwright.ts";
 import { marketIdFromHref, marketUrlFor } from "../mac-daemon/market-playwright.ts";
+import { MARKET_TEXT } from "../mac-daemon/market-selectors.ts";
 import type { ShopPlace } from "../lib/shop.ts";
 
 const T0 = Date.UTC(2026, 8, 17, 9, 0, 0);
@@ -1056,6 +1057,15 @@ describe("market: parsing and page helpers", () => {
     expect(marketIdFromHref("https://evil.example.com/card/x/123456789")).toBeNull();
     expect(marketIdFromHref(null)).toBeNull();
     expect(marketUrlFor(CHARGER.id)).toBe("https://market.yandex.ru/card/x/123456789");
+  });
+
+  test("«Корзина пустая» на живой странице — это пустая корзина", () => {
+    // Живьём Маркет пишет «Корзина пустая», а не «Корзина пуста»: из-за этого
+    // пустую корзину читали как непустую и уборка врала об успехе.
+    expect(MARKET_TEXT.cartEmpty.test("Корзина пустая")).toBe(true);
+    expect(MARKET_TEXT.cartEmpty.test("Корзина пуста")).toBe(true);
+    expect(MARKET_TEXT.cartEmpty.test("В корзине пока пусто")).toBe(true);
+    expect(MARKET_TEXT.cartEmpty.test("В корзине 1 товар")).toBe(false);
   });
 
   test("daemon frame: market lines need a card number id, no place", () => {

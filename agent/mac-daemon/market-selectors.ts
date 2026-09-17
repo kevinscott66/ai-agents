@@ -5,10 +5,12 @@
  * `/card/<slug>/<номер>`, пункт доставки в шапке, заголовок, цена и «В корзину»
  * на карточке. Маршрут `/product/<номер>` уводит на капчу — не использовать.
  *
- * НЕ сверено (видно только после «В корзину», а корзину агент не трогает):
- * счётчик на карточке, корзина, оформление, оплата и статусы заказа. Сверяет
- * владелец (`bun mac-daemon/shop.ts probe market`), правится только этот файл.
- * Не нашёл элемент — отказ до оплаты со скриншотом, догадок нет.
+ * Счётчик на карточке и строки корзины сверены живьём (сентябрь 2026) — товар
+ * клали в корзину и убирали обратно.
+ *
+ * НЕ сверено (видно только на оформлении, а туда агент не ходит): оформление,
+ * оплата и статусы заказа. Сверяет владелец (`bun mac-daemon/shop.ts probe market`),
+ * правится только этот файл. Не нашёл элемент — отказ до оплаты со скриншотом.
  */
 import type { ShopOrderState } from "../lib/shop.ts";
 
@@ -33,14 +35,15 @@ export const MARKET_TESTID = {
   productPrice: '[data-auto="snippet-price-current"]',
   cartButton: '[data-auto="cartButton"]',
   addressButton: '[data-zone-name="deliveryPoint"]',
-  // НЕ сверено
-  qtyValue: '[data-auto="cartButton"] [data-auto="amount"]',
-  qtyPlus: '[data-auto="cartButton"] [data-auto="increase"]',
-  qtyMinus: '[data-auto="cartButton"] [data-auto="decrease"]',
-  cartItem: '[data-auto="cartItem"]',
-  cartItemLink: 'a[href^="/card/"]',
-  cartItemQty: '[data-auto="amount"]',
-  cartItemPrice: '[data-auto="price-value"]',
+  // Счётчик на карточке: «−  1  +» внутри блока предложения. Число — это input,
+  // читать надо value, а не текст.
+  qtyCounter: '[data-auto="default-offer-actions"] [data-auto="counter-cart-button"]',
+  qtyValue: '[data-auto="default-offer-actions"] [data-auto="counter-cart-button"] input[data-auto="amount"]',
+  // Строка корзины: у каждой свой номер в data-auto — `cartItem-1789672288320`.
+  cartItem: '[data-auto^="cartItem-"]',
+  cartItemLink: 'a[data-auto="snippet-link"]',
+  cartItemQty: '[data-zone-name="amountSelect"] input',
+  cartItemPrice: '[data-auto="snippet-price-current"]',
 };
 
 export const MARKET_TEXT = {
@@ -49,9 +52,14 @@ export const MARKET_TEXT = {
   addressPrefix: /^(?:Пункт выдачи|Курьером|Доставка)\s*·\s*/i,
   signIn: /^Войти$/,
   addToCart: /^(?:В корзину|Добавить в корзину)$/,
+  /** Кнопки счётчика подписаны для читалки экрана, текст на них — «−» и «+». */
+  qtyPlus: /^Увеличить/,
+  qtyMinus: /^Уменьшить/,
+  /** Корзина спрашивает подтверждение: «Удалить выбранные товары?». */
+  removeConfirm: /^Удалить$/,
   outOfStock: /Нет в продаже|Нет в наличии|Раскупили|Товар закончился/i,
   optionsRequired: /Выберите (?:размер|цвет|вариант)/i,
-  cartEmpty: /В корзине (?:пока )?(?:пусто|ничего нет)|Корзина пуста/i,
+  cartEmpty: /В корзине (?:пока )?(?:пусто|ничего нет)|Корзина пуст(?:а|ая)/i,
   checkout: /^(?:Перейти к оформлению|Оформить(?: заказ)?|К оформлению)/,
   pay: /^(?:Подтвердить заказ|Оплатить|Оформить и оплатить)/,
   savedCard: /(?:•{2,}|\*{2,}|··)\s?\d{4}|Сбер ?Пэй|SberPay|Яндекс Пэй|Yandex Pay/i,
