@@ -33,6 +33,7 @@ import {
   SHOP_QTY_MAX,
   SHOP_SERVICE_KEYS,
 } from "../shop.ts";
+import { DELIVERY_COMMENT_MAX, DELIVERY_TARIFF_KEYS, normalizeDeliveryAddress, normalizeDeliveryComment, normalizeDeliveryTariff } from "../delivery.ts";
 import { MAC_CONTROL_COMMANDS, MAC_TITLE_MAX, parseMacControl, validMacTitle } from "../mac-control.ts";
 
 const ROLE_KEYS = CHARACTERS.map((c) => c.key);
@@ -1019,6 +1020,24 @@ export function buildPayload<T extends ActionType>(
         };
       }
       const payload: PayloadFor<"MARKET_PURCHASE"> = { lines: parsed.lines, delivery_rub: parsed.delivery_rub };
+      return { ok: true, payload: payload as PayloadFor<T> };
+    }
+    case "ORDER_DELIVERY": {
+      const from = normalizeDeliveryAddress(i.from);
+      const to = normalizeDeliveryAddress(i.to);
+      if (!from || !to) return { ok: false, error: `from и to — адреса одной строкой, 3..${TAXI_ADDRESS_MAX} символов` };
+      const tariff = normalizeDeliveryTariff(i.tariff);
+      if (!tariff) return { ok: false, error: `tariff must be one of: ${DELIVERY_TARIFF_KEYS.join(", ")}` };
+      if (!Number.isSafeInteger(i.price_rub) || (i.price_rub as number) <= 0) {
+        return { ok: false, error: "price_rub — целые рубли из DELIVERY_QUOTE" };
+      }
+      const comment = normalizeDeliveryComment(i.comment);
+      if (comment === undefined) return { ok: false, error: `comment — одна строка до ${DELIVERY_COMMENT_MAX} символов` };
+      const payload: PayloadFor<"ORDER_DELIVERY"> = { from, to, tariff, price_rub: i.price_rub as number, ...(comment ? { comment } : {}) };
+      return { ok: true, payload: payload as PayloadFor<T> };
+    }
+    case "DELIVERY_CANCEL": {
+      const payload: PayloadFor<"DELIVERY_CANCEL"> = {};
       return { ok: true, payload: payload as PayloadFor<T> };
     }
     case "MAC_STOP": {

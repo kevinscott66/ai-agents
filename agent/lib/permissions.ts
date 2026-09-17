@@ -56,6 +56,10 @@ export const ACTION_TYPES = [
   "ORDER_FOOD",
   // Шаг 10c: MARKET_PURCHASE — Маркет, тот же путь и те же SHOP_QUOTE/SHOP_STATUS.
   "MARKET_PURCHASE",
+  // Шаг 10d: курьер Яндекс Go (lib/dispatch/delivery.ts), путь как у такси.
+  // DELIVERY_QUOTE и DELIVERY_STATUS — инлайновые.
+  "ORDER_DELIVERY",
+  "DELIVERY_CANCEL",
   "SCHEDULE_POST",
   // Напоминания в чат-источник (lib/reminders.ts). LIST_REMINDERS — инлайновый.
   "CREATE_REMINDER",
@@ -184,6 +188,10 @@ export const CALLER_RESTRICTED: Record<string, string> = {
   MARKET_PURCHASE: "orchestrator",
   SHOP_QUOTE: "orchestrator",
   SHOP_STATUS: "orchestrator",
+  ORDER_DELIVERY: "orchestrator",
+  DELIVERY_CANCEL: "orchestrator",
+  DELIVERY_QUOTE: "orchestrator",
+  DELIVERY_STATUS: "orchestrator",
   // Создание канала от имени владельца + назначение админов — действие реального
   // аккаунта; только лид (orchestrator) как контролёр процесса.
   CREATE_TEAM_CHANNEL: "orchestrator",

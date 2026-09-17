@@ -22,6 +22,7 @@
 import { parseMacControl, type MacControl } from "../lib/mac-control.ts";
 import { parseTaxiRequest, type TaxiRequest } from "../lib/taxi.ts";
 import { parseShopRequest, type ShopRequest } from "../lib/shop.ts";
+import { parseDeliveryRequest, type DeliveryRequest } from "../lib/delivery.ts";
 
 /** Режимы разрешений, которые понимает демон (их пять, у CLI — четыре). */
 export const RUN_MODES = [
@@ -110,11 +111,19 @@ export interface ShopMsg {
   request: ShopRequest;
 }
 
+/** Операция доставки (mac-daemon/delivery.ts). Разбирается так же строго. */
+export interface DeliveryMsg {
+  type: "delivery";
+  id: string;
+  request: DeliveryRequest;
+}
+
 export type BridgeMsg =
   | AssistantMsg
   | ControlMsg
   | TaxiMsg
   | ShopMsg
+  | DeliveryMsg
   | RunMsg
   | PingMsg
   | AuthOkMsg
@@ -170,6 +179,11 @@ export function parseBridgeMsg(raw: unknown): ParsedMsg {
       if (!isNonEmptyString(m.id) || m.id.length > 100) return null;
       const request = parseShopRequest(m.request);
       return request ? { type: "shop", id: m.id, request } : null;
+    }
+    case "delivery": {
+      if (!isNonEmptyString(m.id) || m.id.length > 100) return null;
+      const request = parseDeliveryRequest(m.request);
+      return request ? { type: "delivery", id: m.id, request } : null;
     }
     case "ping":
       return { type: "ping" };

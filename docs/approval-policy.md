@@ -16,7 +16,7 @@
 
 | Категория | Что попадает |
 | --- | --- |
-| `money` | `ORDER_TAXI` и `TAXI_CANCEL` (заказ дополнительно идёт через подписанный гейт); `ORDER_FOOD` (Яндекс Лавка и Еда, тоже через гейт); `MARKET_PURCHASE` (Яндекс Маркет, через гейт); `ORDER_DELIVERY` (зарезервирован); промпт `MAC_RUN_CLAUDE` про оплату/покупку/заказ |
+| `money` | `ORDER_TAXI` и `TAXI_CANCEL` (заказ дополнительно идёт через подписанный гейт); `ORDER_FOOD` (Яндекс Лавка и Еда, тоже через гейт); `MARKET_PURCHASE` (Яндекс Маркет, через гейт); `ORDER_DELIVERY` и `DELIVERY_CANCEL` (курьер Яндекс Go, заказ через гейт); промпт `MAC_RUN_CLAUDE` про оплату/покупку/заказ |
 | `dns` | `CLOUDFLARE_DNS` (любое изменение записи); промпт про DNS, Cloudflare, CNAME, A-запись |
 | `push_main` | `REVIEW_AND_MERGE_PR`; промпт с `git push … main`, force-push, «пуш в main» |
 | `delete` | `DELETE_MESSAGE`; промпт с `rm -rf`, `git reset --hard`, `drop table`, «удали» |
@@ -137,6 +137,23 @@
 - оплата — только сохранённой картой; «при получении» агент не выбирает;
 - потолок покупки 5000 ₽ (`PAID_ACTION_MAX_RUB_YANDEX_MARKET`), дневной лимит общий;
   частота — 10 покупок в час.
+
+## Яндекс Доставка
+
+`DELIVERY_QUOTE {from, to}` и `DELIVERY_STATUS {}` — инлайновое чтение,
+`ORDER_DELIVERY {from, to, tariff, price_rub, comment?}` и `DELIVERY_CANCEL {}` — через
+карточку (`agent/lib/dispatch/delivery.ts`, исполнитель — `agent/mac-daemon/delivery.ts`).
+Всё, что сказано о такси, действует и здесь, плюс:
+
+- выключено до `DELIVERY_ENABLED=true` и на сервере, и в окружении демона;
+- в гейте это `yandex_delivery` / `order_delivery`, потолок 1000 ₽
+  (`PAID_ACTION_MAX_RUB_YANDEX_DELIVERY`), дневной лимит общий; частота — как у такси;
+- тарифы — «Курьер», «Экспресс», «Грузовой»; комментарий курьеру необязателен, до
+  200 символов, виден в карточке и подписывается как `params.comment`;
+- контакты отправителя и получателя агент не вводит: если страница их требует —
+  отказ `contact_required` до нажатия, заказ оформляет владелец;
+- у доставки свой профиль Chrome (`DELIVERY_PROFILE_DIR`); совпадение с
+  `TAXI_PROFILE_DIR` — отказ `profile_shared`.
 
 ## Что вне политики
 

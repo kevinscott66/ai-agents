@@ -105,6 +105,8 @@ describe("набор безопасных тулзов", () => {
         "TAXI_STATUS",
         "SHOP_QUOTE",
         "SHOP_STATUS",
+        "DELIVERY_QUOTE",
+        "DELIVERY_STATUS",
         "LIST_SCHEDULED_POSTS",
         "LIST_REMINDERS",
       ].sort(),

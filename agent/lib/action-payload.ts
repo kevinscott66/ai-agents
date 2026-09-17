@@ -12,6 +12,7 @@ import type { UserbotDm } from "./userbot-dm.ts";
 import type { DnsChange } from "./cloudflare-dns.ts";
 import type { TaxiTariff } from "./taxi.ts";
 import type { ShopService } from "./shop.ts";
+import type { DeliveryTariff } from "./delivery.ts";
 
 export interface SendMessagePayload {
   chatId?: number;
@@ -306,6 +307,20 @@ export interface MarketPurchasePayload {
   _delegated?: boolean;
 }
 
+/**
+ * ORDER_DELIVERY: адреса, тариф и цена из DELIVERY_QUOTE; comment — необязательный
+ * комментарий курьеру, подписывается вместе с заказом.
+ */
+export interface OrderDeliveryPayload {
+  from: string;
+  to: string;
+  tariff: DeliveryTariff;
+  price_rub: number;
+  comment?: string;
+  _userId?: string;
+  _delegated?: boolean;
+}
+
 export interface MacRunClaudePayload {
   allowFallback?: boolean;
   provider?: "claude" | "codex";
@@ -484,6 +499,8 @@ export type PayloadByType = {
   TAXI_CANCEL: { _userId?: string; _delegated?: boolean };
   ORDER_FOOD: OrderFoodPayload;
   MARKET_PURCHASE: MarketPurchasePayload;
+  ORDER_DELIVERY: OrderDeliveryPayload;
+  DELIVERY_CANCEL: { _userId?: string; _delegated?: boolean };
   SCHEDULE_POST: SchedulePostPayload;
   CREATE_REMINDER: CreateReminderPayload;
   CANCEL_REMINDER: CancelReminderPayload;

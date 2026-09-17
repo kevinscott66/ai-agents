@@ -31,6 +31,7 @@ import { runAssistantOperation, assistantErrorCode } from "./assistant.ts";
 import { runMacControl, controlErrorCode } from "./macctl.ts";
 import { runTaxiRequest, taxiErrorCode, closeTaxiRunner } from "./taxi.ts";
 import { runShopRequest, shopErrorCode, closeShopRunner } from "./shop.ts";
+import { runDeliveryRequest, deliveryErrorCode, closeDeliveryRunner } from "./delivery.ts";
 import { createDaemonHandshake } from "./auth-handshake.ts";
 import { createAuthGate } from "./auth-gate.ts";
 import { createSocketLifecycle } from "./reconnect.ts";
@@ -537,6 +538,18 @@ function connect(): void {
         }).finally(() => { assistantControllers.delete(msg.id); });
         return;
       }
+      case "delivery": {
+        // Свой замок в DeliveryRunner (свой браузер и профиль); отмена — через cancel по id.
+        const controller = new AbortController();
+        assistantControllers.set(msg.id, controller);
+        runDeliveryRequest(msg.request, controller.signal).then(output => {
+          sendChunk(ws, msg.id, "stdout", output);
+          sendResult(ws, msg.id, true, 0);
+        }).catch(error => {
+          sendResult(ws, msg.id, false, undefined, deliveryErrorCode(error));
+        }).finally(() => { assistantControllers.delete(msg.id); });
+        return;
+      }
       case "run":
         handleRun(ws, msg).catch((e) => {
           console.error("[daemon] handleRun error:", e);
@@ -595,7 +608,7 @@ function scheduleReconnect(): void {
 // Браузеры такси и покупок держат профили с cookie: закрыть их штатно, но не дольше 2 с.
 const shutdown = () => {
   killAllChildren();
-  Promise.race([Promise.all([closeTaxiRunner(), closeShopRunner()]), new Promise((r) => setTimeout(r, 2_000))]).finally(() => process.exit(0));
+  Promise.race([Promise.all([closeTaxiRunner(), closeShopRunner(), closeDeliveryRunner()]), new Promise((r) => setTimeout(r, 2_000))]).finally(() => process.exit(0));
 };
 process.once("SIGINT", shutdown);
 process.once("SIGTERM", shutdown);

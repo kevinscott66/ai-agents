@@ -201,6 +201,31 @@ Verification: local installed Claude accepted the readiness command and produced
 Сессия `prepare` одноразовая и живёт 3 минуты. Браузер закрывается после
 5 минут простоя.
 
+## Доставка (курьер Яндекс Go)
+
+Кадр `delivery`, операции те же, что у такси (`lib/delivery.ts`); код — `delivery.ts`,
+страница — `delivery-playwright.ts`, вёрстка — `delivery-selectors.ts`. Агент страницу
+доставки не осматривал: все тексты и адрес старта помечены «НЕ сверено», пока владелец
+их не сверит, исполнитель упрётся в отказ до нажатия — деньги не спишутся.
+
+1. Окружение демона:
+   - `DELIVERY_ENABLED=true`;
+   - `DELIVERY_PROFILE_DIR` — отдельный от `TAXI_PROFILE_DIR` каталог профиля (Chrome
+     запирает профиль; совпадение — отказ `profile_shared`), права `700`;
+   - `DELIVERY_HEADLESS`, `DELIVERY_BROWSER_CHANNEL` — как у такси.
+2. Вход: `DELIVERY_PROFILE_DIR=… bun delivery.ts login` — владелец входит сам, Enter.
+   Контакты отправителя и получателя должны подставляться из аккаунта: агент их не
+   вводит, пустое обязательное поле телефона или имени — отказ `contact_required`.
+3. Сверка: `bun delivery.ts probe` печатает `guard`, `contact_required` и дерево
+   доступности; `bun delivery.ts quote "откуда" "куда"` — расчёт без заказа. Сверь
+   вкладку «Доставка», поля адресов, названия тарифов, поле комментария, кнопку
+   заказа, `DELIVERY_STATE_TEXT`. Правится только `delivery-selectors.ts`.
+4. На сервере: `DELIVERY_ENABLED=true`, владелец в `MAC_USER_IDS` и
+   `MINIAPP_ADMIN_USER_IDS`, активный ключ подписи.
+
+Заказ — `prepare` (маршрут, тариф, комментарий, цена) и `confirm` (цена, сверка с
+потолком, одно нажатие). Сессия живёт 3 минуты, браузер закрывается после 5 минут простоя.
+
 ## Яндекс Лавка
 
 Операции `quote`, `prepare`, `confirm`, `abandon`, `status` приходят кадром `shop`

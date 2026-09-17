@@ -3,9 +3,9 @@ import { nativeTurnContext } from "./native-context.ts";
  * C5/R-A: Anthropic tool_use схема + диспатчер.
  *
  * Аудит 2026-09-11: здесь было написано «все 12 инструментов идут через единый
- * `gateOrDispatch`». Неверно дважды. Инструментов в `TOOL_NAMES` тридцать четыре
+ * `gateOrDispatch`». Неверно дважды. Инструментов в `TOOL_NAMES` тридцать шесть
  * (число сверяется тестом audit-2026-09-11-tool-counts: в круге 29 оно уже
- * успело протухнуть на два, пока список рос); восемнадцать — это
+ * успело протухнуть на два, пока список рос); двадцать — это
  * `INLINE_TOOL_NAMES` из `constants.ts`, то есть ровно тот набор, который через
  * `gateOrDispatch` как раз НЕ идёт: ни CALLER_RESTRICTED, ни строка permissions
  * к ним не применяются (см. разбор инлайновой ветки в `executeTool` ниже).
@@ -28,6 +28,7 @@ import { INLINE_TOOL_NAMES } from "./constants.ts";
 import { listCloudflareDns } from "./dispatch/cloudflare.ts";
 import { quoteTaxi, taxiStatus } from "./dispatch/taxi.ts";
 import { quoteShop, shopStatus } from "./dispatch/shop.ts";
+import { deliveryStatus, quoteDelivery } from "./dispatch/delivery.ts";
 import Anthropic from "@anthropic-ai/sdk";
 import type { Telegram } from "telegraf";
 import type { ActionType } from "./permissions.ts";
@@ -823,6 +824,47 @@ export const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "DELIVERY_QUOTE",
+    description:
+      "Расчёт курьерской доставки Яндекс Go (Доставка) в браузере на Mac владельца: цены по тарифам «Курьер», «Экспресс», «Грузовой». Ничего не заказывает. Только когда владелец сам попросил в своём личном чате. Адреса — откуда забрать и куда отвезти, как назвал владелец (город, улица, дом); если неоднозначно, уточни. Расчёт действует 10 минут.",
+    input_schema: {
+      type: "object",
+      properties: {
+        from: { type: "string", description: "Откуда забрать: адрес одной строкой." },
+        to: { type: "string", description: "Куда отвезти: адрес одной строкой." },
+      },
+      required: ["from", "to"],
+    },
+  },
+  {
+    name: "ORDER_DELIVERY",
+    description:
+      "Заказать курьера по свежему расчёту DELIVERY_QUOTE: те же from и to, выбранный владельцем tariff и price_rub этого тарифа из расчёта; comment — комментарий курьеру (что забрать, подъезд), только если владелец его назвал. Контакты отправителя и получателя агент не вводит: если Яндекс их потребует, заказ оформляет владелец. Заказ ждёт подтверждения в чате, затем подписи Face ID на телефоне; результат придёт отдельным сообщением. Пока он не пришёл, не говори «заказано». Лимиты: сумма и число заказов в день ограничены сервером, цена на странице не может вырасти больше чем на 15%.",
+    input_schema: {
+      type: "object",
+      properties: {
+        from: { type: "string", description: "Откуда — ровно как в DELIVERY_QUOTE." },
+        to: { type: "string", description: "Куда — ровно как в DELIVERY_QUOTE." },
+        tariff: { type: "string", enum: ["courier", "express", "cargo"] },
+        price_rub: { type: "number", description: "Цена выбранного тарифа из DELIVERY_QUOTE, целые рубли." },
+        comment: { type: "string", description: "Необязательно: комментарий курьеру одной строкой, до 200 символов." },
+      },
+      required: ["from", "to", "tariff", "price_rub"],
+    },
+  },
+  {
+    name: "DELIVERY_STATUS",
+    description:
+      "Read-only: состояние текущей доставки Яндекс Go на Mac владельца — ищем курьера, курьер назначен, забрал отправление, доставлено, отменено; время, если видно. Только для владельца в его личном чате.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "DELIVERY_CANCEL",
+    description:
+      "Отменить текущую доставку Яндекс Go. Только когда владелец сам попросил. Отмена может быть платной, поэтому ждёт подтверждения владельца. Сначала проверь DELIVERY_STATUS: если доставки нет, отменять нечего.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
     name: "GENERATE_SVG_IMAGE",
     description:
       "Напиши валидный SVG (width/height в px, тёмные тексты на светлом фоне или наоборот, viewBox), бэкенд отрендерит его в PNG и отправит как фото. Размер SVG ≤ 200KB. Полезно для постеров, баннеров, схем, инфографики, мокапов UI.",
@@ -990,6 +1032,8 @@ export const TOOL_NAMES = new Set<string>([
   "TAXI_CANCEL",
   "ORDER_FOOD",
   "MARKET_PURCHASE",
+  "ORDER_DELIVERY",
+  "DELIVERY_CANCEL",
   // 2026-08-02: инструмент был объявлен в TOOLS, получил payload-валидатор и
   // case в диспатчере — но не попал сюда, поэтому executeTool отбивал его на
   // `unknown tool` ДО gateOrDispatch: ни строки в agent_actions, ни ошибки в
@@ -1662,6 +1706,12 @@ export async function executeTool(
   if (name === "SHOP_STATUS") {
     return fmt(await shopStatus(i, ctx));
   }
+  if (name === "DELIVERY_QUOTE") {
+    return fmt(await quoteDelivery(i, ctx));
+  }
+  if (name === "DELIVERY_STATUS") {
+    return fmt(await deliveryStatus(ctx));
+  }
   if (name === "LIST_REMINDERS") {
     // Нативный клиент — не Telegram-чат, напоминаний у него нет.
     if (nativeTurnContext.getStore()) {
@@ -1817,11 +1867,11 @@ export async function executeTool(
   // apply the MAC_USER_IDS whitelist check. SEC-audit LOW-2: MAC_STOP also needs
   // it — without injection isUserAllowed(undefined) was always false, so the
   // emergency kill-switch was dead (failed closed). Inject for both.
-  // USERBOT_SEND_DM, CLOUDFLARE_DNS, такси и Лавка: хендлер по _userId сверяет, что просил владелец из своей лички.
+  // USERBOT_SEND_DM, CLOUDFLARE_DNS, такси, магазины и доставка: хендлер по _userId сверяет, что просил владелец из своей лички.
   if (
     at === "MAC_RUN_CLAUDE" || at === "MAC_STOP" || at === "MAC_CONTROL" || at === "USERBOT_SEND_DM" ||
     at === "CLOUDFLARE_DNS" || at === "ORDER_TAXI" || at === "TAXI_CANCEL" || at === "ORDER_FOOD" ||
-    at === "MARKET_PURCHASE"
+    at === "MARKET_PURCHASE" || at === "ORDER_DELIVERY" || at === "DELIVERY_CANCEL"
   ) {
     const p = built.payload as { _userId?: string; _delegated?: boolean };
     p._userId = ctx.triggerUserId;

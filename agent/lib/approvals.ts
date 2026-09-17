@@ -18,6 +18,7 @@ import { describeUserbotDm, parseUserbotDm } from "./userbot-dm.ts";
 import { describeDnsChange, parseDnsChange } from "./cloudflare-dns.ts";
 import { describeTaxiPayload } from "./taxi.ts";
 import { describeOrderFood } from "./shop.ts";
+import { describeDeliveryPayload } from "./delivery.ts";
 import { limitsFromEnv } from "./signed-actions.ts";
 import { approvalCategories, CATEGORY_LABEL } from "./approval-policy.ts";
 
@@ -542,6 +543,8 @@ const PREVIEW_BY_ACTION: Record<
   TAXI_CANCEL: () => "отменить текущий заказ такси (отмена может быть платной)",
   ORDER_FOOD: (p) => describeOrderFood(p, limitsFromEnv().deviationPct),
   MARKET_PURCHASE: (p) => describeOrderFood({ ...p, service: "market" }, limitsFromEnv().deviationPct),
+  ORDER_DELIVERY: (p) => describeDeliveryPayload(p, limitsFromEnv().deviationPct),
+  DELIVERY_CANCEL: () => "отменить текущую доставку (отмена может быть платной)",
   SPAWN_ROLE: (p) =>
     join([
       `новая роль «${str(p, "name") || "?"}»`,
@@ -674,7 +677,7 @@ export function approvalPreview(
   // Изменение DNS тоже: TXT до 2048 символов одобряется целиком.
   // Заказ такси — тоже: адреса одобряются целиком.
   if (actionType === "USERBOT_SEND_DM" || actionType === "CLOUDFLARE_DNS" || actionType === "ORDER_TAXI" || actionType === "ORDER_FOOD" ||
-    actionType === "MARKET_PURCHASE") return flat;
+    actionType === "MARKET_PURCHASE" || actionType === "ORDER_DELIVERY") return flat;
   return flat.length > limit ? `${flat.slice(0, limit - 1)}…` : flat;
 }
 

@@ -1634,6 +1634,19 @@ export const MIGRATIONS: Migration[] = [
       for (const c of CHARACTERS) ins.run(c.key, c.key === "orchestrator" ? 1 : 0);
     },
   },
+  {
+    // Шаг 10d: курьер Яндекс Go. Только orchestrator, всегда с одобрением в чате.
+    name: "064_seed_delivery",
+    up: (db) => {
+      const ins = db.prepare(
+        `INSERT OR IGNORE INTO permissions(agent_key, action_type, allowed, requires_approval)
+         VALUES (?, ?, ?, 1)`,
+      );
+      for (const action of ["ORDER_DELIVERY", "DELIVERY_CANCEL"]) {
+        for (const c of CHARACTERS) ins.run(c.key, action, c.key === "orchestrator" ? 1 : 0);
+      }
+    },
+  },
 ];
 
 /**

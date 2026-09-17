@@ -31,6 +31,7 @@ import { configureNativeLead } from "./lib/native-api.ts";
 import { configureSigningCodeSender, registerSignedActionExecutor } from "./lib/native-signing.ts";
 import { configureTaxi, executeSignedTaxi } from "./lib/dispatch/taxi.ts";
 import { configureShop, executeSignedShop } from "./lib/dispatch/shop.ts";
+import { configureDelivery, executeSignedDelivery } from "./lib/dispatch/delivery.ts";
 import { registerVoiceHandler } from "./orchestrator/voice-handler.ts";
 import { registerMessageHandler } from "./orchestrator/message-handler.ts";
 import { startBackgroundServices } from "./orchestrator/services.ts";
@@ -144,7 +145,7 @@ export async function buildBot(def: CharacterDef): Promise<RunningBot | null> {
     configureKnowledgeExtraction();
     configureSigningCodeSender(async (userId, text) => { await bot.telegram.sendMessage(userId, text); });
     // Шаг 9: итог подписанного заказа такси приходит владельцу в личку, отказ со страницы — со скриншотом.
-    // Шаг 10a: то же для Лавки. Исполнителей несколько: каждый берёт только свои nonce.
+    // Шаги 10a–10d: то же для Лавки, Еды, Маркета и Доставки. Исполнителей несколько: каждый берёт только свои nonce.
     const signedNotify = {
       text: async (userId: string, text: string) => { await bot.telegram.sendMessage(userId, text); },
       photo: async (userId: string, jpeg: string, caption: string) => {
@@ -153,8 +154,10 @@ export async function buildBot(def: CharacterDef): Promise<RunningBot | null> {
     };
     configureTaxi({ notify: signedNotify });
     configureShop({ notify: signedNotify });
+    configureDelivery({ notify: signedNotify });
     registerSignedActionExecutor(executeSignedTaxi);
     registerSignedActionExecutor(executeSignedShop);
+    registerSignedActionExecutor(executeSignedDelivery);
     configureNativeLead(async (userId, text, reply, history, media) => {
       const messageId = nativeMessageId--;
       const chat = { id: Number(userId), type: "private" as const };

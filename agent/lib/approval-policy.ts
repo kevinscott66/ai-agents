@@ -43,12 +43,13 @@ export const ACTION_CATEGORY: Readonly<Record<string, ApprovalCategory>> = Objec
   DELETE_MESSAGE: "delete",
   REVIEW_AND_MERGE_PR: "push_main",
   USERBOT_SEND_DM: "third_party_message",
-  // Шаги 8–10: DNS и платные действия (такси, Лавка; зарезервировано — курьер, Маркет).
+  // Шаги 8–10: DNS и платные действия (такси, Лавка и Еда, курьер, Маркет).
   CLOUDFLARE_DNS: "dns",
   ORDER_TAXI: "money",
   TAXI_CANCEL: "money",
   ORDER_FOOD: "money",
   ORDER_DELIVERY: "money",
+  DELIVERY_CANCEL: "money",
   MARKET_PURCHASE: "money",
 });
 

@@ -81,6 +81,7 @@ import {
 import { handleCloudflareDns } from "./dispatch/cloudflare.ts";
 import { handleOrderTaxi, handleTaxiCancel } from "./dispatch/taxi.ts";
 import { handleMarketPurchase, handleOrderFood } from "./dispatch/shop.ts";
+import { handleDeliveryCancel, handleOrderDelivery } from "./dispatch/delivery.ts";
 import {
   handleWriteWiki,
   handleListRecentMessages,
@@ -1004,6 +1005,14 @@ export async function dispatchAction<T extends ActionType>(
       case "MARKET_PURCHASE": {
         const p = payload as PayloadByType["MARKET_PURCHASE"];
         return await handleMarketPurchase(p, ctx);
+      }
+      case "ORDER_DELIVERY": {
+        const p = payload as PayloadByType["ORDER_DELIVERY"];
+        return await handleOrderDelivery(p, ctx);
+      }
+      case "DELIVERY_CANCEL": {
+        const p = payload as PayloadByType["DELIVERY_CANCEL"];
+        return await handleDeliveryCancel(p, ctx);
       }
       case "MAC_CONTROL": {
         const p = payload as PayloadByType["MAC_CONTROL"];
