@@ -7,13 +7,13 @@
  */
 import { Database } from "bun:sqlite";
 import { createHash, randomBytes, randomInt, randomUUID, timingSafeEqual } from "node:crypto";
-import { MINUTE_MS, SECOND_MS } from "./time-constants.ts";
+import { HOUR_MS, MINUTE_MS, SECOND_MS } from "./time-constants.ts";
 
 export type SignedActionError =
   | "key_invalid" | "key_unknown" | "key_not_pending" | "code_invalid" | "code_expired" | "code_attempts"
   | "no_active_key" | "payload_invalid" | "limit_amount" | "limit_daily"
   | "nonce_unknown" | "nonce_used" | "expired" | "key_revoked" | "signature_invalid"
-  | "payload_mismatch" | "price_deviation";
+  | "payload_mismatch" | "price_deviation" | "registration_limit";
 
 export class SignedActionRefusal extends Error {
   constructor(readonly code: SignedActionError) { super(code); }
@@ -29,6 +29,8 @@ type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
 
 const CODE_TTL_MS = 10 * MINUTE_MS;
 const CODE_ATTEMPTS = 5;
+/** Каждая регистрация шлёт владельцу сообщение с кодом — ограничиваем, чтобы не заспамить. */
+const REGISTRATIONS_PER_HOUR = 3;
 const APPROVE_TTL_MS = 2 * MINUTE_MS;
 const CLAIM_WINDOW_MS = 5 * MINUTE_MS;
 /** Статусы, которые расходуют дневной лимит: деньги могли уйти. */
@@ -117,6 +119,8 @@ export class SignedActions {
     const spki = strictBase64(spkiBase64);
     if (!spki || spki.length > 512 || !device.trim()) return refuse("key_invalid");
     try { await importKey(spki); } catch { return refuse("key_invalid"); }
+    const recent = (this.db.query("SELECT COUNT(*) AS n FROM signed_action_keys WHERE created>?").get(now - HOUR_MS) as { n: number }).n;
+    if (recent >= REGISTRATIONS_PER_HOUR) return refuse("registration_limit");
     const keyId = randomUUID();
     const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
     this.db.query("INSERT INTO signed_action_keys(id,device,spki,status,code_hash,code_expires,created) VALUES(?,?,?,'pending',?,?,?)")
@@ -144,6 +148,10 @@ export class SignedActions {
     // Неверный код фиксируется вне отката транзакции, поэтому ошибка — после неё.
     const status = (this.db.query("SELECT status FROM signed_action_keys WHERE id=?").get(keyId) as { status: string }).status;
     if (status !== "active") refuse("code_invalid");
+  }
+
+  activeKey(): { id: string; device: string; activated: number } | null {
+    return this.db.query("SELECT id, device, activated FROM signed_action_keys WHERE status='active'").get() as { id: string; device: string; activated: number } | null;
   }
 
   revokeKey(keyId: string, now = Date.now()): void {
@@ -180,6 +188,18 @@ export class SignedActions {
   private row(nonce: string): ActionRow {
     const row = this.db.query("SELECT nonce,key_id,payload,status,max_final_rub,expires,approved FROM signed_actions WHERE nonce=?").get(nonce) as ActionRow | null;
     return row ?? refuse("nonce_unknown");
+  }
+
+  /** Действия, ждущие подписи: телефон показывает карточку по байтам payload. */
+  pending(now = Date.now()): { nonce: string; payload: string }[] {
+    return this.db.query("SELECT nonce, payload FROM signed_actions WHERE status='issued' AND expires>=? ORDER BY issued LIMIT 20").all(now) as { nonce: string; payload: string }[];
+  }
+
+  /** Отказ владельца. Подпись не нужна: отказ ничего не тратит. */
+  reject(nonce: string, now = Date.now()): void {
+    this.row(nonce);
+    const changed = this.db.query("UPDATE signed_actions SET status='rejected', finished=? WHERE nonce=? AND status='issued'").run(now, nonce);
+    if (!changed.changes) refuse("nonce_used");
   }
 
   /** Проверяет подпись владельца над сохранённой копией payload. */

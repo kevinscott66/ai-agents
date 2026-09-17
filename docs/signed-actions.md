@@ -5,7 +5,8 @@
 устройства такого действия не открывают: токен живёт на сервере и в приложении, а
 закрытый ключ — только в Secure Enclave телефона под Face ID.
 
-Код: `agent/lib/signed-actions.ts`, тесты: `agent/tests/signed-actions.test.ts`.
+Код: `agent/lib/signed-actions.ts` (гейт) и `agent/lib/native-signing.ts` (HTTP для приложения),
+тесты: `agent/tests/signed-actions.test.ts`, `agent/tests/native-signing.test.ts`.
 
 ## Ключ
 
@@ -19,6 +20,7 @@
   кода. На ввод 10 минут и 5 попыток. Так утёкший токен устройства не даёт завести свой ключ.
 - Активным бывает один ключ. Активация нового отзывает прежний (смена телефона);
   отозванный ключ не оживает.
+- Не больше 3 регистраций в час (`registration_limit`), чтобы не засыпать личку кодами.
 
 ## Жизненный цикл действия
 
@@ -67,12 +69,29 @@ JSON без пробелов, ключи объектов отсортирова
 | `PAID_ACTION_PRICE_DEVIATION_PCT` | 15 | Допустимый рост итоговой цены. |
 | — | 5 мин | Окно между подтверждением и claim. |
 
+## Эндпоинты приложения
+
+Все под токеном устройства и только для `MINIAPP_ADMIN_USER_IDS`. Токен лишь пропускает
+к эндпоинтам: ключ без кода из лички не заводится, действие без подписи не подтверждается.
+
+| Метод и путь | Тело | Ответ |
+|---|---|---|
+| `GET /api/native/signing/key` | — | `{key: {id, device, activated} \| null}` |
+| `POST /api/native/signing/keys` | `{device, spki}` | `201 {keyId}`; код уходит в личку бота и в ответ не попадает. Не доставился — ключ отзывается, `502 code_delivery_failed` |
+| `POST /api/native/signing/keys/:id/activate` | `{code}` | `{key}` |
+| `GET /api/native/signing/actions` | — | `{actions: [{nonce, payload}]}` — ждут подписи, не больше 20 |
+| `POST /api/native/signing/actions/:nonce/approve` | `{signature}` | `{ok: true}` |
+| `POST /api/native/signing/actions/:nonce/reject` | — | `{ok: true}` |
+
+Отказ гейта приходит как `{error: <код>}`: 400 — неверные данные, 404 — неизвестный ключ
+или nonce, 409 — неподходящее состояние или лимит, 429 — `code_attempts`, `registration_limit`.
+
 ## Коды отказа
 
 `key_invalid`, `key_unknown`, `key_not_pending`, `code_invalid`, `code_expired`,
 `code_attempts`, `no_active_key`, `payload_invalid`, `limit_amount`, `limit_daily`,
 `nonce_unknown`, `nonce_used`, `expired`, `key_revoked`, `signature_invalid`,
-`payload_mismatch`, `price_deviation`.
+`payload_mismatch`, `price_deviation`, `registration_limit`.
 
 ## Чего модуль не делает
 
