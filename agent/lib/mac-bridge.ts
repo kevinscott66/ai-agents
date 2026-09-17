@@ -9,10 +9,29 @@
  *   client → server:  { type: "result", id, ok, code, error? }
  *   server → client:  { type: "ping" }
  *   client → server:  { type: "pong" }
+ *   server → client:  { type: "cancel", id }   (cancelOnMac — snuff one run)
+ *   server → client:  { type: "stop" }         (stopMac — snuff every run)
+ *
+ * The last two are not optional extras: a daemon written to this list without
+ * `cancel` leaves an orphaned `claude --permission-mode bypassPermissions`
+ * running on the owner's machine after `mac_timeout` — the exact defect
+ * `cancelOnMac` was added to close. Both are parsed in mac-daemon/protocol.ts.
  *
  * Only one active Mac client is held; a new authenticated connection replaces
- * the previous one. sendToMac() returns a promise that resolves with the
- * accumulated streams + final result, with a 5-minute timeout.
+ * the previous one, and every run still pending on the replaced socket is
+ * rejected with `mac_replaced` — nobody is left waiting on a closed client.
+ *
+ * sendToMac() resolves on the daemon's final `result`. Два уточнения, которых
+ * тут когда-то не было и которые меняют контракт вызывающего:
+ *
+ *  - потоки НЕ накапливаются целиком. В памяти живёт хвост в
+ *    MAC_STREAM_TAIL_BYTES, полные длины считаются отдельно (аудит 2026-08-08,
+ *    см. докстроку константы ниже). Если читателю нужен весь вывод, брать его
+ *    из моста нельзя — его тут больше нет;
+ *  - до таймаута прогон может вообще не начаться: при `pending.size >= max`
+ *    (_readMaxConcurrentRuns) вызывающий получает `mac_busy` сразу. А сам
+ *    таймаут — не константные пять минут, а _readRunTimeoutMs():
+ *    MAC_RUN_TIMEOUT_MS с пятью минутами по умолчанию.
  */
 
 /**
@@ -266,7 +285,7 @@ const PEER_SALT = randomBytes(16);
  * T-305 MED-3: метка пира для лога — IP это PII, но без сигнала не поймать
  * перебор.
  *
- * Аудит 2026-08-28: было `extractPortOnly` — хвост `ws.remoteAddress` после
+ * Аудит 2026-08-28: было extractPortOnly — хвост `ws.remoteAddress` после
  * последнего двоеточия. Bun кладёт туда голый адрес БЕЗ порта, то есть для
  * IPv4 двоеточия там нет вовсе и функция возвращала `"?"` на любом пире: сто
  * попыток с одного адреса и сто с разных выглядели в логе одинаково. Для IPv6
@@ -301,6 +320,10 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { SECOND_MS, MINUTE_MS } from "./time-constants.ts";
 import { log, scrubSecretString } from "./log.ts";
 import { safeTick } from "./safe-timer.ts";
+import type { MacControl } from "./mac-control.ts";
+import type { TaxiRequest } from "./taxi.ts";
+import type { DeliveryRequest } from "./delivery.ts";
+import type { ShopRequest } from "./shop.ts";
 import {
   DEFAULT_MAC_BRIDGE_HOST,
   DEFAULT_MAC_BRIDGE_PORT,
@@ -400,10 +423,6 @@ export function isMacOnline(): boolean {
 }
 
 /**
- * Send a run request to the Mac daemon. Resolves on daemon's final "result"
- * message, or rejects on timeout / disconnect / no client.
- */
-/**
  * Приняла ли отправка кадр.
  *
  * Аудит 2026-08-28: возврат `ServerWebSocket.send()` не смотрел никто, а он
@@ -417,6 +436,10 @@ function frameAccepted(ret: unknown): boolean {
   return ret !== 0;
 }
 
+/**
+ * Send a run request to the Mac daemon. Resolves on daemon's final "result"
+ * message, or rejects on timeout / disconnect / no client.
+ */
 export function sendToMac(req: MacRunRequest): Promise<MacRunResult> {
   return sendMacRequest(req);
 }
@@ -428,7 +451,54 @@ export function sendAssistantToMac(operation: "calendar_today" | "open_workspace
   return sendMacRequest({ operation });
 }
 
-function sendMacRequest(req: MacRunRequest | { operation: "calendar_today" | "open_workspace" }): Promise<MacRunResult> {
+/**
+ * Команда MAC_CONTROL. Те же условия, что у помощника: владелец из
+ * MAC_USER_IDS и только его личный чат — чужой или групповой чат не может
+ * заблокировать, усыпить или выключить его машину.
+ */
+export function sendControlToMac(control: MacControl, userId: string | undefined, chatId: number): Promise<MacRunResult> {
+  if (!userId || !isUserAllowed(userId) || String(chatId) !== userId || chatId <= 0) return Promise.reject(new Error("forbidden"));
+  if (!isMacOnline()) return Promise.reject(new Error("mac_offline"));
+  return sendMacRequest({ control });
+}
+
+/**
+ * Операция такси на Mac (шаг 9). Условия те же, что у MAC_CONTROL; таймаут
+ * длиннее: браузеру нужно открыть страницу, построить маршрут и дождаться цены.
+ */
+export function sendTaxiToMac(request: TaxiRequest, userId: string | undefined, chatId: number): Promise<MacRunResult> {
+  if (!userId || !isUserAllowed(userId) || String(chatId) !== userId || chatId <= 0) return Promise.reject(new Error("forbidden"));
+  if (!isMacOnline()) return Promise.reject(new Error("mac_offline"));
+  return sendMacRequest({ taxi: request });
+}
+
+export const MAC_TAXI_TIMEOUT_MS = 90_000;
+
+/**
+ * Операция покупки на Mac (шаг 10). Условия те же, что у такси; таймаут ещё
+ * длиннее: prepare открывает страницу каждой позиции и оформление.
+ */
+export function sendShopToMac(request: ShopRequest, userId: string | undefined, chatId: number): Promise<MacRunResult> {
+  if (!userId || !isUserAllowed(userId) || String(chatId) !== userId || chatId <= 0) return Promise.reject(new Error("forbidden"));
+  if (!isMacOnline()) return Promise.reject(new Error("mac_offline"));
+  return sendMacRequest({ shop: request });
+}
+
+export const MAC_SHOP_TIMEOUT_MS = 180_000;
+
+/** Операция доставки на Mac (шаг 10d). Условия и таймаут — как у такси. */
+export function sendDeliveryToMac(request: DeliveryRequest, userId: string | undefined, chatId: number): Promise<MacRunResult> {
+  if (!userId || !isUserAllowed(userId) || String(chatId) !== userId || chatId <= 0) return Promise.reject(new Error("forbidden"));
+  if (!isMacOnline()) return Promise.reject(new Error("mac_offline"));
+  return sendMacRequest({ delivery: request });
+}
+
+export const MAC_DELIVERY_TIMEOUT_MS = 90_000;
+
+type ShortRequest = { operation: "calendar_today" | "open_workspace" } | { control: MacControl } | { taxi: TaxiRequest } | { shop: ShopRequest } | { delivery: DeliveryRequest };
+
+function sendMacRequest(req: MacRunRequest | ShortRequest): Promise<MacRunResult> {
+  const short = "operation" in req || "control" in req || "taxi" in req || "shop" in req || "delivery" in req;
   return new Promise<MacRunResult>((resolve, reject) => {
     if (!activeSocket) {
       reject(new Error("mac_offline"));
@@ -450,7 +520,7 @@ function sendMacRequest(req: MacRunRequest | { operation: "calendar_today" | "op
         cancelOnMac(id);
         p.reject(new Error("mac_timeout"));
       }
-    }, "operation" in req ? 30_000 : _readRunTimeoutMs());
+    }, "taxi" in req ? MAC_TAXI_TIMEOUT_MS : "shop" in req ? MAC_SHOP_TIMEOUT_MS : "delivery" in req ? MAC_DELIVERY_TIMEOUT_MS : short ? 30_000 : _readRunTimeoutMs());
     pending.set(id, {
       id,
       stdout: "",
@@ -460,7 +530,7 @@ function sendMacRequest(req: MacRunRequest | { operation: "calendar_today" | "op
       resolve,
       reject,
       timer,
-      onProgress: "operation" in req ? undefined : req.onProgress,
+      onProgress: "project" in req ? req.onProgress : undefined,
     });
     const dropRun = (err: Error): void => {
       const p = pending.get(id);
@@ -475,6 +545,14 @@ function sendMacRequest(req: MacRunRequest | { operation: "calendar_today" | "op
         sendBridgeFrame(activeSocket,
           JSON.stringify("operation" in req ? {
             type: "assistant", id, operation: req.operation,
+          } : "control" in req ? {
+            type: "control", id, control: req.control,
+          } : "taxi" in req ? {
+            type: "taxi", id, request: req.taxi,
+          } : "shop" in req ? {
+            type: "shop", id, request: req.shop,
+          } : "delivery" in req ? {
+            type: "delivery", id, request: req.delivery,
           } : {
             type: req.provider === "codex" ? "run_codex" : "run",
             id,
@@ -538,7 +616,8 @@ export function stopMac(): Promise<{ ok: boolean; error?: string }> {
  * lib/errors.ts чистит только ИСКЛЮЧЕНИЯ, а здесь ошибка приезжает готовой
  * строкой в кадре `result`.
  *
- * Цена — три регэкспа по хвосту (≤64 КБ) на каждый чанк. Считать лениво
+ * Цена — двенадцать правил `scrubSecretString` по каждому из двух хвостов
+ * (≤64 КБ), то есть 24 прохода регэкспом на чанк. Считать лениво
  * нельзя: тип отдаёт текст наружу, и «сейчас потребитель берёт только длину»
  * — ровно то допущение, на котором такие дыры и держатся.
  *
@@ -776,10 +855,6 @@ function stopPinging(): void {
 }
 
 /**
- * Start the WebSocket bridge. Refuses to start if MAC_BRIDGE_SECRET is shorter
- * than 32 chars. Returns null if MAC_BRIDGE_SECRET is unset (no-op mode).
- */
-/**
  * Порт моста из env: целое 1..65535, иначе дефолт.
  *
  * Аудит 2026-08-08: было `Number(process.env.MAC_BRIDGE_PORT ?? DEFAULT)`.
@@ -805,8 +880,9 @@ export function _resolveBridgePort(raw: string | undefined): number {
  *
  * Аудит 2026-08-28: было `process.env.MAC_BRIDGE_HOST ?? "127.0.0.1"`. `??`
  * ловит только отсутствие имени, а systemd для строки вида `KEY=` отдаёт
- * пустую строку — и `agent/.env.example:107` отгружает переменную ровно так,
- * с инструкцией «Copy to .env». То есть пустая строка здесь не экзотика, а
+ * пустую строку — и `agent/.env.example` отгружает переменную ровно так,
+ * строкой `MAC_BRIDGE_HOST=` без значения, с инструкцией «Copy to .env». То
+ * есть пустая строка здесь не экзотика, а
  * поставляемое по умолчанию значение.
  *
  * Что делает с ней Bun (замер на рантайме проекта, `lsof` по собственному
@@ -828,6 +904,10 @@ export function _resolveBridgeHost(raw: string | undefined): string {
   return raw?.trim() || DEFAULT_MAC_BRIDGE_HOST;
 }
 
+/**
+ * Start the WebSocket bridge. Refuses to start if MAC_BRIDGE_SECRET is shorter
+ * than 32 chars. Returns null if MAC_BRIDGE_SECRET is unset (no-op mode).
+ */
 export function startMacBridge(): ServerHandle | null {
   const secret = process.env.MAC_BRIDGE_SECRET;
   if (!secret) return null;

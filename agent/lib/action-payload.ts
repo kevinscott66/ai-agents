@@ -7,15 +7,32 @@
  */
 import type { ActionType } from "./permissions.ts";
 import type { TaskStatus } from "./tasks.ts";
+import type { MacControl } from "./mac-control.ts";
+import type { UserbotDm } from "./userbot-dm.ts";
+import type { DnsChange } from "./cloudflare-dns.ts";
+import type { TaxiTariff } from "./taxi.ts";
+import type { ShopService } from "./shop.ts";
+import type { DeliveryTariff } from "./delivery.ts";
 
 export interface SendMessagePayload {
   chatId?: number;
   text: string;
   replyToMessageId?: number;
   /**
-   * T-410: route through the MTProto userbot so the message appears as the
-   * owner's real account (@owner_darkside). Orchestrator-only; requires
-   * approval in semi_auto mode. Other callers receive a forbidden error.
+   * T-410: отправить через MTProto-userbot, чтобы сообщение выглядело как от
+   * личного аккаунта владельца. Только оркестратор — остальным `forbidden`
+   * (`dispatch/telegram.ts`). Подтверждение человека обязательно В ЛЮБОМ
+   * режиме, включая `auto`: `payloadForcesApproval` взводит `forceApproval`,
+   * а `evaluateGate` проверяет его ДО ветвлений по режиму.
+   *
+   * Аудит 2026-09-11: здесь стояло «`requires approval in semi_auto mode`» —
+   * правило было записано слабее, чем оно есть, и ровно в том поле, ради
+   * которого его дважды чинили (SEC-4, T-602). Читатель планировал бы
+   * отправку от лица владельца без человека в `auto`.
+   *
+   * То же правило действует для `SET_REACTION` и `DELETE_MESSAGE` — набор
+   * лежит в `USERBOT_FORCE_APPROVAL` (permissions.ts), и он здесь источник
+   * правды, а не эти три подписи.
    */
   via_userbot?: boolean;
 }
@@ -24,9 +41,23 @@ export interface SetReactionPayload {
   messageId: number;
   emoji: string;
   /**
-   * C30: force routing through the MTProto userbot (any emoji incl. Premium,
-   * bypasses Bot API whitelist). When false/undefined, dispatcher uses Bot API
-   * and falls back to userbot only on "can't react" errors if userbot is up.
+   * C30: принудительно через MTProto-userbot (любой эмодзи, включая Premium,
+   * в обход белого списка Bot API).
+   *
+   * Голос владельца: только оркестратор, подтверждение человека в любом
+   * режиме — см. `USERBOT_FORCE_APPROVAL` (permissions.ts) и разбор у
+   * `SendMessagePayload.via_userbot` выше по файлу.
+   *
+   * Аудит 2026-09-14: без флага реакция тоже может уйти с аккаунта владельца —
+   * и уже БЕЗ человека. Здесь стояло «откатывается на userbot только по
+   * ошибке», а `handleSetReaction` (lib/dispatch/telegram.ts) у оркестратора
+   * уходит в userbot в двух случаях: эмодзи вне белого списка Bot API — сразу,
+   * без попытки ботом, — и ошибка Bot API. Гейт видит payload без
+   * `via_userbot` и апрув не требует. Остальным ролям обе ветки закрыты.
+   * Это решение, а не недосмотр: реакция обратима, и ради неё фолбэк оставлен,
+   * тогда как у `DELETE_MESSAGE` его убрали (разбор там же, в
+   * `handleDeleteMessage`). Но читать этот флаг как «единственную дверь к
+   * аккаунту владельца» для реакций нельзя.
    */
   via_userbot?: boolean;
 }
@@ -44,10 +75,13 @@ export interface DeleteMessagePayload {
   chatId?: number;
   messageId: number;
   /**
-   * C30: force routing through the MTProto userbot. Allows deleting service
-   * messages (joins/leaves/pins/photo) that the Bot API cannot touch. When
-   * false/undefined, dispatcher uses Bot API and falls back to userbot only
-   * on errors if userbot is up.
+   * C30: принудительно через MTProto-userbot. Позволяет удалять служебные
+   * сообщения (вход/выход/пин/фото), недоступные Bot API. При false/undefined
+   * диспатчер идёт по Bot API и откатывается на userbot только по ошибке.
+   *
+   * Голос владельца: только оркестратор, подтверждение человека в любом
+   * режиме — см. `USERBOT_FORCE_APPROVAL` (permissions.ts) и разбор у
+   * `SendMessagePayload.via_userbot` выше по файлу.
    */
   via_userbot?: boolean;
 }
@@ -152,14 +186,12 @@ export interface DelegateToRolePayload {
   task: string;
   /** Дополнительный контекст. */
   context?: string;
-  /**
-   * Аудит 2026-08-10: тут было `_depth?: number` — «internal: depth in handoff
-   * chain (set by dispatch, not by LLM)». Не ставил его никто: в схеме
-   * инструмента поля нет, dispatch его не писал, и единственная запись во всём
-   * репозитории была в тесте, который читавший его гейт и «проверял». Глубину
-   * держит `_delegation_path` / DispatchCtx.delegationChain — она растёт на
-   * каждом хопе, в отличие от счётчика, который не рос никогда.
-   */
+  // Аудит 2026-08-10: тут было _depth?: number — «internal: depth in handoff
+  // chain (set by dispatch, not by LLM)». Не ставил его никто: в схеме
+  // инструмента поля нет, dispatch его не писал, и единственная запись во всём
+  // репозитории была в тесте, который читавший его гейт и «проверял». Глубину
+  // держит `_delegation_path` / DispatchCtx.delegationChain — она растёт на
+  // каждом хопе, в отличие от счётчика, который не рос никогда.
   /**
    * C28 back-compat: ordered list of agent keys traversed in this delegation
    * chain (root first → current sender last). Used as a fallback when
@@ -218,6 +250,75 @@ export interface WriteWikiPayload {
   title: string;
   /** Markdown body. */
   content: string;
+}
+
+/**
+ * Команда из закрытого списка lib/mac-control.ts. `_userId`/`_delegated`
+ * дописывает tool-loop так же, как у MAC_RUN_CLAUDE.
+ */
+export type MacControlPayload = MacControl & { _userId?: string; _delegated?: boolean };
+
+/**
+ * Личное сообщение от аккаунта владельца (lib/userbot-dm.ts). `username` уже
+ * нормализован; `_userId`/`_delegated` дописывает tool-loop — хендлер по ним
+ * проверяет, что просил сам владелец из своей лички.
+ */
+export type UserbotSendDmPayload = UserbotDm & { _userId?: string; _delegated?: boolean };
+
+/**
+ * CLOUDFLARE_DNS: заявка, собранная buildDnsChange (lib/cloudflare-dns.ts);
+ * `_userId`/`_delegated` дописывает tool-loop, как у USERBOT_SEND_DM.
+ */
+export type CloudflareDnsPayload = DnsChange & { _userId?: string; _delegated?: boolean };
+
+/** ORDER_TAXI: нормализованные адреса, ключ тарифа и цена из TAXI_QUOTE. */
+export interface OrderTaxiPayload {
+  from: string;
+  to: string;
+  tariff: TaxiTariff;
+  price_rub: number;
+  _userId?: string;
+  _delegated?: boolean;
+}
+
+/**
+ * ORDER_FOOD: товары из SHOP_QUOTE (id, название и цена ровно из расчёта),
+ * количество и доставка. Хендлер сверяет всё это с расчётом ещё раз.
+ */
+export interface OrderFoodPayload {
+  service: ShopService;
+  /** Ресторан Еды — название ровно как в SHOP_QUOTE; у Лавки поля нет. */
+  place?: string;
+  lines: Array<{ id: string; name: string; qty: number; price_rub: number }>;
+  delivery_rub: number;
+  _userId?: string;
+  _delegated?: boolean;
+}
+
+/**
+ * MARKET_PURCHASE: товары Маркета из SHOP_QUOTE {service: "market"} и
+ * delivery_rub — сколько владелец готов заплатить за доставку (Маркет
+ * показывает её только на оформлении).
+ */
+export interface MarketPurchasePayload {
+  lines: Array<{ id: string; name: string; qty: number; price_rub: number }>;
+  delivery_rub: number;
+  _userId?: string;
+  _delegated?: boolean;
+}
+
+/**
+ * ORDER_DELIVERY: адреса, тариф и цена из DELIVERY_QUOTE; comment — необязательный
+ * комментарий курьеру, подписывается вместе с заказом.
+ */
+export interface OrderDeliveryPayload {
+  from: string;
+  to: string;
+  tariff: DeliveryTariff;
+  price_rub: number;
+  comment?: string;
+  _userId?: string;
+  _delegated?: boolean;
 }
 
 export interface MacRunClaudePayload {
@@ -391,6 +492,15 @@ export type PayloadByType = {
    * мёртвый аварийный тормоз (уже случалось, SEC-audit LOW-2).
    */
   MAC_STOP: { _userId?: string; _delegated?: boolean };
+  MAC_CONTROL: MacControlPayload;
+  USERBOT_SEND_DM: UserbotSendDmPayload;
+  CLOUDFLARE_DNS: CloudflareDnsPayload;
+  ORDER_TAXI: OrderTaxiPayload;
+  TAXI_CANCEL: { _userId?: string; _delegated?: boolean };
+  ORDER_FOOD: OrderFoodPayload;
+  MARKET_PURCHASE: MarketPurchasePayload;
+  ORDER_DELIVERY: OrderDeliveryPayload;
+  DELIVERY_CANCEL: { _userId?: string; _delegated?: boolean };
   SCHEDULE_POST: SchedulePostPayload;
   CREATE_REMINDER: CreateReminderPayload;
   CANCEL_REMINDER: CancelReminderPayload;

@@ -137,7 +137,7 @@ describe("ответ, доставленный частично, всё равн
 });
 
 describe("sendChunked сообщает о каждой доставленной части", () => {
-  test("часть отдаётся без счётчика «(i/N) »", async () => {
+  test("часть отдаётся без счётчика «(i/N)»", async () => {
     const parts: string[] = [];
     await sendChunked(async (t) => ({ ok: t }), REPLY, (_s, part) => parts.push(part));
     expect(parts.length).toBeGreaterThan(1);

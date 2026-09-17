@@ -139,3 +139,172 @@ A synchronous task-spawn `ENOENT` also permits fallback only when the executable
 Fallback is disabled in bypass mode. Codex → Claude is blocked (`fallbackBlocked: permission_mismatch`) because Claude's permission modes cannot preserve Codex's filesystem/network sandbox. A separately requested Claude session remains possible under the normal approval flow.
 
 Verification: local installed Claude accepted the readiness command and produced the structured `authentication_unavailable` classification with sanitized daemon environment; no raw provider output was logged. Quota/billing cases are covered with isolated subprocess fixtures, not a live exhausted account.
+
+## Управление Mac (MAC_CONTROL)
+
+Закрытый список команд без Claude CLI: `lock`, `sleep`, `volume`, `mute`, `unmute`,
+`open_app`, `reminders`, `reminder_add`, `event_add`, `shutdown`, `restart`.
+Сервер и демон разбирают команду одним строгим разбором (`lib/mac-control.ts`);
+исполнитель `macctl.ts` превращает её в фиксированный argv без оболочки.
+Команда принимается только из лички владельца, только от оркестратора;
+выключение и перезагрузка всегда идут через подтверждение в чате
+(`docs/approval-policy.md`).
+
+Всё выключено по умолчанию. Включает владелец в окружении демона:
+
+- `MAC_CONTROL_ENABLED=true` — сам выключатель;
+- `MAC_APPS=alias=bundle.id,...` — единственный способ назвать приложение для `open_app`;
+- `MAC_CALENDAR_ENABLED=true` — напоминания и события (помощник EventKit).
+
+Разрешения macOS выдаёт только владелец, руками:
+
+1. `sh build-calendar.sh`, затем `bin/agent-calendar authorize` и
+   `bin/agent-calendar authorize-reminders` — диалоги «Календари» и «Напоминания».
+2. Громкость, выключение и перезагрузка через `osascript` попросят
+   «Автоматизация → System Events» при первом вызове; без него демон вернёт
+   `automation_access_required`.
+
+Проверка вручную: `bun macctl.ts '{"command":"volume","level":30}'`.
+Наружу уходят только фиксированные коды ошибок, stderr не пересылается.
+
+## Такси (Яндекс Go)
+
+Операции `quote`, `prepare`, `confirm`, `abandon`, `status`, `cancel` приходят
+кадром `taxi` и разбираются строго (`lib/taxi.ts`). Браузер — обычный Chrome через
+`playwright-core` с отдельным профилем; никаких стелс-приёмов. Капча или страница
+входа — отказ и скриншот владельцу. Всё про вёрстку — в `taxi-selectors.ts`.
+
+Всё выключено по умолчанию. Подготовка — только руками владельца:
+
+1. Отдельный аккаунт Яндекса для агента и карта с лимитом расходов; основной
+   аккаунт в профиль агента не вносить.
+2. `cd agent/mac-daemon && bun install` — ставит `playwright-core` (браузер не
+   скачивается, используется установленный Chrome).
+3. Окружение демона:
+   - `TAXI_ENABLED=true`;
+   - `TAXI_PROFILE_DIR` — абсолютный путь к каталогу профиля, владелец — текущий
+     пользователь, права `700` (иначе `profile_insecure`);
+   - `TAXI_HEADLESS=true` — по желанию, без окна (Яндекс чаще показывает капчу);
+   - `TAXI_BROWSER_CHANNEL` — по умолчанию `chrome`.
+4. Вход: `TAXI_PROFILE_DIR=… bun taxi.ts login` — окно Chrome, владелец входит
+   сам и жмёт Enter в терминале. Агент пароли и коды не вводит.
+5. Сверка локаторов: `bun taxi.ts probe` печатает дерево доступности страницы,
+   `bun taxi.ts quote "откуда" "куда"` — расчёт без заказа. Если тексты кнопок
+   и полей отличаются, правится только `taxi-selectors.ts`.
+6. Яндекс Go работает из российского региона: при VPN на Mac проверь, что
+   `taxi.yandex.ru` открывается без редиректа.
+7. На сервере: `TAXI_ENABLED=true`, владелец в `MAC_USER_IDS` и
+   `MINIAPP_ADMIN_USER_IDS`, активный ключ подписи в приложении.
+
+Заказ — два шага: `prepare` (маршрут, тариф, цена; ничего не нажимается) и
+`confirm` (цена ещё раз, сверка с подписанным потолком, одно нажатие «Заказать»).
+Сессия `prepare` одноразовая и живёт 3 минуты. Браузер закрывается после
+5 минут простоя.
+
+## Доставка (курьер Яндекс Go)
+
+Кадр `delivery`, операции те же, что у такси (`lib/delivery.ts`); код — `delivery.ts`,
+страница — `delivery-playwright.ts`, вёрстка — `delivery-selectors.ts`. Агент страницу
+доставки не осматривал: все тексты и адрес старта помечены «НЕ сверено», пока владелец
+их не сверит, исполнитель упрётся в отказ до нажатия — деньги не спишутся.
+
+1. Окружение демона:
+   - `DELIVERY_ENABLED=true`;
+   - `DELIVERY_PROFILE_DIR` — отдельный от `TAXI_PROFILE_DIR` каталог профиля (Chrome
+     запирает профиль; совпадение — отказ `profile_shared`), права `700`;
+   - `DELIVERY_HEADLESS`, `DELIVERY_BROWSER_CHANNEL` — как у такси.
+2. Вход: `DELIVERY_PROFILE_DIR=… bun delivery.ts login` — владелец входит сам, Enter.
+   Контакты отправителя и получателя должны подставляться из аккаунта: агент их не
+   вводит, пустое обязательное поле телефона или имени — отказ `contact_required`.
+3. Сверка: `bun delivery.ts probe` печатает `guard`, `contact_required` и дерево
+   доступности; `bun delivery.ts quote "откуда" "куда"` — расчёт без заказа. Сверь
+   вкладку «Доставка», поля адресов, названия тарифов, поле комментария, кнопку
+   заказа, `DELIVERY_STATE_TEXT`. Правится только `delivery-selectors.ts`.
+4. На сервере: `DELIVERY_ENABLED=true`, владелец в `MAC_USER_IDS` и
+   `MINIAPP_ADMIN_USER_IDS`, активный ключ подписи.
+
+Заказ — `prepare` (маршрут, тариф, комментарий, цена) и `confirm` (цена, сверка с
+потолком, одно нажатие). Сессия живёт 3 минуты, браузер закрывается после 5 минут простоя.
+
+## Яндекс Лавка
+
+Операции `quote`, `prepare`, `confirm`, `abandon`, `status` приходят кадром `shop`
+и разбираются строго (`lib/shop.ts`). Браузер и правила — как у такси: отдельный
+профиль Chrome, без стелс-приёмов, капча или вход — отказ и скриншот. Вёрстка —
+в `shop-selectors.ts`. Поиск и карточки товаров сверены на публичных страницах;
+корзина, оформление, оплата и заказы видны только после входа — их локаторы
+сверяет владелец.
+
+Всё выключено по умолчанию. Подготовка — только руками владельца:
+
+1. Тот же отдельный аккаунт Яндекса и карта с лимитом, что для такси.
+2. Окружение демона:
+   - `SHOP_ENABLED=true`;
+   - `SHOP_PROFILE_DIR` — отдельный каталог профиля (не профиль такси), права `700`;
+   - `SHOP_HEADLESS`, `SHOP_BROWSER_CHANNEL` — как у такси.
+3. Вход и адрес: `SHOP_PROFILE_DIR=… bun shop.ts login` — владелец входит сам,
+   выбирает адрес доставки и привязывает карту (или SberPay/Яндекс Пэй), затем
+   Enter. Агент адрес и карту не вводит: без адреса — `address_required`, без
+   сохранённого способа оплаты — `payment_needs_owner`.
+4. Сверка локаторов: `bun shop.ts quote "молоко" "хлеб"` — поиск без корзины;
+   `bun shop.ts probe` — дерево доступности текущей страницы: открой руками
+   корзину с товаром, страницу оформления (до оплаты) и «Мои заказы», на каждой
+   нажми Enter. Если тексты отличаются — правится только `shop-selectors.ts`.
+5. Корзина профиля должна быть пустой: чужие товары — отказ `cart_not_empty`.
+6. На сервере: `SHOP_ENABLED=true`, владелец в `MAC_USER_IDS` и
+   `MINIAPP_ADMIN_USER_IDS`, активный ключ подписи.
+
+Заказ — `prepare` (подписанные товары в пустую корзину, итог со страницы
+оформления, ничего не оплачивается) и `confirm` (итог ещё раз, сверка с
+подписанным потолком, одно нажатие «Оплатить»). Любой отказ до оплаты убирает
+добавленные товары из корзины. Сессия одноразовая и живёт 5 минут.
+
+## Яндекс Еда
+
+Тот же кадр `shop`, тот же `SHOP_ENABLED` и тот же профиль `SHOP_PROFILE_DIR`
+(один вход в Яндекс на Лавку и Еду). Вёрстка — в `eda-selectors.ts`, код
+страницы — `eda-playwright.ts`. На публичных страницах без входа сверены ссылки
+ресторанов и карточки меню (`product-card-v2-*`); поиск ресторанов, адрес в
+шапке, счётчик и «минус» на карточке, корзина, оформление, оплата и заказы — это
+предположения, помеченные «НЕ сверено». Пока владелец их не сверил, исполнитель
+упрётся в отказ до оплаты (`address_required`, `place_not_found`, `cart_mismatch`,
+`price_unreadable`) — заказ не пройдёт, но и деньги не спишутся.
+
+Сверка — только руками владельца:
+
+1. Вход и адрес: `SHOP_PROFILE_DIR=… bun shop.ts login eda` — войти, выбрать адрес
+   доставки, проверить сохранённую карту, Enter.
+2. `bun shop.ts eda-quote "название ресторана" "блюдо"` — поиск ресторана и блюд
+   без корзины. `place_not_found` — поправить `edaSearchUrl` или `placeLink`/`placeTitle`;
+   пустой список блюд — `dishCard`/`dishTitle`/`dishPrice`/`dishMeta`.
+3. `bun shop.ts probe eda`: руками открой ресторан, положи одно блюдо (посмотри
+   счётчик и «минус» на карточке), открой корзину, страницу оформления до оплаты и
+   «Мои заказы»; на каждой нажми Enter. Сверь `dishCounter`, `dishMinus`,
+   `addressButton`, `cart*`, тексты `checkout`, `pay`, `total`, `savedCard` и
+   `EDA_STATE_TEXT`. Если отличаются — правится только `eda-selectors.ts`.
+4. Корзина Еды должна быть пустой. Если после «В корзину» открывается окно (опции
+   блюда, «корзина другого ресторана») — исполнитель закрывает его и отказывает.
+
+## Яндекс Маркет
+
+Тот же кадр `shop`, `SHOP_ENABLED` и профиль `SHOP_PROFILE_DIR`. Вёрстка — в
+`market-selectors.ts`, код страницы — `market-playwright.ts`. Агент Маркет не
+осматривал: маршруты, `data-auto` и подписи — все помечены «НЕ сверено». Пока
+владелец их не сверил, исполнитель упрётся в отказ до оплаты — деньги не спишутся.
+
+Товар — `<modelId>-<sku>` из ссылки карточки (`/card/<slug>/<modelId>?sku=<sku>`).
+Доставка на расчёте не читается (`delivery_rub: null`): её цена видна только на
+оформлении, и итог сверяется с подписанным потолком.
+
+1. `SHOP_PROFILE_DIR=… bun shop.ts login market` — войти, выбрать адрес, проверить
+   сохранённую карту (не «при получении»), Enter.
+2. `bun shop.ts market-quote "товар"` — поиск без корзины. Пустой список —
+   `marketSearchUrl`, `snippet*`; id не читается — `snippetLink` и `marketIdFromHref`.
+3. `bun shop.ts probe market`: руками открой карточку товара, положи его в корзину
+   (посмотри счётчик и «плюс»/«минус»), открой корзину, оформление до оплаты и
+   «Мои заказы»; на каждой нажми Enter. Сверь `productTitle`, `productOffer`,
+   `cartButton`, `qty*`, `addressButton`, `cartItem*`, тексты `checkout`, `pay`,
+   `total`, `savedCard`, `payOnDelivery` и `MARKET_STATE_TEXT`. Правится только
+   `market-selectors.ts`.
+4. Корзина Маркета должна быть пустой. Если после «В корзину» страница просит
+   выбрать размер или цвет — отказ `options_required`; допродажу исполнитель закрывает.

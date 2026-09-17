@@ -1,7 +1,7 @@
 /**
  * Аудит 2026-08-12: одобренное человеком действие исполнялось с урезанным ctx.
  *
- * `executeApproved` (lib/commands.ts:131-135) собирает ctx из трёх полей —
+ * `executeApproved` (lib/commands.ts) собирает ctx из трёх полей —
  * `{ agentKey, chatId, telegram }`. Обычный путь агента (`gateOrDispatch`)
  * получает одиннадцать: `resolveAgent`, `handoffDeps`, `botId`, `requestId`,
  * `delegationChain` и прочее. Всё, что человек одобрил, исполняется без них.

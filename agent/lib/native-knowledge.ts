@@ -1,6 +1,7 @@
 import type { Database } from 'bun:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
 import { scrubSecretString } from './log.ts';
+import { EngineeringMemory, selectEngineeringEntries } from './engineering-memory.ts';
 export type KnowledgeEntry = {
     id: string;
     kind: 'fact' | 'decision' | 'task';
@@ -51,6 +52,7 @@ export function parseKnowledgeUpdate(raw: unknown): KnowledgeEntry[] {
     });
 }
 export class NativeKnowledge {
+    readonly engineering: EngineeringMemory;
     constructor(readonly db: Database) {
         db.run(`CREATE TABLE IF NOT EXISTS native_projects(id TEXT PRIMARY KEY,user_id TEXT NOT NULL,title TEXT NOT NULL,created INTEGER NOT NULL,updated INTEGER NOT NULL);
  CREATE INDEX IF NOT EXISTS native_project_owner ON native_projects(user_id,updated);
@@ -59,6 +61,7 @@ export class NativeKnowledge {
  CREATE TABLE IF NOT EXISTS native_knowledge_proposals(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,conversation_id TEXT NOT NULL,entry_id TEXT NOT NULL,revision INTEGER NOT NULL,entry TEXT NOT NULL,UNIQUE(project_id,conversation_id,entry_id));
  CREATE TABLE IF NOT EXISTS native_knowledge_rejections(project_id TEXT NOT NULL,conversation_id TEXT NOT NULL,entry_id TEXT NOT NULL,fingerprint TEXT NOT NULL,updated INTEGER NOT NULL,PRIMARY KEY(project_id,conversation_id,entry_id));
  CREATE TABLE IF NOT EXISTS native_project_knowledge(project_id TEXT NOT NULL,conversation_id TEXT NOT NULL,entry_id TEXT NOT NULL,entry TEXT NOT NULL,approved INTEGER NOT NULL,PRIMARY KEY(project_id,conversation_id,entry_id));`);
+        this.engineering = new EngineeringMemory(db);
     }
     private own(user: string, chat: string) { if (!this.db.query('SELECT 1 FROM conversations WHERE id=? AND user_id=?').get(chat, user))
         throw new Error('knowledge_not_found'); }
@@ -68,7 +71,7 @@ export class NativeKnowledge {
     createProject(user: string, title: string) { title = clean(title, 100); return this.db.transaction(() => { if (this.projects(user).length >= 100)
         throw new Error('knowledge_limit'); const id = randomUUID(), now = Date.now(); this.db.query('INSERT INTO native_projects VALUES(?,?,?,?,?)').run(id, user, title, now, now); return this.project(user, id); })(); }
     renameProject(user: string, id: string, title: string) { this.project(user, id); this.db.query('UPDATE native_projects SET title=?,updated=? WHERE id=? AND user_id=?').run(clean(title, 100), Date.now(), id, user); return this.project(user, id); }
-    deleteProject(user: string, id: string) { this.db.transaction(() => { this.project(user, id); for (const table of ['native_project_chats', 'native_knowledge_proposals', 'native_project_knowledge', 'native_knowledge_rejections'])
+    deleteProject(user: string, id: string) { this.db.transaction(() => { this.project(user, id); for (const table of ['native_project_chats', 'native_knowledge_proposals', 'native_project_knowledge', 'native_knowledge_rejections', 'engineering_entries', 'engineering_project_keys'])
         this.db.query(`DELETE FROM ${table} WHERE project_id=?`).run(id); this.db.query('DELETE FROM native_projects WHERE id=? AND user_id=?').run(id, user); })(); }
     projectForChat(user: string, chat: string): KnowledgeProject | null { this.own(user, chat); return this.db.query('SELECT p.id,p.title,p.created,p.updated FROM native_projects p JOIN native_project_chats c ON c.project_id=p.id WHERE c.conversation_id=? AND p.user_id=?').get(chat, user) as KnowledgeProject | null; }
     assignProject(user: string, chat: string, project: string | null) { this.db.transaction(() => { this.own(user, chat); if (project !== null)
@@ -94,7 +97,9 @@ export class NativeKnowledge {
             revision: number;
             entry: string;
         }[]).map(x => ({ id: x.id, projectId: x.project_id, conversationId: x.conversation_id, revision: x.revision, entry: JSON.parse(x.entry) as KnowledgeEntry })) : [];
-        return { revision: r?.revision ?? 0, entries: r ? JSON.parse(r.entries) as KnowledgeEntry[] : [], project, projectEntries, proposals };
+        const imported = project ? this.engineering.entries(user, project.id) : [];
+        return { revision: r?.revision ?? 0, entries: r ? JSON.parse(r.entries) as KnowledgeEntry[] : [], project, projectEntries, proposals,
+            importedProject: selectEngineeringEntries(imported), importedProjectCount: imported.length };
     }
     updateChat(user: string, chat: string, revision: number, entries: KnowledgeEntry[]): boolean { const valid = parseKnowledgeUpdate({ entries }); if (!Number.isSafeInteger(revision) || revision < 0)
         throw invalid(); return this.db.transaction(() => { this.own(user, chat); if (this.snapshot(user, chat).revision !== revision)

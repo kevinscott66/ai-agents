@@ -4,7 +4,7 @@
  * 
  * Performs a complete restore drill to verify backup integrity:
  * 1. Finds latest backup files in specified backup directory
- * 2. Restores database snapshot to test location (/tmp/restore-test/)
+ * 2. Restores database snapshot to a fresh temp dir (`restore-test-<ts>` в os.tmpdir())
  * 3. Extracts memory wiki backup to test location
  * 4. Verifies data integrity by comparing row counts and file structure
  * 5. Cleans up test data after verification
@@ -205,7 +205,7 @@ export async function restoreFromBackup(options: RestoreOptions): Promise<Restor
     // одними `memory-*.tgz` (снапшот БД перестал делаться) доходил до конца с
     // success: true — потому что success требовал `dbRestored || wikiRestored`.
     // Это ровно тот случай, на который сам бэкап поднимает `backup_partial`
-    // (lib/backup.ts:579): учебный restore обязан говорить то же самое, иначе
+    // (lib/backup.ts): учебный restore обязан говорить то же самое, иначе
     // он подтверждает наличие копии, которой нет.
     if (!backups.dbBackup) {
       result.errors.push(
@@ -262,8 +262,8 @@ export async function restoreFromBackup(options: RestoreOptions): Promise<Restor
         // нулевой длины — валидная пустая база для sqlite: quick_check
         // отвечает ok, таблиц ноль, счётчиков ноль. Учебный restore печатал
         // `Tables: 0`, `{"success":true,"errors":[]}` и выходил с кодом 0.
-        // Сам бэкап такой снапшот считает битым (`verifySnapshot`,
-        // lib/backup.ts:82: «в снапшоте нет таблиц») — расхождение означало,
+        // Сам бэкап такой снапшот считает битым (`verifySnapshot` в
+        // lib/backup.ts бросает «в снапшоте нет таблиц») — расхождение означало,
         // что проверка копии слабее проверки при её создании.
         if (Object.keys(result.originalRowCounts).length === 0) {
           result.errors.push(

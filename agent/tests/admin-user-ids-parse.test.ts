@@ -9,7 +9,7 @@
  *
  *    `??` срабатывает на undefined/null, а строка `TELEGRAM_ADMIN_USER_IDS=` в
  *    .env (и в systemd EnvironmentFile) даёт ПУСТУЮ СТРОКУ — не nullish. Значит
- *    при `TELEGRAM_ADMIN_USER_IDS=` (как в .env.example:94, где рядом написано
+ *    при `TELEGRAM_ADMIN_USER_IDS=` (как в .env.example, где рядом написано
  *    «Пусто = падает обратно на MINIAPP_ADMIN_USER_IDS») список админов пуст, и
  *    владелец на /approve получает «⛔ только для администраторов». В логе при
  *    этом «sender is not an admin» — то есть причина названа неверно: дело не в

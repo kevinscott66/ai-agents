@@ -125,6 +125,8 @@ const CODE_SPAN_RE = /(```[\s\S]*?(?:```|$)|`[^`\n]*`)/g;
  * настоящие. Ограничение касается только хэндла — единственного правила,
  * которое путает синтаксис с персональными данными.
  */
+const HANDLE_RE = /(^|[\s(])@([A-Za-z0-9_]{4,})/g;
+
 /**
  * Аудит 2026-08-20: у правила почты не было понятия TLD, и спецификатор
  * пакета разбирался как адрес — `bun@1.1.30` это «локальная часть `bun`,
@@ -183,7 +185,7 @@ export function sanitizeWikiContent(input: string): string {
     .map((part, i) =>
       i % 2 === 1
         ? part
-        : part.replace(/(^|[\s(])@([A-Za-z0-9_]{4,})/g, "$1<handle-redacted>"),
+        : part.replace(HANDLE_RE, "$1<handle-redacted>"),
     )
     .join("");
 }
@@ -341,8 +343,29 @@ export function getRecentMessages(chatId: string, limit = 30): ChatRow[] {
 
 export type Scope = "_team" | (string & {});
 
-function scopeDir(scope: Scope): string {
-  return join(MEMORY_DIR, scope);
+/**
+ * Каталог scope внутри корня памяти.
+ *
+ * Аудит 2026-09-11: проверка «не вышли за корень» стояла только в `pagePath` —
+ * там канонизируется весь путь кандидата, а вместе с ним и scope. Но `wikiLog`,
+ * `wikiAppendLog` и `wikiIndex` собирают `join(scopeDir(scope), "log.md")` сами
+ * и не канонизируют ничего: scope со `..` уводил бы чтение и запись за пределы
+ * MEMORY_DIR, причём запись — в append-режиме, то есть в чужой файл.
+ *
+ * Достижимого пути сегодня нет, и врать об этом не нужно: все вызывающие
+ * передают либо литерал `"_team"`, либо ключ роли из CHARACTERS. Но держится
+ * это на вызывающих, а не здесь — ровно то же самое было верно про слаг до
+ * `validateSlug`. Инвариант «путь не выходит из корня» принадлежит тому, кто
+ * путь собирает.
+ *
+ * Возвращаем ровно то же значение, что и раньше (не `resolve`): `slugFromPath`
+ * считает `relative` от этого пути, и подмена относительного на абсолютный
+ * тихо привязала бы ключи индекса к cwd процесса.
+ */
+export function scopeDir(scope: Scope): string {
+  const dir = join(MEMORY_DIR, String(scope ?? ""));
+  assertWithinRoot(resolve(dir), resolve(MEMORY_DIR));
+  return dir;
 }
 
 /**
@@ -456,9 +479,12 @@ export function wikiRead(scope: Scope, slug: string): string | null {
  * Сколько страниц попадает в сгенерированный индекс.
  *
  * Индекс уезжает в system-промпт КАЖДОГО хода двенадцати ролей, причём два из
- * трёх читателей (`buildWikiPagesSystemText` в handoff.ts и в
- * orchestrator/message-handler.ts — координаты не пишем, они разъезжаются) не режут
- * его ничем. 120 строк по ~60 символов — около 7KB, это потолок, а не типичный
+ * трёх читателей — вызовы `buildMemorySystemText` в handoff.ts и в
+ * orchestrator/message-handler.ts (координаты не пишем, они разъезжаются) —
+ * подают в него `wikiIndex(...)` как есть и не режут ничем; режет только
+ * третий, `clipWikiIndex` в compactor.ts. Соседний `buildWikiPagesSystemText`
+ * сюда не относится вовсе: он принимает попадания ПОИСКА, а не индекс, и
+ * клипает их сам. 120 строк по ~60 символов — около 7KB, это потолок, а не типичный
  * размер: столько страниц в вики пока нет ни в одной области.
  */
 export const WIKI_INDEX_MAX_PAGES = 120;
@@ -563,13 +589,36 @@ export function wikiLog(scope: Scope): string {
   return readTail(p, WIKI_LOG_TAIL_BYTES);
 }
 
+/** Потолок на строку лога — она живёт одной строкой в общем файле scope. */
+const MAX_WIKI_LOG_LINE = 240;
+
+/**
+ * Строка лога команды — такой же недоверенный текст, как тело и заголовок.
+ *
+ * Аудит 2026-09-11: правило жило ДВУМЯ отдельно написанными копиями —
+ * здесь и в `wikiAppendLogAsync` (memory-async.ts), посимвольно одинаковыми.
+ * Ровно этот разъезд уже стоил паре двух багов (upsertWikiFts, pagePath), а
+ * соседний `sanitizeWikiTitle` тем временем снимает ОБА конца строки
+ * (`/[\r\n]+/`) — обе копии здесь снимали только `\n`.
+ *
+ * Разница не косметическая. Формат лога — одна запись на строку, и `\r`
+ * внутри записи в файле остаётся. Хвост лога уходит в system-промпт каждого
+ * хода (см. `wikiLog`), а там возврат каретки — это уже разметка чужого текста
+ * нашим форматом, а не безобидный символ.
+ */
+export function sanitizeWikiLogLine(line: string): string {
+  return sanitizeWikiContent(line)
+    .replace(/[\r\n]+/g, " ")
+    .slice(0, MAX_WIKI_LOG_LINE);
+}
+
 export function wikiAppendLog(scope: Scope, line: string, agentKey: string) {
   if (!line || typeof line !== "string") return;
   const p = join(scopeDir(scope), "log.md");
   mkdirSync(dirname(p), { recursive: true });
   const ts = new Date().toISOString().slice(0, 16).replace("T", " ");
   // T-305 MED-2: sanitize user-PII patterns before persisting to wiki log.
-  const safeLine = sanitizeWikiContent(line).replace(/\n/g, " ").slice(0, 240);
+  const safeLine = sanitizeWikiLogLine(line);
   appendFileSync(p, `\n${ts} | ${agentKey} | ${safeLine}`);
   trimWikiLog(p);
 }
@@ -845,9 +894,9 @@ export function wikiScopes(): string[] {
  *
  * 1. Очистка таблицы стояла ПЕРЕД `if (!existsSync(MEMORY_DIR)) return`.
  *    Проверка, написанная ровно на этот случай, срабатывала уже после
- *    разрушения: опечатка в MEMORY_DIR, непримонтированный том, переезд
- *    каталога — и старт молча оставляет всем 12 ролям пустой индекс, вернувшись
- *    штатно и без единой строки в логе.
+ *    разрушения: опечатка в MEMORY_DIR, переезд каталога — и старт молча
+ *    оставляет всем 12 ролям пустой индекс, вернувшись штатно и без единой
+ *    строки в логе.
  *
  * 2. Сборка шла вне транзакции, по одному INSERT'у в автокоммите. Сбой на
  *    середине обхода оставлял индекс частичным (или пустым — очистка к тому
@@ -858,6 +907,20 @@ export function wikiScopes(): string[] {
  * отдельный файл пропускается — терять из-за него вики всей команде незачем;
  * ошибка БД, наоборот, откатывает всё, потому что частичный индекс внешне
  * неотличим от полного.
+ *
+ * 3. Аудит 2026-09-11: список причин выше долго включал «непримонтированный
+ *    том», и от него сторож не спасал никогда. Непримонтированная точка
+ *    монтирования существует и пуста: `existsSync` проходит, обход находит
+ *    ноль страниц, `DELETE` фиксируется — то есть ровно тот исход, ради
+ *    которого проверку и писали, причём снова молча. Из перечня эта причина
+ *    убрана, а сам случай теперь слышно: обнуление непустого индекса пишется
+ *    как `error`.
+ *
+ *    Почему только лог, а не откат. Откат сохранил бы строки страниц, которых
+ *    на диске уже нет, — а это выдача SEARCH_WIKI, уходящая в контекст ролей,
+ *    и Wiki-вью Mini App. Массовое удаление страниц руками — законная
+ *    операция, и после неё пустой индекс верен. Откатываем только ошибку БД
+ *    (пункт 2): там нельзя доверять ни новому состоянию, ни старому.
  *
  * `root` — тестовый шов: прод зовёт без аргумента.
  */
@@ -882,13 +945,29 @@ export function rebuildWikiIndex(root: string = MEMORY_DIR) {
     });
     return;
   }
+  const countRows = (): number =>
+    (db.prepare(`SELECT count(*) as n FROM wiki_fts`).get() as { n: number }).n;
   try {
+    let before = 0;
+    let after = 0;
     db.transaction(() => {
+      before = countRows();
       db.prepare(`DELETE FROM wiki_fts`).run();
       for (const scope of scopes) {
         walkAndIndex(scope, join(root, scope));
       }
+      after = countRows();
     })();
+    if (before > 0 && after === 0) {
+      // Пункт 3 докблока: каталог есть, но пуст — непримонтированный том,
+      // переезд содержимого, пустой bind-mount. Раньше это отличалось от
+      // нормального старта только тем, что вики у всех пропала.
+      log.error("wiki: ребилд обнулил индекс — на диске не нашлось ни одной страницы", {
+        dir: root,
+        before,
+        scopes: scopes.length,
+      });
+    }
   } catch (e) {
     log.error("wiki: ребилд индекса не удался — прежний индекс сохранён", {
       e: String(e),
@@ -922,7 +1001,21 @@ function walkAndIndex(scope: string, dir: string) {
         });
         continue;
       }
-      const firstLine = content.split("\n")[0]?.replace(/^#\s*/, "").trim() ?? entry.name;
+      // Аудит 2026-09-11: было `content.split("\n")[0]?…  ?? entry.name`, и
+      // запасной вариант не мог сработать ни разу: `split` всегда отдаёт хотя
+      // бы один элемент, поэтому `[0]` — всегда строка, а `?.` не
+      // короткозамыкает. Файл, начинающийся с пустой строки (а руками сюда
+      // кладут — см. разбор слага ниже), индексировался с ПУСТЫМ title, тогда
+      // как читатель этой строки был уверен, что имя файла его прикроет.
+      //
+      // Ловить надо не отсутствие элемента, а пустую строку, — значит `||`, не
+      // `??`. Писателю это не противоречит: `handleWriteWiki` пустой title
+      // отклоняет, а `sanitizeWikiTitle` подставляет непустые плейсхолдеры, так
+      // что у страниц, записанных приложением, первая строка пустой не бывает
+      // и ребилд по-прежнему сводит их title в точности к `upsertWikiFts`.
+      const firstLine =
+        content.split("\n")[0]!.replace(/^#\s*/, "").trim() ||
+        entry.name.replace(/\.md$/, "");
       // Ровно то, что кладёт писатель: без строки заголовка (см.
       // wikiFtsContent). Заголовок остаётся в своей колонке.
       const ftsBody = wikiFtsContent(content);

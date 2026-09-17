@@ -144,7 +144,9 @@ describe("отправка роли доезжает до истории", () =>
   it("после провала отправки регистрация снята — эхо не подменяется", () => {
     const { rows, rec } = recorder();
     markSelfSend(CHAT, "не ушло", "design");
-    unmarkSelfSend(CHAT, "не ушло");
+    // Роль в откате та же, что в регистрации, — как это делает sendMessage в
+    // lib/userbot.ts. Откат без роли снял бы чужую запись (круг 32).
+    unmarkSelfSend(CHAT, "не ушло", "design");
     // Владелец набрал тот же текст руками — это человеческая реплика.
     rec(incoming({ text: "не ушло", messageId: 47, isOutgoing: true }));
     expect(rows).toHaveLength(1);

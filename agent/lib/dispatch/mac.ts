@@ -11,7 +11,10 @@ import {
   isMacOnline as realIsMacOnline,
   isUserAllowed as realIsUserAllowed,
   stopMac as realStopMac,
+  sendControlToMac as realSendControlToMac,
 } from "../mac-bridge.ts";
+import { parseMacControl, parseMacReminders, type MacControl } from "../mac-control.ts";
+import { checkReminderWindow } from "../reminder-time.ts";
 import { TELEGRAM_MESSAGE_TAIL_LIMIT } from "../constants.ts";
 import { log } from "../log.ts";
 import type { PayloadByType } from "../action-payload.ts";
@@ -51,6 +54,8 @@ export type MacBridge = {
     error?: string;
   }>;
   stopMac: () => Promise<{ ok: boolean; error?: string }>;
+  /** Необязателен ради старых тестовых заглушек; по умолчанию — настоящий мост. */
+  sendControlToMac?: (control: MacControl, userId: string | undefined, chatId: number) => Promise<{ ok: boolean; stdout: string; error?: string }>;
   isUserAllowed: (userId: string | undefined | null) => boolean;
 };
 
@@ -185,14 +190,24 @@ export type MacHandlerResult = HandlerResult;
  *     `failAllPending` только чистит карту ожиданий. Отменить прогон нечем:
  *     сокет уже мёртв (обрыв связи, остановка моста) либо `activeSocket` уже
  *     указывает на НОВЫЙ демон (замена клиента), и `cancel` со старым id ушёл
- *     бы не туда. Процесс `claude` в режиме `bypass` продолжает работать в том
- *     же проекте на машине владельца, но в `pending` его больше нет — значит,
- *     он не считается и в `MAC_MAX_CONCURRENT_RUNS`. Рефанд плюс повтор дают
- *     второй `claude` поверх первого, оба пишут в один рабочий каталог.
+ *     бы не туда.
  *
- * Поэтому третья группа помечается `sideEffect`: след снаружи уже оставлен —
- * буквально запущенный и не убитый процесс, — и рефандить его нельзя по тому
- * же правилу, что и частичную доставку в чат (см. action-dispatch.ts).
+ * Аудит 2026-09-11: здесь стояло «процесс `claude` продолжает работать в том
+ * же проекте на машине владельца». Для двух случаев из трёх это неправда:
+ * `mac_replaced` закрывает старый сокет (`activeSocket.close()`),
+ * `mac_bridge_stopped` — весь сервер (`server.stop(true)`), а у демона на
+ * `close` висит `killAllChildren()` с SIGINT→SIGKILL. Дети умирают.
+ * Настоящее окно — `mac_disconnected` при обрыве сети: демон узнаёт о нём
+ * только своим watchdog'ом (`STALE_MS`, 2.5 пинга), и до тех пор процесс жив
+ * и пишет в рабочий каталог.
+ *
+ * Классификацию это не двигает, а обосновывает иначе: в `pending` прогона
+ * больше нет, значит он не считается и в `MAC_MAX_CONCURRENT_RUNS`, а
+ * отличить «убили сразу» от «убьют через STALE_MS» отсюда нечем. Поэтому
+ * третья группа помечается `sideEffect`: возможный след снаружи — буквально
+ * работающий процесс, — и рефанд плюс повтор дали бы второй `claude` поверх
+ * первого в том же каталоге. Рефандить нельзя по тому же правилу, что и
+ * частичную доставку в чат (см. action-dispatch.ts).
  */
 export function macFailureLeavesRunAlive(error: string): boolean {
   return (
@@ -280,7 +295,12 @@ export async function handleMacRunClaude(
   }
   const chatId = ctx.chatId;
   const tg = ctx.telegram;
-  // Periodic system progress updates every 10s while the run is in flight.
+  // Уведомление о прогрессе — НЕ heartbeat. Оно уходит не чаще раза в десять
+  // секунд И только если вывод с прошлого раза вырос: молчащий прогон
+  // (компиляция, долгий сетевой вызов, ожидание ввода) не шлёт в чат ничего.
+  // Аудит 2026-09-11: здесь было написано «every 10s», и это ровно то
+  // обещание, на которое опереться нельзя — по отсутствию сообщений нельзя
+  // заключить, что прогон умер.
   let lastNoticeAt = Date.now();
   let lastLen = 0;
   const onProgress = (snap: {
@@ -300,7 +320,10 @@ export async function handleMacRunClaude(
       lastLen = totalLen;
       tgSendMessage(tg, {
         chatId,
-        text: `[mac] running… ${totalLen}B streamed`,
+        // `stdoutLen`/`stderrLen` копятся как `data.length`, то есть в code
+        // units UTF-16, а не в байтах: на русском тексте и эмодзи «B» врало
+        // бы рядом с `MAC_STREAM_TAIL_BYTES`, который байты настоящие.
+        text: `[mac] running… ${totalLen} симв. получено`,
       }).catch(() => {});
     }
   };
@@ -436,5 +459,44 @@ export async function handleMacStop(
   } catch (e) {
     const msg = getErrorMessage(e);
     return { ok: false, error: msg };
+  }
+}
+
+/**
+ * MAC_CONTROL: команда из закрытого списка на Mac владельца.
+ *
+ * Проверки повторяются здесь, хотя buildPayload их уже сделал: между ним и
+ * исполнением может лежать подтверждение, а payload из approval-очереди
+ * читается из БД. Мост (sendControlToMac) отдельно требует владельца из
+ * MAC_USER_IDS и его личный чат, демон ещё раз разбирает команду строго.
+ */
+export async function handleMacControl(
+  payload: PayloadByType["MAC_CONTROL"],
+  ctx: MacHandlerContext,
+): Promise<MacHandlerResult> {
+  const { _userId, _delegated, ...raw } = payload;
+  const control = parseMacControl(raw);
+  if (!control) return { ok: false, error: "invalid_mac_control" };
+  const now = Date.now();
+  const times = control.command === "reminder_add" ? (control.dueAt ? [control.dueAt] : [])
+    : control.command === "event_add" ? [control.startAt] : [];
+  for (const at of times) {
+    const win = checkReminderWindow(at, now);
+    if (!win.ok) return { ok: false, error: win.error };
+  }
+  const isUserAllowed = ctx.macBridge?.isUserAllowed ?? realIsUserAllowed;
+  if (!isUserAllowed(_userId)) return { ok: false, error: "forbidden" };
+  const send = ctx.macBridge?.sendControlToMac ?? realSendControlToMac;
+  try {
+    const res = await send(control, _userId, ctx.chatId);
+    if (!res.ok) return { ok: false, error: res.error ?? "control_failed" };
+    if (control.command === "reminders") return { ok: true, result: parseMacReminders(res.stdout) };
+    return { ok: true, result: { done: control.command } };
+  } catch (e) {
+    const error = getErrorMessage(e);
+    // Кадр мог дойти до Mac: после таймаута или обрыва команда, возможно, уже
+    // выполнена (экран заблокирован, событие создано). Повторять её нельзя.
+    const delivered = error.startsWith("mac_timeout") || macFailureLeavesRunAlive(error);
+    return delivered ? { ok: false, error, sideEffect: true } : { ok: false, error };
   }
 }

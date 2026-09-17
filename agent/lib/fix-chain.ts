@@ -12,6 +12,7 @@
  */
 
 import { db } from "./db.ts";
+import { DIAG_ASSIGNEE } from "./tasks.ts";
 import { log } from "./log.ts";
 import { HOUR_MS } from "./time-constants.ts";
 
@@ -50,17 +51,17 @@ export function diagTaskThrottleMax(): number {
  * True, если за последний час уже создано >= лимита diag-задач с этим title
  * (title = `Tool error: <actionType>`). `now` инжектится в тестах.
  *
- * `assignedTo` — на кого смотреть. По умолчанию 'aieng': C15-петля адресует
+ * `assignedTo` — на кого смотреть. По умолчанию `DIAG_ASSIGNEE`: C15-петля адресует
  * ретраи только ему, и сужение до одного исполнителя тут исторически и есть
  * смысл счётчика. `null` означает «любой исполнитель» и нужен путям T-704,
  * где ответственная роль выбирается по категории ошибки (или задаётся моделью
- * в CREATE_DIAGNOSTIC_TASK): там фильтр по 'aieng' обнулил бы счётчик, и
+ * в CREATE_DIAGNOSTIC_TASK): там фильтр по одному исполнителю обнулил бы счётчик, и
  * шторм считался бы нулевым.
  */
 export function isDiagTaskThrottled(
   title: string,
   now: number = Date.now(),
-  assignedTo: string | null = "aieng",
+  assignedTo: string | null = DIAG_ASSIGNEE,
 ): boolean {
   const windowStart = now - HOUR_MS;
   const row = db
@@ -76,8 +77,9 @@ export function isDiagTaskThrottled(
 
 /**
  * Аудит 2026-08-20: здесь стояло `n < 0`, то есть НОЛЬ проходил как валидный
- * потолок. А проверка на месте вызова — `parentChain.length >= maxDepth`
- * (action-dispatch.ts:1377), и при maxDepth=0 она истинна всегда, ещё до
+ * потолок. А проверка на месте вызова — `parentChain.length >= maxDepth` в
+ * action-dispatch.ts (искать по `circuit_breaker`), и при maxDepth=0 она
+ * истинна всегда, ещё до
  * первого звена цепочки. Последствия у одной опечатки в .env две, и обе тихие:
  *
  *  1. self-diag выключается целиком — ни одной diag-задачи ни по одному

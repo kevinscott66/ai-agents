@@ -1,6 +1,6 @@
 // Аудит 2026-08-20: отказ по allowlist печатал в лог ВЕСЬ allowlist.
 //
-//   orchestrator/voice-handler.ts:59
+//   orchestrator/voice-handler.ts
 //     log.info(`[voice][${def.key}] chat ${chatId} not in allowlist ${allowed.join(",")}`)
 //   orchestrator/message-handler.ts:203
 //     log.info(`[raw][${def.key}] chat ${chatId} not in allowlist ${allowed.join(",")}`)

@@ -3,7 +3,7 @@
  *
  * Сводка считала онлайн по `a.status === "running"`, а сервер выставляет это
  * поле одним выражением — `paused ? "paused" : "running"`
- * (lib/miniapp-server.ts:210). То есть счётчик мерил не живость, а «не на
+ * (`buildAgentsList` в lib/miniapp-server.ts). То есть счётчик мерил не живость, а «не на
  * паузе»: упавший, молчащий, отвалившийся по сети агент всё равно попадал в
  * числитель. Живость лежит отдельно, в `health` (`alive`,
  * `consecutiveFailures`), и ровно её читает `getAgentStatusIndicator` —

@@ -14,7 +14,15 @@ GREEN_SERVICE="agent-team-green"
 # схема, которая в проде никогда не включалась.
 SINGLE_SERVICE="agent-team.service"
 PROD_PORT=8787
-STAGING_PORT=8788
+# Аудит 2026-09-11: здесь стояло 8788 — порт моста (DEFAULT_MAC_BRIDGE_PORT в
+# agent/lib/constants.ts), и его докстрока прямо объясняет, зачем он отличается
+# от 8787. Мост поднимается в ТОМ ЖЕ процессе, что и Mini App, на 127.0.0.1 —
+# то есть при включённом MAC_BRIDGE_SECRET боевой процесс уже держит 8788, и
+# staging-экземпляр не мог встать на него никогда. Промах при этом молчаливый:
+# старт Mini App обёрнут в try/catch и падает в лог, а health_check на 8788
+# попадал в мост и получал 403 — исправный билд откатывался «по нездоровью».
+# Пара портов проверяется тестом agent/tests/audit-2026-09-11-staging-port-vs-bridge.
+STAGING_PORT=8789
 HEALTH_TIMEOUT=30
 ROLLBACK_TIMEOUT=15
 STAGED_DEPLOY_EXPERIMENTAL="${STAGED_DEPLOY_EXPERIMENTAL:-0}"

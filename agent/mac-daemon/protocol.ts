@@ -19,6 +19,11 @@
  * рассинхрон версий моста и демона выглядит именно так.
  */
 
+import { parseMacControl, type MacControl } from "../lib/mac-control.ts";
+import { parseTaxiRequest, type TaxiRequest } from "../lib/taxi.ts";
+import { parseShopRequest, type ShopRequest } from "../lib/shop.ts";
+import { parseDeliveryRequest, type DeliveryRequest } from "../lib/delivery.ts";
+
 /** Режимы разрешений, которые понимает демон (их пять, у CLI — четыре). */
 export const RUN_MODES = [
   "ask",
@@ -82,8 +87,43 @@ export interface AssistantMsg {
   operation: "calendar_today" | "open_workspace";
 }
 
+/**
+ * Команда из закрытого списка MAC_CONTROL. Кривая команда — тот же отказ,
+ * что и неизвестный тип: демон исполняет только то, что разобрал сам.
+ */
+export interface ControlMsg {
+  type: "control";
+  id: string;
+  control: MacControl;
+}
+
+/** Операция такси (mac-daemon/taxi.ts). Разбирается так же строго, как MAC_CONTROL. */
+export interface TaxiMsg {
+  type: "taxi";
+  id: string;
+  request: TaxiRequest;
+}
+
+/** Операция покупки (mac-daemon/shop.ts). Разбирается так же строго. */
+export interface ShopMsg {
+  type: "shop";
+  id: string;
+  request: ShopRequest;
+}
+
+/** Операция доставки (mac-daemon/delivery.ts). Разбирается так же строго. */
+export interface DeliveryMsg {
+  type: "delivery";
+  id: string;
+  request: DeliveryRequest;
+}
+
 export type BridgeMsg =
   | AssistantMsg
+  | ControlMsg
+  | TaxiMsg
+  | ShopMsg
+  | DeliveryMsg
   | RunMsg
   | PingMsg
   | AuthOkMsg
@@ -125,6 +165,26 @@ export function parseBridgeMsg(raw: unknown): ParsedMsg {
       if (!isNonEmptyString(m.id) || m.id.length > 100) return null;
       if (m.operation !== "calendar_today" && m.operation !== "open_workspace") return null;
       return { type: "assistant", id: m.id, operation: m.operation };
+    case "control": {
+      if (!isNonEmptyString(m.id) || m.id.length > 100) return null;
+      const control = parseMacControl(m.control);
+      return control ? { type: "control", id: m.id, control } : null;
+    }
+    case "taxi": {
+      if (!isNonEmptyString(m.id) || m.id.length > 100) return null;
+      const request = parseTaxiRequest(m.request);
+      return request ? { type: "taxi", id: m.id, request } : null;
+    }
+    case "shop": {
+      if (!isNonEmptyString(m.id) || m.id.length > 100) return null;
+      const request = parseShopRequest(m.request);
+      return request ? { type: "shop", id: m.id, request } : null;
+    }
+    case "delivery": {
+      if (!isNonEmptyString(m.id) || m.id.length > 100) return null;
+      const request = parseDeliveryRequest(m.request);
+      return request ? { type: "delivery", id: m.id, request } : null;
+    }
     case "ping":
       return { type: "ping" };
     case "auth_challenge":

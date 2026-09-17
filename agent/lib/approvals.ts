@@ -11,7 +11,16 @@ import type { Database } from "bun:sqlite";
 import { closeAgentPromptProposals } from "./dispatch/agent-prompt.ts";
 import { crossChatRequested } from "./dispatch/helpers.ts";
 import { closeGatedActionRow } from "./audit.ts";
+import { ruDateTime } from "./delabs-text.ts";
 import { formatMsk } from "./reminder-time.ts";
+import { describeMacControl, parseMacControl } from "./mac-control.ts";
+import { describeUserbotDm, parseUserbotDm } from "./userbot-dm.ts";
+import { describeDnsChange, parseDnsChange } from "./cloudflare-dns.ts";
+import { describeTaxiPayload } from "./taxi.ts";
+import { describeOrderFood } from "./shop.ts";
+import { describeDeliveryPayload } from "./delivery.ts";
+import { limitsFromEnv } from "./signed-actions.ts";
+import { approvalCategories, CATEGORY_LABEL } from "./approval-policy.ts";
 
 /**
  * `failed` — человек одобрил, но исполнение упало (см. markApprovalFailed).
@@ -243,19 +252,30 @@ export function emitApprovalCreated(a: Pick<Approval, "id" | "chat_id" | "action
  * То есть заявка, одобренная через `/approve` в чате, теряла связь с ходом
  * агента, который её породил, и в аудит уходил свежий request_id. Джойн
  * общий, чтобы третий путь чтения не появился снова без него.
- */
-/**
+ *
  * Аудит 2026-08-14 (продолжение той же находки): джойн смотрел только в живую
  * `agent_actions`, а её строки уезжают в `agent_actions_archive` по тому же
  * 30-суточному отсечению, что и всё остальное (ADR-0007). Как только действие
  * заархивировано, `request_id` у заявки снова становится null — тем же
  * способом, от которого джойн и заводился, только с задержкой.
  *
- * После архивации самих заявок (миграция 042) окно узкое: заявка и её действие
- * уезжают в одном прогоне. Но «узкое» — не «пустое»: прогон может оборваться
- * между двумя переносами, а `expireStaleApprovals` не трогает заявки, у которых
- * TTL отключён. Второй LEFT JOIN стоит COALESCE'ом, а не заменой: живая таблица
- * остаётся первым источником, архив — запасным.
+ * После архивации самих заявок (миграция 042) окно узкое: решённая заявка и её
+ * действие уезжают в одном прогоне. Но «узкое» — не «пустое», и разойтись они
+ * могут двумя способами: прогон обрывается между двумя переносами; и — это
+ * добавлено аудитом 2026-09-11 — у APPROVALS_SPEC есть `extraWhere`
+ * `status <> 'pending'`, которого нет у AGENT_ACTIONS_SPEC, так что нерешённая
+ * заявка переживает своё действие по устройству, а не по сбою. Второй LEFT
+ * JOIN стоит COALESCE'ом, а не заменой: живая таблица остаётся первым
+ * источником, архив — запасным.
+ *
+ * Третьим способом здесь значилось «`expireStaleApprovals` не трогает заявки,
+ * у которых TTL отключён». Отключить его нечем: `approvalTtlMs()` читает
+ * APPROVAL_TTL_HOURS и на любом невалидном или неположительном значении даёт
+ * те же сутки, а сам `expireStaleApprovals` (db-maint.ts) ходит по предикату
+ * `status='pending' AND created_at < ?` без единой оговорки. Способ выдуманный,
+ * и цена у выдумки прикладная: он обещает неограниченное окно расхождения там,
+ * где окно ограничено сверху TTL, — то есть подсказывает следующему аудитору
+ * искать несуществующую настройку вместо разбора двух настоящих путей.
  */
 const APPROVAL_SELECT =
   `SELECT a.*, COALESCE(aa.request_id, ar.request_id) AS request_id ` +
@@ -271,14 +291,13 @@ export function getApproval(id: string): Approval | null {
 }
 
 /**
- * Resolve an approval by full id OR unique prefix. Orchestrator announces a
- * short prefix (e.g. `1921d74e`) in chat, but the stored id is a full UUID — a
- * bare `WHERE id = ?` made `/approve <prefix>` fail with «не найден». Tries
- * exact first, then a prefix match that is UNIQUE among PENDING approvals.
- * Returns null if not found or the prefix is ambiguous.
- */
-/**
  * Найти заявку по полному id или однозначному префиксу.
+ *
+ * В чате оркестратор называет короткий префикс, а хранится полный UUID, так
+ * что голое `WHERE id = ?` отвечало на `/approve <префикс>` «не найден».
+ * Порядок поиска: сначала точное совпадение, потом префикс — но только среди
+ * заявок в статусе `pending` и только если подходит РОВНО одна. Ни одной или
+ * больше одной — null, угадывать не будем.
  *
  * `chatId` сужает поиск по префиксу до одного чата — и это не удобство.
  * Очередь заявок чат-локальна: `/approvals` печатает
@@ -343,6 +362,24 @@ function str(p: Record<string, unknown>, key: string): string {
   return typeof v === "string" ? v.trim() : "";
 }
 
+/**
+ * Момент времени из payload'а — «когда: 11.09.2026 10:00 (Europe/Moscow)».
+ *
+ * Значение приходит от модели, поэтому проверяется как чужое: не число, не
+ * конечное, вне разумного диапазона — печатаем «когда: не указано», и это тоже
+ * содержательно. Верхняя граница отсекает секунды, принятые за миллисекунды,
+ * и мусор вроде 1e30: `new Date` на таком отдаёт Invalid Date, а Intl на нём
+ * бросает RangeError — падение рендера карточки схлопнуло бы весь список
+ * заявок, а не одну строку.
+ */
+function whenLabel(p: Record<string, unknown>, key: string): string {
+  const v = p[key];
+  if (typeof v !== "number" || !Number.isFinite(v) || v < 1e11 || v > 1e14) {
+    return "когда: не указано";
+  }
+  return `когда: ${ruDateTime(new Date(v))}`;
+}
+
 /** Числовое поле payload'а, либо "?" — payload приходит от LLM. */
 function num(p: Record<string, unknown>, key: string): string {
   const v = p[key];
@@ -369,27 +406,14 @@ function join(parts: Array<string | false | null | undefined>): string {
 }
 
 /**
- * Аудит 2026-08-20: у структурных payload'ов решающее лежит НЕ в строковом
- * поле, а общий путь ниже выбрасывает всё нестроковое — каждый boolean и
- * каждое число. Владелец видел «smm» и жал /approve, не зная ни какое право
- * выдают, ни что `requires_approval: false` убирает человека из петли; у
- * REVIEW_AND_MERGE_PR (мёрдж в main, а из main идёт прод-деплой) строк в
- * payload'е нет вовсе — выжимка была пустой.
- *
- * Поэтому — по рендереру на тип действия. Каждый ставит вперёд то, ради чего
- * аппрув и существует. Неизвестный тип идёт прежним общим путём.
- *
- * Экранировать нечего: карточку шлют `ctx.reply(text)` без `parse_mode`
- * (admin-commands.ts), Mini App вставляет её текстом.
- */
-/**
  * Чем к посту приложат картинку — и приложат ли готовым чужим файлом.
  *
- * Порядок ветвей повторяет `dispatch/publish.ts:231-298` дословно: `photoUrl`
- * перебивает всё, дальше `coverTitle → photoBase64 → coverPrompt`, и если не
- * дали ничего — баннер рисуется по заголовку поста. Расходиться этим двум
- * местам нельзя: карточка обязана называть ту картинку, которая реально
- * уйдёт в канал, а не ту, которую владелец домыслит по набору полей.
+ * Порядок ветвей повторяет цепочку обложки в `handlePublishToChannel`
+ * (dispatch/publish.ts) дословно: `photoUrl` перебивает всё, дальше
+ * `coverTitle → photoBase64 → coverPrompt`, и если не дали ничего — баннер
+ * рисуется по заголовку поста. Расходиться этим двум местам нельзя: карточка
+ * обязана называть ту картинку, которая реально уйдёт в канал, а не ту,
+ * которую владелец домыслит по набору полей.
  */
 function coverNote(p: Record<string, unknown>): string {
   if (str(p, "photoUrl")) return `картинка по ссылке: ${str(p, "photoUrl")}`;
@@ -438,6 +462,20 @@ export interface PreviewCtx {
   chatId?: number;
 }
 
+/**
+ * Аудит 2026-08-20: у структурных payload'ов решающее лежит НЕ в строковом
+ * поле, а общий путь ниже выбрасывает всё нестроковое — каждый boolean и
+ * каждое число. Владелец видел «smm» и жал /approve, не зная ни какое право
+ * выдают, ни что `requires_approval: false` убирает человека из петли; у
+ * REVIEW_AND_MERGE_PR (мёрдж в main, а из main идёт прод-деплой) строк в
+ * payload'е нет вовсе — выжимка была пустой.
+ *
+ * Поэтому — по рендереру на тип действия. Каждый ставит вперёд то, ради чего
+ * аппрув и существует. Неизвестный тип идёт прежним общим путём.
+ *
+ * Экранировать нечего: карточку шлют `ctx.reply(text)` без `parse_mode`
+ * (admin-commands.ts), Mini App вставляет её текстом.
+ */
 const PREVIEW_BY_ACTION: Record<
   string,
   (p: Record<string, unknown>, ctx: PreviewCtx) => string
@@ -477,13 +515,56 @@ const PREVIEW_BY_ACTION: Record<
       str(p, "project") && `project=${str(p, "project")}`,
       str(p, "prompt"),
     ]),
+  // Карточка называет команду словами и, если она попала под политику
+  // владельца, — почему спрашивают. Время — по Москве, как у напоминаний.
+  MAC_CONTROL: (p) => {
+    const { _userId, _delegated, ...raw } = p;
+    const control = parseMacControl(raw);
+    if (!control) return "некорректная команда Mac";
+    const why = approvalCategories("MAC_CONTROL", p).map((c) => CATEGORY_LABEL[c]);
+    return join([
+      describeMacControl(control, (ms) => `${formatMsk(ms)} МСК`),
+      why.length ? `политика владельца: ${why.join(", ")}` : "",
+      _delegated === true ? "вызов пришёл делегированием" : "",
+    ]);
+  },
+  // Кому и весь текст: владелец одобряет сообщение от своего имени.
+  USERBOT_SEND_DM: (p) => {
+    const dm = parseUserbotDm(p);
+    return dm ? describeUserbotDm(dm) : "некорректное личное сообщение";
+  },
+  // Что, где, было → станет.
+  CLOUDFLARE_DNS: (p) => {
+    const change = parseDnsChange(p);
+    return change ? describeDnsChange(change) : "некорректное изменение DNS";
+  },
+  // Маршрут, тариф, цена и потолок списания — то же, что подпишет телефон.
+  ORDER_TAXI: (p) => describeTaxiPayload(p, limitsFromEnv().deviationPct),
+  TAXI_CANCEL: () => "отменить текущий заказ такси (отмена может быть платной)",
+  ORDER_FOOD: (p) => describeOrderFood(p, limitsFromEnv().deviationPct),
+  MARKET_PURCHASE: (p) => describeOrderFood({ ...p, service: "market" }, limitsFromEnv().deviationPct),
+  ORDER_DELIVERY: (p) => describeDeliveryPayload(p, limitsFromEnv().deviationPct),
+  DELIVERY_CANCEL: () => "отменить текущую доставку (отмена может быть платной)",
   SPAWN_ROLE: (p) =>
     join([
       `новая роль «${str(p, "name") || "?"}»`,
       str(p, "system_prompt"),
     ]),
+  /*
+   * Аудит 2026-09-11: карточка отложенного поста не показывала, КОГДА он
+   * выйдет. Печатались канал и текст, а `scheduledAt` — число, и общий путь
+   * ниже (PREVIEW_FIELDS, затем «первое непустое строковое поле») числа
+   * выбрасывает. Владельцу предлагали одобрить публикацию, не назвав срока:
+   * «завтра в 10» и «через три недели» выглядели в очереди одинаково, а
+   * ошибка модели в единицах времени была ненаблюдаема до самой публикации.
+   * Тот же дефект, что у DELETE/PIN/FORWARD чуть ниже, и лечится так же.
+   *
+   * Срок идёт ПЕРВЫМ: выжимка режется по общему потолку длины с конца, и
+   * длинный текст поста вытеснял бы именно его.
+   */
   SCHEDULE_POST: (p) =>
     join([
+      whenLabel(p, "scheduledAt"),
       str(p, "channel"),
       str(p, "content") || str(p, "text"),
     ]),
@@ -519,8 +600,8 @@ const PREVIEW_BY_ACTION: Record<
   FORWARD_MESSAGE: (p, c) =>
     join([
       `переслать сообщение ${num(p, "messageId")}`,
-      // Оба конца пересылки пиннятся к чату заявки (dispatch/telegram.ts:441-442),
-      // поэтому источник и назначение — один и тот же чат.
+      // Оба конца пересылки пиннятся к чату заявки (`handleForwardMessage`
+      // в dispatch/telegram.ts), поэтому источник и назначение — один чат.
       pinnedChatPart(p, "fromChatId", c, "внутри чата"),
     ]),
   SET_REACTION: (p) =>
@@ -592,6 +673,11 @@ export function approvalPreview(
   };
   const flat = pick().replace(/\s+/g, " ").trim();
   if (!flat) return "";
+  // Сообщение от имени владельца не обрезаем: одобрять половину текста нельзя.
+  // Изменение DNS тоже: TXT до 2048 символов одобряется целиком.
+  // Заказ такси — тоже: адреса одобряются целиком.
+  if (actionType === "USERBOT_SEND_DM" || actionType === "CLOUDFLARE_DNS" || actionType === "ORDER_TAXI" || actionType === "ORDER_FOOD" ||
+    actionType === "MARKET_PURCHASE" || actionType === "ORDER_DELIVERY") return flat;
   return flat.length > limit ? `${flat.slice(0, limit - 1)}…` : flat;
 }
 
@@ -718,7 +804,8 @@ export function decideApproval(
   // Аудит 2026-09-11: решение меняло ТОЛЬКО эту таблицу. Строка действия,
   // заведённая гейтом в `pending_approval`, после отказа так и читалась «ждёт
   // аппрув» — навсегда (докблок `closeGatedActionRow`). Одобрение сюда не
-  // входит: у него исход пишет своя строка через `dispatchAndAudit`.
+  // входит: его строку закрывает `executeApproved` через
+  // `settleApprovedActionRow`, а провал исполнения — `markApprovalFailed`.
   if (updated.status === "rejected") {
     closeGatedActionRow(
       updated.action_id,
@@ -756,6 +843,16 @@ export function markApprovalFailed(id: string, error: string): Approval | null {
   closeAgentPromptProposals([id]);
   const updated = getApproval(id);
   if (updated) {
+    // Аудит 2026-09-14: строку гейта закрывали только отказы, известные
+    // заранее (`failBeforeDispatch`) и сам диспатч (`settleApprovedActionRow`).
+    // Исключение МЕЖДУ решением и диспатчем — резолвер бота, ошибка SQLite в
+    // гейте или бакетах — долетало сюда мимо обоих, заявка становилась
+    // `failed`, а действие навсегда «ждало аппрув»: санитара по
+    // `pending_approval` у решённой заявки нет. Условие внутри
+    // `closeGatedActionRow` — только `pending_approval`, так что уже закрытую
+    // строку (`approved` после диспатча, `forbidden` после отказа) это не
+    // перепишет.
+    closeGatedActionRow(updated.action_id, `исполнение не состоялось: ${error}`);
     busEmit("approval.decided", { id: updated.id, status: updated.status });
   }
   return updated;

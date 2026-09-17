@@ -32,8 +32,12 @@ export type TaskStatus =
 /**
  * Из какого статуса куда можно. Пустой массив = терминальный статус.
  *
- * Читать только отсюда. Сервер этим валидирует запись, Mini App — этим же
- * решает, какие кнопки показать; расходиться им больше нечем.
+ * Не читать напрямую — читать через `nextStatuses` ниже. Аудит 2026-09-11:
+ * таблица перестала быть полным ответом на вопрос «куда можно». Сервер завёл
+ * второй запрет — прогон временной роли статуса не меняет вовсе, — и он снова
+ * оказался известен только серверу. Mini App строил кнопки по таблице, то есть
+ * рисовал переходы, которые `updateTaskStatus` отклоняет: та же болезнь, от
+ * которой этот файл и заведён, просто на этаж выше.
  */
 export const TASK_TRANSITIONS: Readonly<
   Record<TaskStatus, readonly TaskStatus[]>
@@ -53,3 +57,43 @@ export const TASK_TRANSITIONS: Readonly<
   failed: [],
   cancelled: [],
 };
+
+/** Пустой список переходов: одна константа на все запреты. */
+const NO_TRANSITIONS: readonly TaskStatus[] = Object.freeze([]);
+
+/**
+ * Задача-«роль» из очереди рантайма (`SPAWN_ROLE`): вторая половина строки
+ * `role_runtime_queue`, id у них общий. Статусом её двигает только воркер,
+ * каждым своим UPDATE'ом с `AND status='running'`; признак `_spawn_role` в
+ * `input` ставит он же.
+ *
+ * Предикат живёт здесь, а не в lib/tasks.ts, по той же причине, по которой
+ * здесь живёт таблица: его обязаны знать обе стороны, а lib/tasks.ts тянет
+ * SQLite и в браузерный бандл не поедет. Он чистый — смотрит только на форму
+ * `input`. lib/tasks.ts его реэкспортирует, чтобы не переписывать импорты.
+ */
+export function isSpawnRoleTaskInput(input: unknown): boolean {
+  return (
+    typeof input === "object" &&
+    input !== null &&
+    (input as { _spawn_role?: unknown })._spawn_role === true
+  );
+}
+
+/**
+ * Куда можно из ТЕКУЩЕГО СОСТОЯНИЯ ЗАДАЧИ — единственный ответ на этот вопрос.
+ *
+ * Отличие от `TASK_TRANSITIONS` в аргументе: таблица знает только про статус,
+ * а запрет бывает и по самой задаче. Сервер валидирует запись этим, Mini App
+ * этим же решает, какие кнопки показать — и вот теперь расходиться им нечем.
+ *
+ * Незнакомый статус (пришёл из БД старше миграции) — пустой список, а не
+ * исключение: вызывающие здесь рисуют кнопки и валидируют, им нужен ответ.
+ */
+export function nextStatuses(task: {
+  status: TaskStatus;
+  input?: unknown;
+}): readonly TaskStatus[] {
+  if (isSpawnRoleTaskInput(task.input)) return NO_TRANSITIONS;
+  return TASK_TRANSITIONS[task.status] ?? NO_TRANSITIONS;
+}

@@ -59,6 +59,16 @@ export interface UserbotHandle {
     },
   ): Promise<{ message_id: number }>;
   /**
+   * Шаг 7: личное сообщение человеку по публичному username (USERBOT_SEND_DM).
+   * Только пользователь — не бот, не канал, не группа и не сам владелец; текст
+   * уходит без разбора разметки. Необязателен: заглушки в тестах его не
+   * реализуют, и хендлер тогда отказывает.
+   */
+  sendDirectMessage?(
+    username: string,
+    text: string,
+  ): Promise<{ message_id: number; user_id: string; name: string }>;
+  /**
    * Создать broadcast-канал от имени владельца и сразу добавить указанных ботов
    * админами (право постинга). Возвращает chat_id в bot-API форме (-100…).
    */
@@ -124,7 +134,7 @@ export interface UserbotClientLike {
   deleteMessages(peer: any, ids: number[], opts: { revoke: boolean }): Promise<any>;
   getInputEntity(peer: any): Promise<any>;
   /** T-410: send a message as the owner account. */
-  sendMessage(peer: any, params: { message: string; replyTo?: number }): Promise<any>;
+  sendMessage(peer: any, params: { message: string; replyTo?: number; parseMode?: false }): Promise<any>;
   /** Высокоуровневая отправка файла (фото) с подписью и явными entities. */
   sendFile?(peer: any, params: any): Promise<any>;
   /**
@@ -172,11 +182,25 @@ const NOOP_HANDLE: UserbotHandle = {
   async publishPost() {
     throw new Error("userbot not available");
   },
+  async sendDirectMessage() {
+    throw new Error("userbot not available");
+  },
   async stop() {},
   isNoop: true,
 };
 
 /**
+ * Запись из allowlist, которой соответствует пир апдейта, — или null.
+ *
+ * Аудит 2026-08-12: `makeHandler` писал в историю `msg.chatId` как есть, а
+ * сверял по «ободранному» виду. Обе формы («9305555» и «-1009305555») штатно
+ * проходили границу и уезжали в `messages` как РАЗНЫЕ чаты, хотя чат один.
+ * Читатели истории знают только форму Bot API (`String(ctx.chat.id)`), так что
+ * половина ингеста была невидима, а дедуп по (chat_id, tg_message_id) не
+ * срабатывал. Канон берём из allowlist: владелец задал его в том же виде, что
+ * читает Bot API-путь, — вычислить префикс из голого id невозможно (см. шапку
+ * normalizeChatId про личку с совпадающим номером).
+ *
  * Аудит 2026-08-09: последний fail-open allowlist в проекте.
  *
  * Было `if (!allowed.length) return true` — ровно тот паттерн, ради удаления
@@ -195,18 +219,6 @@ const NOOP_HANDLE: UserbotHandle = {
  * сознательно: allowlist супергруппы -1001234567890 формально пропустит и
  * личку с юзером 1234567890. Совпадение id разных типов пиров — случай
  * теоретический, а цена ошибки в другую сторону — молчащий прод.
- */
-/**
- * Запись из allowlist, которой соответствует пир апдейта, — или null.
- *
- * Аудит 2026-08-12: `makeHandler` писал в историю `msg.chatId` как есть, а
- * сверял по «ободранному» виду. Обе формы («9305555» и «-1009305555») штатно
- * проходили границу и уезжали в `messages` как РАЗНЫЕ чаты, хотя чат один.
- * Читатели истории знают только форму Bot API (`String(ctx.chat.id)`), так что
- * половина ингеста была невидима, а дедуп по (chat_id, tg_message_id) не
- * срабатывал. Канон берём из allowlist: владелец задал его в том же виде, что
- * читает Bot API-путь, — вычислить префикс из голого id невозможно (см. шапку
- * normalizeChatId про личку с совпадающим номером).
  */
 export function canonicalChatId(
   allowed: Array<string | number>,
@@ -385,8 +397,9 @@ export function extractMessageId(res: unknown): number {
  * неудаче возвращает `false` (`TelegramClient.js:1088-1093`). Дальше всё шло
  * по счастливому пути: `registerSelfAccount` штатно глотает свой `getMe`,
  * обработчик вешался на мёртвого клиента, `buildHandle` отдавал хендл с
- * `isNoop: false`, а `orchestrator/services.ts:347` печатал «[userbot]
- * connected, listening». Команда получала живой на вид юзербот, ломающийся на
+ * `isNoop: false`, а `startBackgroundServices` (orchestrator/services.ts)
+ * печатал «[userbot] connected, listening». Команда получала живой на вид
+ * юзербот, ломающийся на
  * первом же вызове, вместо честного no-op, у которого методы говорят «userbot
  * not available».
  *
@@ -443,6 +456,42 @@ export async function _startRealClient(
 }
 
 /**
+ * Разбор markdown ровно тем парсером, который применит gramjs.
+ *
+ * `client.sendMessage` в `buildHandle()` не получает ни `parseMode`, ни
+ * `formattingEntities`, а у gramjs это значит «применить парс-мод клиента»,
+ * заданный безусловно в базовом конструкторе (`telegramBaseClient.js`:
+ * `this._parseMode = MarkdownParser`). Значит текст, который реально уедет — и
+ * длину которого считает Telegram, — разобранный, а не сырой.
+ *
+ * Отдаём СИНХРОННУЮ функцию, а не готовую строку: этот же разбор нужен мерке
+ * части внутри splitForTelegram, а тот принимает только синхронный предикат.
+ *
+ * Импорт не удался — отдаём тождество. Вызывающих два, и цена отката у них
+ * РАЗНАЯ:
+ *
+ *  • мерка (`userbotPartFits` в dispatch/telegram.ts) останется на сырой
+ *    длине, то есть на ЗАВЫШЕННОЙ: лишнее дробление, а не превышение лимита;
+ *  • ключ реестра собственных отправок (`markSelfSend` в `sendMessage` ниже)
+ *    вернётся к СЫРОМУ тексту — а Telegram сохранит разобранный, ключ не
+ *    совпадёт, и ответ роли запишется в историю как реплика владельца. Это
+ *    ровно дефект аудита 2026-08-28, который этим разбором и закрывали.
+ *
+ * Аудит 2026-09-11: абзац описывал только первый случай и объявлял откат
+ * безвредным. Ветка сегодня недостижима (`telegram@2.26.22` отдаёт подпуть,
+ * `exports` в её package.json нет), но правило, записанное для одного места
+ * из двух, — это правило, не действующее во втором.
+ */
+export async function loadUserbotTextParser(): Promise<(text: string) => string> {
+  try {
+    const { MarkdownParser } = await import("telegram/extensions/markdown.js");
+    return (text) => (MarkdownParser.parse(text) as [string, unknown])[0];
+  } catch {
+    return (text) => text;
+  }
+}
+
+/**
  * Экспортируется для тестов: `startUserbot` требует файл сессии и реальный
  * `import("telegram")`, а проверять надо поведение самих методов хендла.
  */
@@ -465,10 +514,8 @@ export function buildHandle(client: UserbotClientLike, Api: any): UserbotHandle 
     },
     async sendMessage(chatId, text, opts) {
       // Аудит 2026-08-28: регистрировали СЫРОЙ текст, а Telegram сохранял
-      // разобранный. `client.sendMessage` ниже не получает ни `parseMode`, ни
-      // `formattingEntities`, а у gramjs это значит «применить парс-мод
-      // клиента», и он задан безусловно в базовом конструкторе
-      // (`telegramBaseClient.js`: `this._parseMode = MarkdownParser`). То есть
+      // разобранный — почему именно так, см. докстроку loadUserbotTextParser
+      // выше по файлу. То есть
       // разметка снималась, эхо приезжало снятым, ключ реестра не совпадал —
       // и собственный ответ роли писался в историю как реплика владельца
       // (`userbot-ingest.ts`: `self === null` → `agentKey: null`,
@@ -478,8 +525,7 @@ export function buildHandle(client: UserbotClientLike, Api: any): UserbotHandle 
       // `plain`, передаёт явные entities. Расходился только этот метод.
       let registered = text;
       try {
-        const { MarkdownParser } = await import("telegram/extensions/markdown.js");
-        [registered] = MarkdownParser.parse(text) as [string, unknown];
+        registered = (await loadUserbotTextParser())(text);
       } catch {
         // Разбор упал — gramjs упадёт на том же входе секундой позже. Режим
         // отказа не подменяем: регистрируем как есть и идём отправлять.
@@ -498,9 +544,26 @@ export function buildHandle(client: UserbotClientLike, Api: any): UserbotHandle 
         // Аудит 2026-08-27: отката не было, и после неудачной отправки
         // регистрация висела две минуты — съедая первое совпадающее сообщение
         // владельца, набранное руками. Эха не будет, снимаем.
-        unmarkSelfSend(chatId, registered);
+        unmarkSelfSend(chatId, registered, opts?.agentKey);
         throw e;
       }
+    },
+    async sendDirectMessage(username, text) {
+      // Резолвим сами, а не через getInputEntity(«@name»): нужно знать, КТО это,
+      // до отправки. Username мог перейти к боту или каналу, пока заявка ждала.
+      const res: any = await client.invoke(new Api.contacts.ResolveUsername({ username }));
+      const userId = res?.peer?.className === "PeerUser" ? String(res.peer.userId) : null;
+      const user = userId ? res.users?.find((u: any) => String(u.id) === userId) : null;
+      if (!user) throw new Error(`recipient_not_user: @${username} — не пользователь`);
+      if (user.bot) throw new Error(`recipient_is_bot: @${username} — бот`);
+      if (user.self) throw new Error(`recipient_is_self: @${username} — это сам владелец`);
+      if (user.deleted) throw new Error(`recipient_deleted: @${username} — аккаунт удалён`);
+      const peer = new Api.InputPeerUser({ userId: user.id, accessHash: user.accessHash });
+      // Эхо в ингест не регистрируем: личка не в allowlist, эха не будет, а
+      // висящая регистрация съела бы совпадающее сообщение владельца руками.
+      const sent = await client.sendMessage(peer, { message: text, parseMode: false });
+      const name = [user.firstName, user.lastName].filter(Boolean).join(" ") || `@${username}`;
+      return { message_id: extractMessageId(sent), user_id: userId!, name };
     },
     async createTeamChannel(title, about, botUsernames) {
       const res: any = await client.invoke(

@@ -11,7 +11,7 @@
  *      прод-точка входа (`bun run start`). Читается ровно наоборот:
  *      «ограничений нет». То же самое в `orchestrator-bot.ts`.
  *   2. Ничего больше. `warnIfEmptyAllowlist` звали Mini App
- *      (`auth-middleware.ts:46`) и ингест юзербота (`makeHandler` в
+ *      (`auth-middleware.ts`) и ингест юзербота (`makeHandler` в
  *      `userbot.ts`), а путь
  *      апдейтов ботов — то есть основной путь прода — не звал никто.
  *

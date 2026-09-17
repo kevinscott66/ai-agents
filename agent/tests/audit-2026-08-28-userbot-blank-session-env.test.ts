@@ -66,7 +66,7 @@ function opts(extra: Partial<StartUserbotOpts> = {}): StartUserbotOpts {
   };
 }
 
-/** Тот же шифр, что пишет tools/userbot-login.ts:39 (encrypt не экспортирован). */
+/** Тот же шифр, что пишет tools/userbot-login.ts (encrypt не экспортирован). */
 function encrypt(plain: string, passphrase: string): string {
   const key = createHash("sha256").update(passphrase).digest();
   const iv = randomBytes(12);

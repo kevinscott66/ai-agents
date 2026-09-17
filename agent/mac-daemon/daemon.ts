@@ -3,13 +3,22 @@
  * client, waits for "run" commands, spawns the `claude` CLI with stdin =
  * prompt, streams stdout/stderr back as chunks, and sends a final "result".
  *
- * Auto-reconnect with backoff 1→2→5→10s. Soft kill (SIGINT) of active child
- * on socket close. Project allowlist enforced via MAC_PROJECT_ROOTS (CSV).
+ * Auto-reconnect with backoff 1→2→5→10s, сбрасываемым на `auth_ok`. Поводом
+ * служит не только событие `close`: молча умерший туннель его не даёт, поэтому
+ * решение «соединение потеряно» вынесено в mac-daemon/reconnect.ts, где у
+ * принудительного закрытия есть запасной срок. Как бы повод ни возник, EVERY
+ * live child is retired, не один: `killAllChildren` walks the `activeChildren` map and
+ * each entry goes through `killChild` — SIGINT first, then SIGKILL if it has
+ * not exited within KILL_GRACE_MS. Do not read this as a soft kill: a long
+ * `claude` run can be cut mid-write when the SSH tunnel flaps, and that is
+ * deliberate (see mac-daemon/kill.ts, where SIGINT-only is recorded as the old
+ * broken behaviour). Project allowlist enforced via MAC_PROJECT_ROOTS (CSV).
  */
 import { resolve as pathResolve, dirname } from "node:path";
 import { realpathSync, existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { bridgeSecretTransportError } from "./bridge-url.ts";
-import { cancelRun, killAll, type KillableChild } from "./kill.ts";
+import { cancelRun, killAll, killChild, registerChild, type KillableChild } from "./kill.ts";
+import { feedPrompt } from "./run-io.ts";
 import { parseBridgeMsg, toPermissionMode, type RunMsg } from "./protocol.ts";
 import { sanitizeChildEnv, resolveClaudeBin } from "./child-env.ts";
 import { isolatedClaudeProbeEnv } from "./readiness-config.ts";
@@ -19,8 +28,13 @@ import { probeClaudeAuth } from "./auth-preflight.ts";
 import { spawnWithFallback, type ProviderMetadata } from "./provider-fallback.ts";
 import { codexCommand } from "./codex-command.ts";
 import { runAssistantOperation, assistantErrorCode } from "./assistant.ts";
+import { runMacControl, controlErrorCode } from "./macctl.ts";
+import { runTaxiRequest, taxiErrorCode, closeTaxiRunner } from "./taxi.ts";
+import { runShopRequest, shopErrorCode, closeShopRunner } from "./shop.ts";
+import { runDeliveryRequest, deliveryErrorCode, closeDeliveryRunner } from "./delivery.ts";
 import { createDaemonHandshake } from "./auth-handshake.ts";
 import { createAuthGate } from "./auth-gate.ts";
+import { createSocketLifecycle } from "./reconnect.ts";
 // Порт в подсказке при старте: раньше литерал 8787 — это HTTP-порт Mini App,
 // а не мост. Оператор по такой подсказке открывал WS к серверу панели, где
 // апгрейда нет, и получал бесконечный реконнект без единого слова про порт.
@@ -250,7 +264,8 @@ async function handleRun(ws: WebSocket, msg: RunMsg): Promise<void> {
       // SEC-audit: the spawned `claude` must not inherit daemon credentials.
       // Authentication belongs to the local Claude installation/keychain; only
       // the explicit non-secret runtime environment crosses this boundary.
-      env: childEnv,
+      // `PWD` выводится из cwd, а не наследуется: см. разбор в child-env.ts.
+      env: sanitizeChildEnv(process.env, allowedProject),
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
@@ -264,20 +279,24 @@ async function handleRun(ws: WebSocket, msg: RunMsg): Promise<void> {
     return;
   }
   const child = spawned.child;
-  activeChildren.set(id, {kill:signal=>child.kill(signal),exited:child.exited,processGroupId:child.pid});
-  // Feed prompt on stdin and close.
-  try {
-    const w = child.stdin as unknown as WritableStreamDefaultWriter<Uint8Array>;
-    const enc = new TextEncoder();
-    if (typeof (child.stdin as any).write === "function") {
-      (child.stdin as any).write(enc.encode(prompt));
-      (child.stdin as any).end();
-    } else {
-      await w.write(enc.encode(prompt));
-      await w.close();
-    }
-  } catch (e) {
-    console.error("[daemon] stdin write failed:", e);
+  const entry: KillableChild = {kill:signal=>child.kill(signal),exited:child.exited,processGroupId:child.pid};
+  // Занять id ДО подачи промпта: карта — единственная дорога к процессу, и
+  // прогон, которого в ней нет, не достанет ни `cancel`, ни `stop`.
+  if (!registerChild(activeChildren, id, entry)) {
+    // id уже занят живым прогоном. Убираем свежий процесс — он никому не
+    // виден — и отвечаем мосту отказом вместо молчаливой потери первого.
+    void killChild(entry);
+    sendResult(ws, id, false, undefined, "duplicate_run_id", metadata);
+    return;
+  }
+  // Промпт на stdin. Отказ здесь — отказ прогона: без промпта `claude --print`
+  // не выходит сам, и молчаливое продолжение доводило дело до `mac_timeout`.
+  const fed = await feedPrompt(child as { stdin: unknown }, prompt);
+  if (!fed.ok) {
+    activeChildren.delete(id);
+    void killChild(entry);
+    sendResult(ws, id, false, undefined, fed.error, metadata);
+    return;
   }
 
   let stderrTail = "";
@@ -356,7 +375,14 @@ const STALE_MS = 2.5 * BRIDGE_PING_MS;
 /** Тикаем вдвое чаще пинга: задержка обнаружения ≤ полпинга. */
 const WATCHDOG_TICK_MS = BRIDGE_PING_MS / 2;
 
-function startWatchdog(ws: WebSocket): void {
+/**
+ * Сколько ждать события `close` после принудительного закрытия, прежде чем
+ * реконнектиться без него. На живом сокете рукопожатие укладывается в
+ * миллисекунды; пять секунд — запас, за которым уже точно никто не ответит.
+ */
+const CLOSE_GRACE_MS = 5_000;
+
+function startWatchdog(forceClose: () => void): void {
   stopWatchdog();
   watchdog = setInterval(() => {
     if (Date.now() - lastBridgeMsg > STALE_MS) {
@@ -364,9 +390,10 @@ function startWatchdog(ws: WebSocket): void {
         `[daemon] no bridge traffic for >${STALE_MS}ms — stale connection, forcing reconnect`,
       );
       stopWatchdog();
-      try {
-        ws.close();
-      } catch {}
+      // Не `ws.close()` напрямую: закрывающее рукопожатие уходит в тот же
+      // мёртвый туннель, и события `close` можно не дождаться вовсе. Запасной
+      // срок взводит reconnect.ts.
+      forceClose();
     }
   }, WATCHDOG_TICK_MS);
 }
@@ -386,21 +413,40 @@ function connect(): void {
   const handshake = createDaemonHandshake(SECRET);
   console.log(`[daemon] connecting → ${url}`);
   let ws: WebSocket;
+  // Один реконнект на одно соединение, кто бы его ни объявил: обработчик
+  // `close`, запасной срок watchdog'а или упавший конструктор.
+  const life = createSocketLifecycle({
+    close: () => ws.close(),
+    setTimer: (fn, ms) => setTimeout(fn, ms),
+    clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
+    graceMs: CLOSE_GRACE_MS,
+    onGiveUp: (reason) => {
+      console.log(`[daemon] connection lost (${reason})`);
+      stopWatchdog();
+      killAllChildren();
+      scheduleReconnect();
+    },
+  });
   try {
     ws = new WebSocket(url);
   } catch (e) {
     console.error("[daemon] WebSocket ctor failed:", e);
-    scheduleReconnect();
+    life.connectFailed();
     return;
   }
   handshakes.set(ws, handshake);
   ws.addEventListener("open", () => {
     console.log("[daemon] socket open, sending auth");
     lastBridgeMsg = Date.now();
-    startWatchdog(ws);
+    startWatchdog(life.forceClose);
     ws.send(JSON.stringify(handshake.hello));
   });
   ws.addEventListener("message", (ev) => {
+    // Соединение уже объявлено потерянным, реконнект идёт. Запоздавший кадр
+    // отсюда исполнять нельзя: `run` запустил бы процесс, чей `result` уходит
+    // в сокет, которого никто не слушает, а `lastBridgeMsg` от зомби продлевал
+    // бы жизнь уже мёртвому соединению.
+    if (life.abandoned()) return;
     // Любое сообщение от моста = признак живого соединения (для watchdog).
     // Считаем ДО разбора: кривой кадр — тоже признак живого моста.
     lastBridgeMsg = Date.now();
@@ -452,6 +498,58 @@ function connect(): void {
           sendResult(ws, msg.id, false, undefined, assistantErrorCode(error));
         }).finally(() => { assistantControllers.delete(msg.id); });
         return;
+      case "control": {
+        // Тот же замок, что у помощника: EventKit и osascript по одному за раз.
+        if (assistantControllers.size) {
+          sendResult(ws, msg.id, false, undefined, "assistant_busy");
+          return;
+        }
+        const controller = new AbortController();
+        assistantControllers.set(msg.id, controller);
+        runMacControl(msg.control, undefined, undefined, controller.signal).then(output => {
+          sendChunk(ws, msg.id, "stdout", output);
+          sendResult(ws, msg.id, true, 0);
+        }).catch(error => {
+          sendResult(ws, msg.id, false, undefined, controlErrorCode(error));
+        }).finally(() => { assistantControllers.delete(msg.id); });
+        return;
+      }
+      case "taxi": {
+        // Свой замок в TaxiRunner (один браузер); отмена — через тот же cancel по id.
+        const controller = new AbortController();
+        assistantControllers.set(msg.id, controller);
+        runTaxiRequest(msg.request, controller.signal).then(output => {
+          sendChunk(ws, msg.id, "stdout", output);
+          sendResult(ws, msg.id, true, 0);
+        }).catch(error => {
+          sendResult(ws, msg.id, false, undefined, taxiErrorCode(error));
+        }).finally(() => { assistantControllers.delete(msg.id); });
+        return;
+      }
+      case "shop": {
+        // Свой замок в ShopRunner (один браузер); отмена — через тот же cancel по id.
+        const controller = new AbortController();
+        assistantControllers.set(msg.id, controller);
+        runShopRequest(msg.request, controller.signal).then(output => {
+          sendChunk(ws, msg.id, "stdout", output);
+          sendResult(ws, msg.id, true, 0);
+        }).catch(error => {
+          sendResult(ws, msg.id, false, undefined, shopErrorCode(error));
+        }).finally(() => { assistantControllers.delete(msg.id); });
+        return;
+      }
+      case "delivery": {
+        // Свой замок в DeliveryRunner (свой браузер и профиль); отмена — через cancel по id.
+        const controller = new AbortController();
+        assistantControllers.set(msg.id, controller);
+        runDeliveryRequest(msg.request, controller.signal).then(output => {
+          sendChunk(ws, msg.id, "stdout", output);
+          sendResult(ws, msg.id, true, 0);
+        }).catch(error => {
+          sendResult(ws, msg.id, false, undefined, deliveryErrorCode(error));
+        }).finally(() => { assistantControllers.delete(msg.id); });
+        return;
+      }
       case "run":
         handleRun(ws, msg).catch((e) => {
           console.error("[daemon] handleRun error:", e);
@@ -494,9 +592,7 @@ function connect(): void {
   });
   ws.addEventListener("close", () => {
     console.log("[daemon] socket closed");
-    stopWatchdog();
-    killAllChildren();
-    scheduleReconnect();
+    life.noticedClose();
   });
   ws.addEventListener("error", (ev) => {
     console.error("[daemon] socket error:", (ev as any).message ?? ev);
@@ -509,13 +605,12 @@ function scheduleReconnect(): void {
   setTimeout(connect, wait);
 }
 
-process.once("SIGINT", () => {
+// Браузеры такси и покупок держат профили с cookie: закрыть их штатно, но не дольше 2 с.
+const shutdown = () => {
   killAllChildren();
-  process.exit(0);
-});
-process.once("SIGTERM", () => {
-  killAllChildren();
-  process.exit(0);
-});
+  Promise.race([Promise.all([closeTaxiRunner(), closeShopRunner(), closeDeliveryRunner()]), new Promise((r) => setTimeout(r, 2_000))]).finally(() => process.exit(0));
+};
+process.once("SIGINT", shutdown);
+process.once("SIGTERM", shutdown);
 
 connect();

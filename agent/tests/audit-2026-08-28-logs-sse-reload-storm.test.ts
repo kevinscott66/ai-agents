@@ -15,7 +15,8 @@
  * ролей (lib/audit.ts:190).
  *
  * Ход команды на ~15 действий — это ~15 GET за пару секунд из ведра
- * `capacity: 120, refillPerSec: 4` (lib/miniapp-server.ts:554), каждый со
+ * `capacity: 120, refillPerSec: 4` (`GET_LIMIT` в lib/miniapp-server.ts),
+ * каждый со
  * сканом `agent_actions` и полусотней `getAction` на том же единственном
  * потоке `Bun.serve`, где живут SQLite и все 12 ботов. Открывают эту вкладку
  * ровно тогда, когда за командой наблюдают, — то есть в момент всплеска.

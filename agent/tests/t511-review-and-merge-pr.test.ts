@@ -14,6 +14,7 @@ import {
   type GhRunResult,
 } from "../lib/dispatch/github.ts";
 import type { ReviewAndMergePrPayload } from "../lib/action-payload.ts";
+import { TRUSTED_PR_IDENTITY } from "./helpers/pr-view-fixture.ts";
 
 const validContext = { agentKey: "orchestrator", chatId: -123456789 };
 const nonOrchestratorContext = { agentKey: "backend", chatId: -123456789 };
@@ -41,6 +42,7 @@ function fakeGh(
 }
 
 const openSafePr = JSON.stringify({
+  ...TRUSTED_PR_IDENTITY,
   state: "OPEN",
   mergeable: "MERGEABLE",
   // Аудит 2026-08-11: было `agent/tests/foo.test.ts` — с инверсией
@@ -48,6 +50,7 @@ const openSafePr = JSON.stringify({
   files: [{ path: "docs/readme.md" }],
 });
 const openRiskyPr = JSON.stringify({
+  ...TRUSTED_PR_IDENTITY,
   state: "OPEN",
   mergeable: "MERGEABLE",
   files: [{ path: "agent/lib/dispatch/github.ts" }],
@@ -123,7 +126,7 @@ describe("REVIEW_AND_MERGE_PR Action", () => {
 
   it("fails validation when the PR is not open", async () => {
     const { runGh } = fakeGh({
-      "pr view": { exitCode: 0, stdout: JSON.stringify({ state: "MERGED", mergeable: "UNKNOWN", files: [] }) },
+      "pr view": { exitCode: 0, stdout: JSON.stringify({ ...TRUSTED_PR_IDENTITY, state: "MERGED", mergeable: "UNKNOWN", files: [] }) },
     });
     const result = await handleReviewAndMergePr({ pr_number: 203 }, validContext, { runGh, authority: "approved-action" });
     expect(result.ok).toBe(true);

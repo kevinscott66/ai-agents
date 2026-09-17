@@ -141,10 +141,10 @@ Minimum configuration — see `agent/.env.example` for the annotated full set:
 ```bash
 TELEGRAM_BOT_TOKEN=
 CLAUDE_CODE_OAUTH_TOKEN=      # or ANTHROPIC_API_KEY with USE_AGENT_SDK=false
-ALLOWED_CHAT_IDS=
-TG_API_ID=
-TG_API_HASH=
-TG_PHONE=
+TELEGRAM_ALLOWED_GROUP_IDS=   # fail-closed: empty means the bots answer nowhere
+TELEGRAM_API_ID=
+TELEGRAM_API_HASH=
+TELEGRAM_USERBOT_PHONE=
 USERBOT_SESSION_KEY=
 ```
 

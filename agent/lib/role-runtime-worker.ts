@@ -200,8 +200,9 @@ export function startRoleRuntimeWorker(deps: RoleRuntimeWorkerDeps): RoleRuntime
   timer = setInterval(() => { void tick(); }, pollMs);
   // Воркер не повод держать event loop: в проде его держит поллинг ботов, а
   // без unref() забытый (не остановленный) воркер не даёт процессу выйти.
-  // Тот же приём стоит у watchdog'а (watchdog.ts:157), у таймеров health
-  // (health.ts:89,221) и у SSE-keepalive (miniapp-server.ts) — здесь он
+  // Тот же приём стоит у watchdog'а (`startWatchdog` в watchdog.ts), у
+  // таймеров health (`withTimeout` и `startHealthMonitor` в health.ts) и у
+  // SSE-keepalive (miniapp-server.ts) — здесь он
   // единственный из таймеров модуля был пропущен. (Аудит 2026-09-11: раньше
   // тут вместо health значился self-diag, а его поллер unref не зовёт —
   // список приведён к тому, что в коде.)

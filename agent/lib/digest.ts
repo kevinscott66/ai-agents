@@ -4,8 +4,11 @@
  * Once a day at DIGEST_HOUR_UTC, the orchestrator posts an aggregated status
  * summary to all ALLOWED chats. No LLM call — pure SQL + string templating.
  *
- * Tracks last-posted UTC date in a file (default `.digest-last`) so a process
- * restart on the same day does not re-post.
+ * Tracks last-posted UTC date in a marker file so a process restart on the same
+ * day does not re-post. The default path is NOT a bare `.digest-last` in the
+ * cwd — that default was removed on 2026-08-08 precisely because the cwd is
+ * read-only under the unit's `ProtectSystem=strict`. See `_defaultMarkerPath`:
+ * the marker lands next to the DB.
  *
  * All time math is honest UTC. "Today" / "last 24h" means UTC.
  */
@@ -56,11 +59,14 @@ export function buildDigest(opts: BuildDigestOptions = {}): string {
   // вчера (перезапуск пропущенного прогона, backfill), выдавал заголовок со
   // вчерашней датой и расход токенов за сегодня — в одном сообщении, без
   // единого признака, что даты разные. Берём одну дату на весь дайджест.
-  const todayDate = ymdUTC(now);
-  const headerDate = ymdUTC(now);
+  // Одно значение, а не два одноимённых вычисления: заголовок и выборка
+  // расхода токенов обязаны называть один и тот же день, и разъехаться им
+  // легче всего через второе `ymdUTC(now)`, которое кто-нибудь поправит в
+  // одном месте.
+  const digestDate = ymdUTC(now);
 
   const lines: string[] = [];
-  lines.push(`📊 Daily digest — ${headerDate} (UTC)`);
+  lines.push(`📊 Daily digest — ${digestDate} (UTC)`);
 
   // --- Tasks: per-status counts over last 24h ----------------------------
   lines.push("");
@@ -132,6 +138,9 @@ export function buildDigest(opts: BuildDigestOptions = {}): string {
     // полных строк с JOIN ради длины массива и минимума по created_at. Счётчик
     // упирался в 1000 и замирал ровно тогда, когда очередь становится
     // проблемой. Обе величины теперь берём агрегатами, без потолка.
+    // Без chatId — намеренно: дайджест ежедневный и общий, очередь в нём
+    // считается по всем чатам сразу. Имя функции («InChat») читается иначе,
+    // поэтому оговорка стоит здесь, у вызова, а не только в сигнатуре.
     const count = countPendingApprovalsInChat();
     const oldest = oldestPendingApprovalAt();
     if (!count || oldest === null) {
@@ -158,7 +167,7 @@ export function buildDigest(opts: BuildDigestOptions = {}): string {
          ORDER BY input_tokens DESC, agent_key ASC
          LIMIT 3`,
       )
-      .all(todayDate) as { agent_key: string; input: number; output: number }[];
+      .all(digestDate) as { agent_key: string; input: number; output: number }[];
     if (!rows.length) {
       lines.push(`  ${NO_DATA}`);
     } else {
@@ -219,7 +228,11 @@ export interface StartDigestSchedulerOptions {
   hourUTC?: number;
   /** Polling interval, ms. Default 5min. */
   intervalMs?: number;
-  /** Path to last-posted-date marker file. Default `.digest-last`. */
+  /**
+   * Path to last-posted-date marker file. Defaults to `_defaultMarkerPath()`
+   * — next to the DB, not to the cwd. Read the docblock there before passing a
+   * relative path: the unit can only write `data`, `backups` and `/tmp`.
+   */
   markerPath?: string;
   /** Override "now" provider, used by tests. */
   nowProvider?: () => Date;

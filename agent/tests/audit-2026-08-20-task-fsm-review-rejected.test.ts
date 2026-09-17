@@ -10,13 +10,13 @@
  * Чем это платили:
  *
  *  1. Ревьюер в Mini App видит кнопки строго по этой таблице
- *     (`miniapp/src/pages/Tasks.tsx:28`). Признать работу негодной он мог
+ *     (`miniapp/src/pages/Tasks.tsx:39`). Признать работу негодной он мог
  *     только соврав: «done» (в отчёты и дайджест уходит успех) либо вечное
  *     «running» без исполнителя.
  *  2. Агент, зовущий UPDATE_TASK_STATUS{failed} по задаче на ревью, получал
  *     `invalid status transition` — то есть тул отказывал ровно там, где
  *     честный ответ и требовался.
- *  3. `closeDelegatedTask` (`lib/action-dispatch.ts:908-923`) специально
+ *  3. `closeDelegatedTask` (`lib/action-dispatch.ts`) специально
  *     возвращает задачу из awaiting_review в running, чтобы записать провал
  *     делегата. Обход выглядит как «работу возобновили», хотя её закрыли.
  *  4. `gcStaleTasks` смотрит только pending/running — задача, оставленная в

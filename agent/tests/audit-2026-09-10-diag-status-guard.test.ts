@@ -3,8 +3,8 @@
  * котором её ищут.
  *
  * Оба поставщика работы для самопочинки смотрят на статус в упор:
- * `listPendingDiagTasks` — строго `pending` (self-diag.ts:492), подборщик
- * осиротевших — строго `running` (:397), а `processDiagTask` пишет терминал
+ * `listPendingDiagTasks` — строго `pending` (self-diag.ts), подборщик
+ * осиротевших — строго `running`, а `processDiagTask` пишет терминал
  * каждым UPDATE'ом с `AND status='running'`. Пока задача в `running` — поллер
  * поставил его ДО вызова модели — любая роль с той же доски могла увести её:
  * REQUEST_REVIEW в `awaiting_review`, UPDATE_TASK_STATUS в `done`.

@@ -27,6 +27,25 @@ export function configureSigningCodeSender(send: SigningCodeSender) {
   return () => { sender = previous; };
 }
 
+/**
+ * Исполнители платных действий: зовутся после успешной подписи, не блокируя
+ * ответ телефону. Каждый сам узнаёт свой nonce (чужой пропускает), делает
+ * claim и всё дальнейшее; ошибки — только в журнал.
+ */
+export type SignedActionExecutor = (nonce: string) => Promise<void>;
+const executors = new Set<SignedActionExecutor>();
+
+export function registerSignedActionExecutor(run: SignedActionExecutor) {
+  executors.add(run);
+  return () => { executors.delete(run); };
+}
+
+function startExecutors(runs: Iterable<SignedActionExecutor>, nonce: string) {
+  for (const run of runs) {
+    run(nonce).catch((error) => log.error("[signing] executor failed", { error: String(error) }));
+  }
+}
+
 export function signedActions(): SignedActions {
   shared ??= new SignedActions(db);
   return shared;
@@ -53,7 +72,7 @@ export async function signingApi(
   req: Request,
   owner: string,
   authorized: () => boolean,
-  deps: { gate?: SignedActions; send?: SigningCodeSender; now?: () => number } = {},
+  deps: { gate?: SignedActions; send?: SigningCodeSender; now?: () => number; execute?: SignedActionExecutor } = {},
 ): Promise<Response> {
   if (!parseUserIdList(process.env.MINIAPP_ADMIN_USER_IDS).includes(Number(owner))) return json({ error: "forbidden" }, 403);
   const gate = deps.gate ?? signedActions();
@@ -104,6 +123,7 @@ export async function signingApi(
       else {
         if (typeof body.signature !== "string") return json({ error: "signature_invalid" }, 400);
         await gate.approve(decide[1], body.signature, now());
+        startExecutors(deps.execute ? [deps.execute] : executors, decide[1]);
       }
       return json({ ok: true });
     }

@@ -2,9 +2,10 @@
  * Аудит 2026-08-21: `WEB_SEARCH_ENABLED` — выключатель, который на боевом
  * пути ничего не выключает.
  *
- * Raw-путь спрашивает разрешения: `tool-loop.ts:294` берёт `webSearchTool()`,
- * а тот возвращает null, пока `WEB_SEARCH_ENABLED !== "true"` (`web-search.ts:27`).
- * Дефолт — выключено: `.env.example:123` пуст, шапка `web-search.ts` — «Off by
+ * Raw-путь спрашивает разрешения: `tool-loop.ts` берёт `webSearchTool()`, а
+ * тот возвращает null, пока `WEB_SEARCH_ENABLED !== "true"` (проверка живёт в
+ * `webSearchEnabled`, web-search.ts). Дефолт — выключено: строка
+ * `WEB_SEARCH_ENABLED=` в `.env.example` пуста, шапка `web-search.ts` — «Off by
  * default».
  *
  * SDK-путь (на проде `USE_AGENT_SDK=true`) переменную не читал вовсе. Замер:

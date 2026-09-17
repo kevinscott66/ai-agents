@@ -7,8 +7,8 @@
  *
  * а оба рендера подставляют его без проверки:
  *
- *   tools/daily-draft.ts:323   lines.push(`${a.emoji} **${a.title}**`);   // превью
- *   tools/approve-poll.ts:533  lines.push(`${a.emoji} **${a.title}**`);   // публикация
+ *   tools/daily-draft.ts   lines.push(`${a.emoji} **${a.title}**`);   // превью
+ *   tools/approve-poll.ts lines.push(`${a.emoji} **${a.title}**`);   // публикация
  *
  * Шаблонная строка не пропускает undefined молча — она печатает его текстом.
  * Замер на статье без emoji: строка получалась

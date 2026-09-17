@@ -2,7 +2,7 @@
  * Аудит 2026-08-20: карточка аппрува рисовала «сводку» поверх вырезанного payload.
  *
  * `/api/approvals` для НЕ-админа прогоняет строки через `redactContent`
- * (`agent/lib/miniapp-server.ts:352-366`): поле `payload` заменяется строкой
+ * (`agent/lib/miniapp-server.ts`): поле `payload` заменяется строкой
  * `"(скрыто: доступно администратору)"`, а на строку ставится `redacted: true`.
  * Вкладка Approvals при этом не закрыта (`App.tsx`), то есть такой viewer
  * реально существует.
@@ -19,8 +19,9 @@
  * сводку, которой не существует. Строка `redacted: true` в ответе уже была —
  * фронт её просто не читал (`Approval` в types.ts даже не объявлял поле).
  *
- * Прецедент правильного поведения рядом: `lib/mac-session.ts:39-63,98` тот же
- * флаг читает и отдаёт `REDACTED_NOTE` вместо выдуманных значений.
+ * Прецедент правильного поведения рядом: `toMacSession` и `macOutputView` в
+ * miniapp/src/lib/mac-session.ts тот же флаг читают и отдают `REDACTED_NOTE`
+ * вместо выдуманных значений.
  */
 import { describe, test, expect } from "bun:test";
 import { readFileSync } from "node:fs";

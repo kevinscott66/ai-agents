@@ -10,7 +10,7 @@
  */
 import { describe, test, expect, beforeEach } from "bun:test";
 import { executeTool } from "../lib/tools-schema.ts";
-import { logAction } from "../lib/audit.ts";
+import { ACTION_STATUSES, logAction } from "../lib/audit.ts";
 import { db } from "../lib/db.ts";
 
 const CHAT = -1_000_715;
@@ -81,15 +81,8 @@ describe("GET_LOGS", () => {
     expect(out.count).toBeUndefined();
   });
 
-  test("все шесть валидных статусов проходят валидацию", async () => {
-    for (const s of [
-      "attempted",
-      "ok",
-      "error",
-      "forbidden",
-      "pending_approval",
-      "rate_limited",
-    ]) {
+  test("каждый статус из ACTION_STATUSES проходит валидацию", async () => {
+    for (const s of ACTION_STATUSES) {
       const out = JSON.parse(await executeTool("GET_LOGS", { status: s }, CTX));
       expect(out.ok).toBe(true);
     }

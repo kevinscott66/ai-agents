@@ -5,9 +5,9 @@
  * call-sites не перевели: `t()` зовут ровно в одном файле (characters/index.ts,
  * три ключа). Остальные 17 — копии строк, которые в реальных местах остались
  * литералами:
- *   'userbot.sms_code'   → tools/userbot-login.ts:100 (свой литерал)
- *   'userbot.empty_session' → tools/userbot-login.ts:118
- *   'userbot.api_id_number' → tools/userbot-login.ts:83
+ *   'userbot.sms_code'   → tools/userbot-login.ts (свой литерал)
+ *   'userbot.empty_session' → tools/userbot-login.ts
+ *   'userbot.api_id_number' → tools/userbot-login.ts
  *   'ui.expand'          → miniapp/src/components/InterAgentCard.tsx:99
  *   'error.general'      → miniapp/src/components/ErrorBoundary.tsx:53
  *

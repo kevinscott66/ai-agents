@@ -20,12 +20,21 @@
  *    Referrer-Policy — нет, то есть их можно было фреймить.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const TMP = mkdtempSync(join(tmpdir(), "web3puls-audit0812-"));
 process.env.SITE_DB_PATH = join(TMP, "audit.db");
+
+// Каталог сборки с ОДНИМ настоящим файлом: мимо ведра с 2026-09-11 идёт то,
+// что на диске есть, а не то, что похоже на ассет по расширению. Без этого
+// каталога проверка ниже спрашивала бы про освобождение для файла, которого
+// нет, — а у такого запроса нет и обоснования для освобождения.
+const WEB_DIST = join(TMP, "dist");
+mkdirSync(join(WEB_DIST, "assets"), { recursive: true });
+writeFileSync(join(WEB_DIST, "assets", "index-deadbeef.js"), "console.log(1)\n");
+process.env.SITE_WEB_DIST = WEB_DIST;
 
 const { seedIfEmpty } = await import("./seed.ts");
 const { upsertUnlocks } = await import("./db.ts");
@@ -107,6 +116,10 @@ describe("лимит покрывает дорогие не-API маршруты
     // маршрут, и браузер при навигации его не запрашивает вовсе — только
     // краулер, раз за обход. Под лимит он с 2026-08-13 попадает намеренно.
     // Проверяем то, что тест и имел в виду: путь ассета.
+    //
+    // Уточнение 2026-09-11: файл теперь настоящий, он лежит в WEB_DIST.
+    // Освобождение выдаётся по наличию файла, а не по расширению, и запрос
+    // к несуществующему бандлу с этого дня считается ведром.
     let limited = 0;
     for (let i = 0; i < 70; i++) {
       const r = await fetch(`${base}/assets/index-deadbeef.js`);

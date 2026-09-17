@@ -6,7 +6,7 @@
  * это десятки действий подряд от 12 агентов, то есть десятки событий за
  * секунды. Каждое уходило в полную перезагрузку.
  *
- * Цена измерима: `/api/dashboard` (miniapp-server.ts:697) делает ~45
+ * Цена измерима: `/api/dashboard` (ветка `GET /api/dashboard` в miniapp-server.ts) делает ~45
  * синхронных запросов к SQLite — agent_states, 12×(getDailyUsage+getBudget),
  * 1+10 getTask, listPendingApprovals, 1+20 getAction. Пятнадцать действий в
  * ходе = ~700 запросов к базе на одну открытую вкладку. `Bun.serve`

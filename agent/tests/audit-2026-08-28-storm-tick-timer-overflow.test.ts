@@ -39,7 +39,11 @@ describe("предпосылка", () => {
     const t = setInterval(() => {
       ticks += 1;
     }, MAX_TIMER_MS + 1);
-    await new Promise((r) => setTimeout(r, 40));
+    // Ждём тики, а не фиксированные 40 мс: на загруженном CI-раннере event loop
+    // успевал провернуться меньше шести раз, и предпосылка флейкала. Интервал,
+    // который не схлопнулся, за секунду не тикнет ни разу.
+    const deadline = Date.now() + 1_000;
+    while (ticks <= 5 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
     clearInterval(t);
     // Смысл всей правки: отказа, по которому видно причину, здесь нет —
     // таймер просто начинает молотить.

@@ -90,6 +90,7 @@ describe("набор безопасных тулзов", () => {
   test("это read-only блок диспатчера минус единственная мутация в нём", () => {
     expect([...SDK_SIDE_EFFECT_FREE_TOOLS].sort()).toEqual(
       [
+        "CLOUDFLARE_DNS_LIST",
         "GET_BOT_INFO",
         "GET_CHANNEL_STATS",
         "GET_FIGMA_FILE",
@@ -100,6 +101,12 @@ describe("набор безопасных тулзов", () => {
         "QUERY_DB",
         "READ_WIKI",
         "SEARCH_WIKI",
+        "TAXI_QUOTE",
+        "TAXI_STATUS",
+        "SHOP_QUOTE",
+        "SHOP_STATUS",
+        "DELIVERY_QUOTE",
+        "DELIVERY_STATUS",
         "LIST_SCHEDULED_POSTS",
         "LIST_REMINDERS",
       ].sort(),
