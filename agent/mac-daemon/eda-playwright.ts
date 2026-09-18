@@ -638,9 +638,12 @@ export function edaShopPage(page: any): ShopPage {
       }
     },
     async openCheckout() {
-      const button = page.getByRole("button", { name: EDA_TEXT.checkout }).first();
-      if (!(await visible(button, UI_TIMEOUT_MS))) return false;
-      await button.click();
+      // По роли — доступное имя, по тексту — то, что человек читает на кнопке.
+      // У «Далее» они расходятся, поэтому нужны оба пути.
+      const button = page.getByRole("button", { name: EDA_TEXT.checkout }).first()
+        .or(page.locator("button").filter({ hasText: EDA_TEXT.checkout }).first());
+      if (!(await visible(button.first(), UI_TIMEOUT_MS))) return false;
+      await button.first().click();
       await page.waitForLoadState("load", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
       await wait(1_000);
       return true;
