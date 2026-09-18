@@ -62,7 +62,7 @@ import {
   type ShopRequest,
   type ShopService,
 } from "../lib/shop.ts";
-import { ensureLoginProfileDir, printOutcome, profileDirProblem, runCli, runnerErrorCode, waitForEnter } from "./runner-kit.ts";
+import { ensureLoginProfileDir, printOutcome, profileDirProblem, runCli, runnerErrorCode, waitForEnter, settleOrRelease } from "./runner-kit.ts";
 import { SHOP_STATE_POLL } from "./shop-selectors.ts";
 
 export interface ShopEnv {
@@ -213,12 +213,23 @@ interface Session {
   expires: number;
 }
 
+/**
+ * Жёсткий срок одного запроса к исполнителю. Мост ждёт MAC_SHOP_TIMEOUT_MS (180 с) и
+ * по таймауту шлёт отмену; срок нужен на случай, когда отмена не дошла
+ * (сокет порвался). Больше мостового — чтобы сервер никогда не получил от демона
+ * отказ раньше собственного таймаута.
+ */
+export const SHOP_RUN_DEADLINE_MS = 210_000;
+
 export interface ShopRunnerOptions {
   launch?: ShopLauncher;
   checkProfile?: (dir: string | undefined) => string;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   idleMs?: number;
+  deadlineMs?: number;
+  /** Только для тестов: сколько ждать, что зависший шаг закончится сам. */
+  selfSettleMs?: number;
 }
 
 export class ShopRunner {
@@ -231,6 +242,10 @@ export class ShopRunner {
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly idleMs: number;
+  private readonly deadlineMs: number;
+  private readonly selfSettleMs: number | undefined;
+  /** Растёт на каждом close(): запуск, закончившийся после закрытия, — сирота. */
+  private generation = 0;
 
   constructor(private readonly env: ShopEnv, opts: ShopRunnerOptions = {}) {
     this.launch = opts.launch ?? (async (e, d) => (await import("./shop-playwright.ts")).launchPlaywrightShop(e, d));
@@ -238,6 +253,8 @@ export class ShopRunner {
     this.now = opts.now ?? Date.now;
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.idleMs = opts.idleMs ?? 5 * 60_000;
+    this.deadlineMs = opts.deadlineMs ?? SHOP_RUN_DEADLINE_MS;
+    this.selfSettleMs = opts.selfSettleMs;
   }
 
   async run(request: ShopRequest, signal?: AbortSignal): Promise<ShopOutcome> {
@@ -245,10 +262,15 @@ export class ShopRunner {
     if (this.busy) return { ok: false, code: "shop_busy" };
     this.busy = true;
     if (this.idleTimer) clearTimeout(this.idleTimer);
-    let page: ShopPage | null = null;
-    try {
+    // Присваивается внутри work — без приведения TS сузил бы до null.
+    let page = null as ShopPage | null;
+    const work = (async () => {
       page = await this.page();
-      return await this.dispatch(page, request, signal);
+      return this.dispatch(page, request, signal);
+    })();
+    try {
+      // Зависший шаг не держит замок вечно: см. settleOrRelease.
+      return await settleOrRelease(work, { signal, deadlineMs: this.deadlineMs, selfSettleMs: this.selfSettleMs, release: () => this.close() });
     } catch (e) {
       if (!(e instanceof ShopError)) throw e;
       if (e.code === "session_unknown" || e.code === "shop_busy") return { ok: false, code: e.code };
@@ -268,6 +290,7 @@ export class ShopRunner {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = null;
     this.session = null;
+    this.generation++;
     const browser = this.browser;
     this.browser = null;
     await browser?.close().catch(() => {});
@@ -282,12 +305,21 @@ export class ShopRunner {
   private async page(): Promise<ShopPage> {
     if (!this.browser) {
       const dir = this.checkProfile(this.env.SHOP_PROFILE_DIR);
+      const generation = this.generation;
+      let browser: ShopBrowser;
       try {
-        this.browser = await this.launch(this.env, dir);
+        browser = await this.launch(this.env, dir);
       } catch (e) {
         if (e instanceof ShopError) throw e;
         throw new ShopError("browser_unavailable");
       }
+      // Запуск завис, исполнитель тем временем закрыли и отпустили замок —
+      // поздний браузер никому не нужен, а профиль он держал бы.
+      if (generation !== this.generation) {
+        await browser.close().catch(() => {});
+        throw new ShopError("browser_unavailable");
+      }
+      this.browser = browser;
     }
     return this.browser.page();
   }
