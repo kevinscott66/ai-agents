@@ -95,6 +95,27 @@ export async function killChild(
 }
 
 /**
+ * Остановка «выстрелил и забыл» — единственный разрешённый способ позвать
+ * `killChild` без `await`.
+ *
+ * 2026-09-18: все вызовы были `void killChild(...)`. Отклонение (неожиданный
+ * errno, битый pgid) уходило в unhandled rejection, а в Bun это падение всего
+ * демона — вместе с чужими живыми прогонами и исполнителями покупок. EPERM
+ * от зомби-группы закрыт в самом `killChild`; здесь закрыт весь класс:
+ * отказ остановки логируется и возвращается как `failed`, процесс демона живёт.
+ */
+export function stopChild(
+  child: KillableChild,
+  graceMs: number = KILL_GRACE_MS,
+  onError: (error: unknown) => void = (error) => console.error(`[kill] остановка не удалась: ${String((error as Error)?.message ?? error).slice(0, 200)}`),
+): Promise<KillOutcome | "failed"> {
+  return killChild(child, graceMs).catch((error) => {
+    try { onError(error); } catch { /* логгер не должен ронять демон */ }
+    return "failed" as const;
+  });
+}
+
+/**
  * Остановить один прогон по его id. Возвращает `false`, если такого прогона
  * нет — например, он уже завершился сам, пока кадр отмены летел по сети.
  */
@@ -106,7 +127,7 @@ export function cancelRun(
   const child = children.get(id);
   if (!child) return false;
   children.delete(id);
-  void killChild(child, graceMs);
+  void stopChild(child, graceMs);
   return true;
 }
 
@@ -146,6 +167,6 @@ export function killAll(
 ): number {
   const all = [...children.values()];
   children.clear();
-  for (const child of all) void killChild(child, graceMs);
+  for (const child of all) void stopChild(child, graceMs);
   return all.length;
 }
