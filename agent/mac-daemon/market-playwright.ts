@@ -44,7 +44,7 @@ export function marketIdFromHref(href: unknown): string | null {
 export const marketUrlFor = (id: string) => marketProductUrl(id);
 
 export function marketShopPage(page: any): ShopPage {
-  const { bodyText, goto, text, totalNear, screenshot, probe, stateFromBody } = pageKit(page);
+  const { bodyText, goto, text, screenshot, probe, stateFromBody } = pageKit(page);
   const offer = () => page.locator(MARKET_TESTID.productOffer).first();
   // Счётчик на карточке — input: текста в нём нет, количество лежит в value.
   const qtyNow = async (): Promise<number> => {
@@ -56,7 +56,21 @@ export function marketShopPage(page: any): ShopPage {
   const qtyButton = (name: RegExp) =>
     page.locator(MARKET_TESTID.qtyCounter).first().getByRole("button", { name }).first();
   const dialogOpen = () => visible(page.getByRole("dialog").first(), 1_500);
-  const payLocator = () => page.getByRole("button", { name: MARKET_TEXT.pay }).first();
+  // Кнопка оплаты подписана data-auto; текст на ней меняется вместе со способом
+  // оплаты («Оплатить», «Пополнить и оплатить»), поэтому текст — только запасной путь.
+  const payLocator = () =>
+    page.locator(MARKET_TESTID.payButton).first()
+      .or(page.getByRole("button", { name: MARKET_TEXT.pay }).first());
+
+  /** Подпись выбранного способа оплаты — отмеченный `input` в панели способов. */
+  const chosenPayment = async (): Promise<string> =>
+    await page.evaluate((sel: typeof MARKET_TESTID) => {
+      const doc = document;
+      const panel = doc.querySelector(sel.paymentPanel);
+      const checked = panel?.querySelector('input:checked, [aria-checked="true"]');
+      const method = checked?.closest(sel.paymentMethod) ?? checked?.parentElement;
+      return String((method as HTMLElement | null)?.innerText ?? "").replace(/\s+/g, " ").trim();
+    }, MARKET_TESTID);
 
   return {
     openHome: () => goto(`${MARKET_ORIGIN}/`),
@@ -175,11 +189,19 @@ export function marketShopPage(page: any): ShopPage {
     },
     async checkout() {
       const body = await bodyText();
+      // Способ оплаты ищем среди выбранного, а не по всей странице: в списке
+      // рядом лежат и чужие карты, и «Оплата при получении», и от их наличия
+      // ничего не зависит — платит тот способ, который отмечен.
+      const chosen = await chosenPayment();
+      // Подписи нет — значит и предупреждения о нехватке денег нет.
+      const payText = (await text(payLocator())) ?? "";
       return {
-        total_rub: parseShopRubles(await totalNear(MARKET_TEXT.total)),
+        total_rub: parseShopRubles(await text(page.locator(MARKET_TESTID.checkoutTotal).first())),
         blocked: MARKET_TEXT.checkoutBlocked.test(body),
-        // Выбрана оплата при получении — это не сохранённая карта, способ оплаты агент не меняет.
-        saved_card: MARKET_TEXT.savedCard.test(body) && !MARKET_TEXT.payOnDelivery.test(body),
+        saved_card:
+          MARKET_TEXT.savedCard.test(chosen) &&
+          !MARKET_TEXT.payOnDelivery.test(chosen) &&
+          !MARKET_TEXT.topUpNeeded.test(payText),
         pay_button: await visible(payLocator(), UI_TIMEOUT_MS),
       };
     },

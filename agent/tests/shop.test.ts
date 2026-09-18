@@ -69,7 +69,8 @@ import {
   type RawOptionGroup,
 } from "../mac-daemon/eda-playwright.ts";
 import { marketIdFromHref, marketUrlFor } from "../mac-daemon/market-playwright.ts";
-import { MARKET_TEXT } from "../mac-daemon/market-selectors.ts";
+import { MARKET_TESTID, MARKET_TEXT } from "../mac-daemon/market-selectors.ts";
+import { EDA_TEXT } from "../mac-daemon/eda-selectors.ts";
 import type { ShopPlace } from "../lib/shop.ts";
 
 const T0 = Date.UTC(2026, 8, 17, 9, 0, 0);
@@ -1066,6 +1067,46 @@ describe("market: parsing and page helpers", () => {
     expect(MARKET_TEXT.cartEmpty.test("Корзина пуста")).toBe(true);
     expect(MARKET_TEXT.cartEmpty.test("В корзине пока пусто")).toBe(true);
     expect(MARKET_TEXT.cartEmpty.test("В корзине 1 товар")).toBe(false);
+  });
+
+  test("на странице оформления Маркета нет слова «Итого»", () => {
+    // Живьём итог лежит в отдельном узле `summaryTotalPrice`, а рядом с ним
+    // стоит подпись способа — «Оплата онлайн 142 ₽». Регулярка по «Итого»
+    // не находила ничего, и `checkout()` не мог прочитать сумму.
+    expect(MARKET_TESTID.checkoutTotal).toBe('[data-auto="summaryTotalPrice"]');
+    expect(Object.keys(MARKET_TEXT)).not.toContain("total");
+  });
+
+  test("платит отмеченный способ, а не любая сохранённая карта на странице", () => {
+    // В списке способов рядом лежат чужие карты и «Оплата при получении»:
+    // читать надо подпись отмеченного способа, иначе нули на балансе
+    // прочитаются как готовность платить.
+    expect(MARKET_TEXT.savedCard.test("•• 1288")).toBe(true);
+    expect(MARKET_TEXT.savedCard.test("Яндекс Пэй")).toBe(true);
+    expect(MARKET_TEXT.savedCard.test("Оплата при получении")).toBe(false);
+    expect(MARKET_TEXT.payOnDelivery.test("Оплата при получении")).toBe(true);
+    // Денег не хватает — кнопка подписана иначе, и без владельца не заплатить.
+    expect(MARKET_TEXT.topUpNeeded.test("Пополнить и оплатить")).toBe(true);
+    expect(MARKET_TEXT.topUpNeeded.test("Оплатить")).toBe(false);
+    expect(MARKET_TEXT.pay.test("Пополнить и оплатить")).toBe(true);
+    expect(MARKET_TEXT.checkout.test("Перейти к оформлению")).toBe(true);
+  });
+
+  test("кнопка корзины Еды подписана «Далее», а зовётся «Корзина»", () => {
+    // Живьём у кнопки `aria-label="Корзина 1040 ₽"` перекрывает видимый текст
+    // «Далее 1040 ₽»: поиск по роли сверяет доступное имя и ничего не находит,
+    // поэтому в `openCheckout()` нужен ещё и путь по тексту узла.
+    expect(EDA_TEXT.checkout.test("Далее 1040 ₽")).toBe(true);
+    expect(EDA_TEXT.checkout.test("Оформить заказ")).toBe(true);
+    expect(EDA_TEXT.checkout.test("Корзина 1040 ₽")).toBe(false);
+  });
+
+  test("предзаказ — это закрытое оформление", () => {
+    // Ресторан вне часов работы отвечает модалкой вместо страницы оформления:
+    // заказать на сейчас нельзя, и это отказ, а не сломанный селектор.
+    expect(EDA_TEXT.checkoutBlocked.test("Доступен только предзаказ")).toBe(true);
+    expect(EDA_TEXT.checkoutBlocked.test("Минимальная сумма заказа 500 ₽")).toBe(true);
+    expect(EDA_TEXT.checkoutBlocked.test("Доставим за 30 минут")).toBe(false);
   });
 
   test("daemon frame: market lines need a card number id, no place", () => {
