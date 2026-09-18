@@ -22,6 +22,7 @@ import {
   resetShopState,
   setShopAddress,
   SHOP_BUSY_WAIT_MS,
+  SHOP_OFFLINE_WAIT_MS,
   shopStatus,
 } from "../lib/dispatch/shop.ts";
 import { SignedActions } from "../lib/signed-actions.ts";
@@ -43,6 +44,8 @@ import {
   shopAddressHas,
   shopAddressTokens,
   shopLineText,
+  SHOP_PRE_ORDER_CODES,
+  SHOP_RECOVERY,
   type ShopOptionGroup,
   type ShopOrderState,
   type ShopOutcome,
@@ -831,6 +834,70 @@ describe("браузер покупок занят", () => {
     });
     expect(await shopStatus({ service: "eda" }, ctx)).toMatchObject({ ok: true, state: "delivering" });
     expect(ops).toContain("reset");
+  });
+
+  // Этап 2 автономии: известные временные сбои сервер лечит сам.
+  const fakeClock = () => {
+    const c = { now: T0 };
+    return { c, now: () => c.now, sleep: async (ms: number) => { c.now += ms; } };
+  };
+  const reply = (o: unknown) => ({ ok: true, stdout: JSON.stringify(o) });
+
+  test("Mac не на связи — сервер ждёт переподключения, агент получает статус", async () => {
+    const { now, sleep } = fakeClock();
+    let calls = 0;
+    restore = configureShop({ now, sleep, send: async () => (++calls < 4 ? { ok: false, stdout: "", error: "mac_offline" } : reply(STATUS)) });
+    expect(await shopStatus({ service: "eda" }, ctx)).toMatchObject({ ok: true, state: "delivering" });
+    expect(calls).toBe(4);
+  });
+
+  test("Mac не на связи дольше минуты — отказ с кодом, next и owner_needed", async () => {
+    const { c, now, sleep } = fakeClock();
+    restore = configureShop({ now, sleep, send: async () => ({ ok: false, stdout: "", error: "mac_offline" }) });
+    const out = await shopStatus({ service: "eda" }, ctx);
+    expect(out).toMatchObject({ ok: false, code: "mac_offline", owner_needed: true });
+    expect(String(out.next)).toContain("не проси перезапускать");
+    expect(c.now - T0).toBeGreaterThanOrEqual(SHOP_OFFLINE_WAIT_MS);
+  });
+
+  test("Chrome не запустился — второй запуск сам, без агента", async () => {
+    const { now, sleep } = fakeClock();
+    let calls = 0;
+    restore = configureShop({ now, sleep, send: async () => (++calls === 1 ? reply({ ok: false, code: "browser_unavailable" }) : reply(STATUS)) });
+    expect(await shopStatus({ service: "eda" }, ctx)).toMatchObject({ ok: true, state: "delivering" });
+    expect(calls).toBe(2);
+  });
+
+  test("Chrome не запустился дважды — агенту действие, а не просьба к владельцу", async () => {
+    const { now, sleep } = fakeClock();
+    let calls = 0;
+    restore = configureShop({ now, sleep, send: async () => { calls++; return reply({ ok: false, code: "browser_unavailable" }); } });
+    expect(await shopStatus({ service: "eda" }, ctx)).toMatchObject({ ok: false, code: "browser_unavailable", owner_needed: false });
+    expect(calls).toBe(2);
+  });
+
+  test("обрыв связи на чтении — один повтор; второй обрыв отдаётся агенту", async () => {
+    const { now, sleep } = fakeClock();
+    let calls = 0;
+    restore = configureShop({ now, sleep, send: async () => (++calls === 1 ? { ok: false, stdout: "", error: "mac_disconnected" } : reply(STATUS)) });
+    expect(await shopStatus({ service: "eda" }, ctx)).toMatchObject({ ok: true });
+    expect(calls).toBe(2);
+
+    restore();
+    calls = 0;
+    restore = configureShop({ now, sleep, send: async () => { calls++; return { ok: false, stdout: "", error: "mac_disconnected" }; } });
+    expect(await shopStatus({ service: "eda" }, ctx)).toMatchObject({ ok: false, code: "mac_disconnected", owner_needed: false });
+    expect(calls).toBe(2);
+  });
+
+  test("капча — за владельцем; у каждого кода отказа есть действие", async () => {
+    restore = configureShop({ now: () => T0, send: async () => reply({ ok: false, code: "captcha" }) });
+    expect(await shopStatus({ service: "eda" }, ctx)).toMatchObject({ ok: false, code: "captcha", owner_needed: true });
+    for (const code of [...SHOP_PRE_ORDER_CODES, "shop_paying"] as const) {
+      expect(SHOP_RECOVERY[code].next.length).toBeGreaterThan(10);
+    }
+    for (const code of ["login_required", "captcha", "payment_needs_owner", "address_required"] as const) expect(SHOP_RECOVERY[code].owner).toBe(true);
+    for (const code of ["shop_busy", "browser_unavailable", "price_changed", "unexpected_page"] as const) expect(SHOP_RECOVERY[code].owner).toBe(false);
   });
 });
 

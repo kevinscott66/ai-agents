@@ -743,6 +743,45 @@ export const SHOP_FAIL_LABEL: Record<ShopFailCode, string> = {
   shop_paying: "браузер покупок оформляет оплату — его не сбрасывают",
 };
 
+/**
+ * Что делать агенту при отказе (этап 2 автономии). Инцидент 2026-09-18: на
+ * shop_busy агент попросил владельца «повторить через пару минут», хотя повтор —
+ * его работа. Теперь у каждого кода есть действие: `owner: false` — агент делает
+ * `next` сам и владельцу технических просьб не пишет; `owner: true` — только то,
+ * что агенту запрещено (вход, капча, карта, адрес, настройки Mac, чужая корзина).
+ * Повторы, которые безопасны без агента (Mac не на связи, Chrome не запустился,
+ * занятость), сервер уже сделал сам — см. askMac в lib/dispatch/shop.ts.
+ */
+export type ShopRecovery = { owner: boolean; next: string };
+const RETRY_ONCE = "повтори этот же вызов сам один раз, владельца не проси; если снова — ";
+export const SHOP_RECOVERY: Record<ShopFailCode, ShopRecovery> = {
+  shop_disabled: { owner: true, next: "покупки на Mac выключены — скажи владельцу одной фразой, повторять бесполезно" },
+  profile_missing: { owner: true, next: "профиль браузера не настроен — это настройка Mac, скажи владельцу одной фразой" },
+  profile_insecure: { owner: true, next: "профиль браузера открыт другим пользователям — это настройка Mac, скажи владельцу одной фразой" },
+  browser_unavailable: { owner: false, next: `сервер уже запускал Chrome повторно; ${RETRY_ONCE}скажи владельцу, что Chrome на Mac не запускается` },
+  login_required: { owner: true, next: "вход в Яндекс делает только владелец — попроси его войти и не повторяй до его ответа" },
+  address_required: { owner: true, next: "адрес на сайте выбирает только владелец — попроси его и не повторяй до его ответа" },
+  captcha: { owner: true, next: "капчу агент не решает — перешли владельцу скриншот и жди его" },
+  unexpected_page: { owner: false, next: `${RETRY_ONCE}пришли владельцу скриншот и скажи, что страница Яндекса изменилась` },
+  place_not_found: { owner: false, next: "найди другие рестораны через SHOP_PLACES и предложи владельцу выбор" },
+  place_too_slow: { owner: false, next: "подбери успевающий ресторан через SHOP_PLACES с тем же max_eta_min и предложи владельцу" },
+  product_not_found: { owner: false, next: "поищи замену через SHOP_QUOTE другими словами и предложи владельцу" },
+  product_mismatch: { owner: false, next: "пересчитай через SHOP_QUOTE и SHOP_CHECKOUT, новый итог — владельцу" },
+  out_of_stock: { owner: false, next: "подбери замену через SHOP_QUOTE и предложи владельцу; без его согласия замену не заказывай" },
+  options_required: { owner: false, next: "пересчитай через SHOP_QUOTE и выбери опции; если выбор неочевиден — спроси владельца, какой вариант" },
+  options_mismatch: { owner: false, next: "пересчитай через SHOP_QUOTE и SHOP_CHECKOUT с теми же опциями, новый итог — владельцу" },
+  cart_not_empty: { owner: true, next: "в корзине чужие товары, агент их не трогает — попроси владельца очистить корзину" },
+  cart_mismatch: { owner: false, next: "пересчитай через SHOP_QUOTE и SHOP_CHECKOUT, новый итог — владельцу" },
+  price_unreadable: { owner: false, next: `${RETRY_ONCE}скажи владельцу, что цену на странице не прочитать` },
+  price_changed: { owner: false, next: "пересчитай через SHOP_QUOTE и SHOP_CHECKOUT, назови владельцу новый итог и жди его согласия" },
+  checkout_unavailable: { owner: false, next: "если не хватает минимальной суммы — предложи владельцу добавить позицию; если закрыто — предложи другой ресторан через SHOP_PLACES" },
+  payment_needs_owner: { owner: true, next: "карту агент не вводит — попроси владельца сохранить карту в Яндексе" },
+  pay_button_missing: { owner: false, next: "заказ не повторяй: проверь SHOP_STATUS и скажи владельцу итог" },
+  session_unknown: { owner: false, next: "подготовка устарела — заново SHOP_CHECKOUT и новое подтверждение владельца" },
+  shop_busy: { owner: false, next: "сервер уже ждал и сбрасывал браузер; повтори этот же вызов сам, владельца не проси" },
+  shop_paying: { owner: false, next: "на Mac идёт оплата другого заказа — дождись его результата, потом SHOP_STATUS; ничего не повторяй" },
+};
+
 export const shopLineSum = (lines: ReadonlyArray<{ qty: number; price_rub: number }>) =>
   lines.reduce((sum, l) => sum + l.qty * l.price_rub, 0);
 
