@@ -60,7 +60,7 @@ describe("аудит 2026-08-29: INLINE_TOOL_NAMES живёт в листе", ()
     // получили бы пустое множество.
     // Инлайновые инструменты с последствиями исключены поимённо: они инлайновые
     // (без карточки), но «ничего не сделали» про них сказать нельзя.
-    const WITH_EFFECT = ["CANCEL_SCHEDULED_POST", "SHOP_SET_ADDRESS", "SHOP_CHECKOUT"];
+    const WITH_EFFECT = ["CANCEL_SCHEDULED_POST", "SHOP_SET_ADDRESS", "SHOP_CHECKOUT", "SCHEDULE_FOLLOWUP", "CANCEL_FOLLOWUP"];
     expect(SDK_SIDE_EFFECT_FREE_TOOLS.size).toBe(INLINE_TOOL_NAMES.size - WITH_EFFECT.length);
     expect(SDK_SIDE_EFFECT_FREE_TOOLS.has("READ_WIKI")).toBe(true);
     for (const n of WITH_EFFECT) {

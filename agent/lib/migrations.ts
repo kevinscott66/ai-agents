@@ -1701,6 +1701,43 @@ export const MIGRATIONS: Migration[] = [
       for (const c of CHARACTERS) ins.run(c.key, "CANCEL_ORDER_WATCH");
     },
   },
+  {
+    // Отложенные проверки (SCHEDULE_FOLLOWUP / CANCEL_FOLLOWUP, таймер —
+    // lib/followups.ts). В отличие от напоминаний, в срок будится сам агент:
+    // сервер запускает его ход с задачей из строки, итог уходит владельцу.
+    //
+    // 'running' — атомарный захват, как 'sending' у напоминаний. Ход мог
+    // что-то сделать до рестарта, поэтому застрявший 'running' не
+    // перезапускается, а честно становится 'failed'.
+    //
+    // Инструменты инлайновые и только у оркестратора в личном чате владельца
+    // (CALLER_RESTRICTED + проверка в хендлере), строк прав им не нужно.
+    name: "066_followups",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS followups (
+          id TEXT PRIMARY KEY,
+          chat_id INTEGER NOT NULL,
+          user_id TEXT NOT NULL,
+          agent_key TEXT NOT NULL,
+          task TEXT NOT NULL,
+          due_at INTEGER NOT NULL,
+          status TEXT NOT NULL DEFAULT 'scheduled'
+            CHECK (status IN ('scheduled','running','done','cancelled','failed')),
+          attempts INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          claimed_at INTEGER,
+          finished_at INTEGER,
+          error TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_followups_due
+          ON followups(status, due_at);
+        CREATE INDEX IF NOT EXISTS idx_followups_chat
+          ON followups(chat_id, status, created_at);
+      `);
+    },
+  },
 ];
 
 /**

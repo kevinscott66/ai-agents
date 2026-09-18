@@ -32,6 +32,7 @@ import { startSelfDiagPoller, type SelfDiagPollerHandle } from "../lib/self-diag
 import { startBackupScheduler, type BackupSchedulerHandle } from "../lib/backup.ts";
 import { startDigestScheduler, type DigestSchedulerHandle } from "../lib/digest.ts";
 import { startReminderScheduler, type ReminderSchedulerHandle } from "../lib/reminders.ts";
+import { followupsEnabled, startFollowupScheduler, type FollowupSchedulerHandle } from "../lib/followups.ts";
 import { startOrderWatcher, type OrderWatchHandle } from "../lib/order-watch.ts";
 import { probeOrderOnMac } from "../lib/order-watch-mac.ts";
 import {
@@ -385,6 +386,20 @@ export async function startBackgroundServices(
     log.info("[reminders] disabled via REMINDERS_ENABLED=false");
   }
 
+  // Отложенные проверки (SCHEDULE_FOLLOWUP): в срок будят оркестратора с
+  // задачей. Сам ход запускает раннер из orchestrator-team.ts; без него
+  // строки просто ждут.
+  let followups: FollowupSchedulerHandle | null = null;
+  if (followupsEnabled()) {
+    try {
+      followups = startFollowupScheduler({ intervalMs: _envPositiveInt("FOLLOWUPS_TICK_MS") });
+    } catch (e) {
+      log.error("[followups] failed to start", { error: String(e) });
+    }
+  } else {
+    log.info("[followups] disabled via FOLLOWUPS_ENABLED=false");
+  }
+
   // Слежение за заказами (lib/order-watch.ts): такси, доставка, Лавка, Еда,
   // Маркет. Тик раз в ORDER_WATCH_TICK_MS (дефолт 30 с), но спрашивает Mac
   // только те заказы, которым подошёл срок. Пишет тот же бот и в тот же чат,
@@ -521,6 +536,7 @@ export async function startBackgroundServices(
       if (backup) backup.stop();
       if (digest) digest.stop();
       if (reminders) reminders.stop();
+      if (followups) followups.stop();
       if (orderWatch) orderWatch.stop();
       if (maint) maint.stop();
       if (macBridge) macBridge.stop();

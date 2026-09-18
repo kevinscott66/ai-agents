@@ -315,9 +315,9 @@ const shopFail = (o: Extract<ShopOutcome, { ok: false }>): ShopToolResult => ({
 
 /** Сбои моста — те же поля, что у отказов Mac. Повторы, безопасные без агента, askMac уже сделал. */
 const MAC_ERROR_RECOVERY: Record<string, ShopRecovery> = {
-  mac_offline: { owner: true, next: "Mac не на связи больше минуты (крышка закрыта или нет сети) — скажи владельцу одной фразой; не проси перезапускать демон" },
-  mac_disconnected: { owner: false, next: "связь с Mac оборвалась посреди запроса — повтори вызов сам один раз; заказ (ORDER_FOOD) не повторяй, сначала SHOP_STATUS" },
-  mac_timeout: { owner: false, next: "Mac не успел ответить — повтори вызов сам один раз; заказ (ORDER_FOOD) не повторяй, сначала SHOP_STATUS" },
+  mac_offline: { owner: true, next: "Mac не на связи больше минуты (крышка закрыта или нет сети) — скажи владельцу одной фразой и поставь SCHEDULE_FOLLOWUP через 10 мин повторить; не проси его напомнить или перезапускать демон" },
+  mac_disconnected: { owner: false, next: "связь с Mac оборвалась посреди запроса — повтори вызов сам один раз, если снова — SCHEDULE_FOLLOWUP через 5 мин; заказ (ORDER_FOOD) не повторяй, сначала SHOP_STATUS" },
+  mac_timeout: { owner: false, next: "Mac не успел ответить — повтори вызов сам один раз, если снова — SCHEDULE_FOLLOWUP через 5 мин; заказ (ORDER_FOOD) не повторяй, сначала SHOP_STATUS" },
 };
 
 function macFail(e: unknown, suffix = ""): ShopToolResult {

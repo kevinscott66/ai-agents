@@ -5,7 +5,7 @@ import { nativeTurnContext } from "./native-context.ts";
  * Аудит 2026-09-11: здесь было написано «все 12 инструментов идут через единый
  * `gateOrDispatch`». Неверно дважды. Инструментов в `TOOL_NAMES` тридцать семь
  * (число сверяется тестом audit-2026-09-11-tool-counts: в круге 29 оно уже
- * успело протухнуть на два, пока список рос); двадцать четыре — это
+ * успело протухнуть на два, пока список рос); двадцать шесть — это
  * `INLINE_TOOL_NAMES` из `constants.ts`, то есть ровно тот набор, который через
  * `gateOrDispatch` как раз НЕ идёт: ни CALLER_RESTRICTED, ни строка permissions
  * к ним не применяются (см. разбор инлайновой ветки в `executeTool` ниже).
@@ -68,6 +68,7 @@ import { parseChannelId, fetchChannelStats, tgstatConfigured } from "./tgstat.ts
 import { fetchGithubStatus, githubConfigured } from "./github.ts";
 import { log } from "./log.ts";
 import { formatMsk, isoMsk, listReminders } from "./reminders.ts";
+import { cancelFollowupTool, scheduleFollowupTool } from "./followups.ts";
 import { ORDER_WATCH_KINDS, listOrderWatches } from "./order-watch.ts";
 
 const ROLE_KEYS = CHARACTERS.map((c) => c.key);
@@ -1001,6 +1002,28 @@ export const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "SCHEDULE_FOLLOWUP",
+    description:
+      "Поставить себе отложенную проверку: через in_min минут сервер сам разбудит тебя с этой задачей, ты её сделаешь и напишешь владельцу итог в его личный Telegram. Для «доделать позже» — Mac не на связи, заказ ещё не собран, статус не обновился. Вместо того чтобы просить владельца напомнить или повторить. Не для напоминаний владельцу (это CREATE_REMINDER). Только в личном чате владельца; не больше 5 активных и 20 за сутки.",
+    input_schema: {
+      type: "object",
+      properties: {
+        task: { type: "string", description: "Что сделать в срок — коротко и конкретно, чтобы понять без истории (до 300 символов). Без адресов и телефонов." },
+        in_min: { type: "integer", description: "Через сколько минут, 1..1440." },
+      },
+      required: ["task", "in_min"],
+    },
+  },
+  {
+    name: "CANCEL_FOLLOWUP",
+    description: "Снять свою отложенную проверку по id (из ответа SCHEDULE_FOLLOWUP) — когда дело уже сделано или владелец передумал.",
+    input_schema: {
+      type: "object",
+      properties: { id: { type: "string", description: "id проверки." } },
+      required: ["id"],
+    },
+  },
+  {
     name: "LIST_REMINDERS",
     description:
       "Read-only: напоминания этого чата — ожидающие и неудавшиеся за неделю: id, at (МСК), status, overdue, text.",
@@ -1888,6 +1911,12 @@ async function dispatchTool(
   }
   if (name === "DELIVERY_STATUS") {
     return fmt(await deliveryStatus(ctx));
+  }
+  if (name === "SCHEDULE_FOLLOWUP") {
+    return fmt(scheduleFollowupTool(i, ctx));
+  }
+  if (name === "CANCEL_FOLLOWUP") {
+    return fmt(cancelFollowupTool(i, ctx));
   }
   if (name === "LIST_REMINDERS") {
     // Нативный клиент — не Telegram-чат, напоминаний у него нет.

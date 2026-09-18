@@ -75,6 +75,8 @@ const RULES: Record<string, { perAgent?: BucketRule; global?: BucketRule }> = {
   SHOP_CHECKOUT: { perAgent: { windowMs: MINUTE_MS, max: 3 } },
   SHOP_STATUS: { perAgent: { windowMs: MINUTE_MS, max: 6 } },
   SHOP_SET_ADDRESS: { perAgent: { windowMs: MINUTE_MS, max: 3 } },
+  SCHEDULE_FOLLOWUP: { perAgent: { windowMs: MINUTE_MS, max: 3 } },
+  CANCEL_FOLLOWUP: { perAgent: { windowMs: MINUTE_MS, max: 6 } },
   ORDER_DELIVERY: { perAgent: { windowMs: HOUR_MS, max: 10 } },
   DELIVERY_CANCEL: { perAgent: { windowMs: HOUR_MS, max: 10 } },
   DELIVERY_QUOTE: { perAgent: { windowMs: MINUTE_MS, max: 4 } },
