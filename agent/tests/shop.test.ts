@@ -123,6 +123,13 @@ describe("parsing", () => {
     const lines = [{ id: MILK.id, name: MILK.name, qty: 2 }];
     expect(parseShopRequest({ op: "quote", service: "lavka", queries: ["молоко"] })).toEqual({ op: "quote", service: "lavka", queries: ["молоко"] });
     expect(parseShopRequest({ op: "quote", service: "lavka", queries: [] })).toBeNull();
+    expect(parseShopRequest({ op: "reset" })).toEqual({ op: "reset" });
+    expect(parseShopRequest({ op: "reset", service: "lavka" })).toBeNull();
+    expect(parseShopOutcome(JSON.stringify({ ok: true, op: "reset", reset: true }), "reset")).toEqual({ ok: true, op: "reset", reset: true });
+    expect(parseShopOutcome(JSON.stringify({ ok: false, code: "shop_busy", busy_op: "confirm", busy_ms: 1200 }), "status"))
+      .toEqual({ ok: false, code: "shop_busy", busy_op: "confirm", busy_ms: 1200 });
+    expect(parseShopOutcome(JSON.stringify({ ok: false, code: "shop_paying", busy_op: "confirm", busy_ms: 5 }), "reset"))
+      .toMatchObject({ ok: false, code: "shop_paying" });
     expect(parseShopRequest({ op: "prepare", session: SESSION, service: "lavka", lines })).toEqual({ op: "prepare", session: SESSION, service: "lavka", lines });
     expect(parseShopRequest({ op: "prepare", session: SESSION, service: "lavka", lines: [...lines, ...lines] })).toBeNull();
     expect(parseShopRequest({ op: "prepare", session: SESSION, service: "lavka", lines: [{ ...lines[0], qty: 21 }] })).toBeNull();
@@ -775,6 +782,109 @@ describe("браузер покупок занят", () => {
     const both = await Promise.all([shopStatus({ service: "eda" }, ctx), shopStatus({ service: "lavka" }, ctx)]);
     expect(both.every((r) => r.ok)).toBe(true);
     expect(maxInFlight).toBe(1);
+  });
+
+  test("занят второй раз подряд — сервер сам просит Mac сбросить брошенный запуск, один раз", async () => {
+    let clock = T0;
+    const ops: string[] = [];
+    restore = configureShop({
+      now: () => clock,
+      sleep: async (ms) => { clock += ms; },
+      send: async (req) => {
+        ops.push(req.op);
+        if (req.op === "reset") return { ok: true, stdout: JSON.stringify({ ok: true, op: "reset", reset: true }) };
+        return ops.filter((o) => o === "status").length < 4 ? BUSY : { ok: true, stdout: JSON.stringify(STATUS) };
+      },
+    });
+    expect(await shopStatus({ service: "eda" }, ctx)).toMatchObject({ ok: true, state: "delivering" });
+    expect(ops).toEqual(["status", "status", "reset", "status", "status"]);
+  });
+
+  test("Mac оформляет оплату (shop_paying) — не сбрасывается, сервер ждёт дальше", async () => {
+    let clock = T0;
+    const ops: string[] = [];
+    const held = { ok: false, code: "shop_busy", busy_op: "confirm", busy_ms: 40_000 };
+    restore = configureShop({
+      now: () => clock,
+      sleep: async (ms) => { clock += ms; },
+      send: async (req) => {
+        ops.push(req.op);
+        if (req.op === "reset") return { ok: true, stdout: JSON.stringify({ ok: false, code: "shop_paying", busy_op: "confirm", busy_ms: 45_000 }) };
+        return ops.length < 6 ? { ok: true, stdout: JSON.stringify(held) } : { ok: true, stdout: JSON.stringify(STATUS) };
+      },
+    });
+    expect(await shopStatus({ service: "eda" }, ctx)).toMatchObject({ ok: true, state: "delivering" });
+    expect(ops.filter((o) => o === "reset")).toEqual(["reset"]);
+  });
+
+  test("старый демон не знает reset — ошибка сброса не рвёт ожидание", async () => {
+    let clock = T0;
+    const ops: string[] = [];
+    restore = configureShop({
+      now: () => clock,
+      sleep: async (ms) => { clock += ms; },
+      send: async (req) => {
+        ops.push(req.op);
+        if (req.op === "reset") return { ok: false, stdout: "", error: "invalid_shop_request" };
+        return ops.length < 5 ? BUSY : { ok: true, stdout: JSON.stringify(STATUS) };
+      },
+    });
+    expect(await shopStatus({ service: "eda" }, ctx)).toMatchObject({ ok: true, state: "delivering" });
+    expect(ops).toContain("reset");
+  });
+});
+
+describe("mac runner: занятость и сброс", () => {
+  function hungRunner(page: ShopPage, clock: { now: number }, onClose: () => void) {
+    return new ShopRunner({ SHOP_ENABLED: "true", SHOP_PROFILE_DIR: "/profile" }, {
+      launch: async () => ({ page: () => page, close: async () => { onClose(); } }),
+      checkProfile: (dir) => dir ?? "",
+      now: () => clock.now,
+      sleep: async () => {},
+      idleMs: 60_000,
+    });
+  }
+  const tick = () => new Promise((r) => setTimeout(r, 1));
+
+  test("занятость говорит, что держит браузер; сброс рвёт висящий запуск и отпускает замок", async () => {
+    const { s, page } = fakePage();
+    const clock = { now: T0 };
+    let fail: ((e: Error) => void) | null = null;
+    const r = hungRunner(page, clock, () => fail?.(new Error("Target closed")));
+    expect(await r.run({ op: "reset" })).toEqual({ ok: true, op: "reset", reset: false });
+
+    const orderState = page.orderState;
+    page.orderState = () => new Promise((_, reject) => { fail = reject; });
+    const stuck = r.run({ op: "status", service: "lavka" }).catch(() => null);
+    await tick();
+    clock.now += 30_000;
+    expect(await r.run({ op: "status", service: "eda" })).toEqual({ ok: false, code: "shop_busy", busy_op: "status", busy_ms: 30_000 });
+
+    expect(await r.run({ op: "reset" })).toEqual({ ok: true, op: "reset", reset: true });
+    await stuck;
+    page.orderState = orderState;
+    s.state = "delivering";
+    expect(await r.run({ op: "status", service: "lavka" })).toMatchObject({ ok: true, op: "status", state: "delivering" });
+    await r.close();
+  });
+
+  test("оформление с оплатой не сбрасывается", async () => {
+    const { s, page } = fakePage();
+    const clock = { now: T0 };
+    const r = hungRunner(page, clock, () => {});
+    const prepare: ShopRequest = { op: "prepare", session: SESSION, service: "lavka", lines: [{ id: MILK.id, name: MILK.name, qty: 1 }] };
+    await r.run(prepare);
+    let pay: (() => void) | null = null;
+    const clickPay = page.clickPay;
+    page.clickPay = () => new Promise<void>((resolve) => { pay = () => { s.state = s.stateAfterPay; resolve(); }; });
+    const paying = r.run({ op: "confirm", session: SESSION, maxRub: 1000 });
+    await tick();
+    clock.now += 10_000;
+    expect(await r.run({ op: "reset" })).toEqual({ ok: false, code: "shop_paying", busy_op: "confirm", busy_ms: 10_000 });
+    pay!();
+    expect(await paying).toMatchObject({ ok: true, op: "confirm" });
+    page.clickPay = clickPay;
+    await r.close();
   });
 });
 
