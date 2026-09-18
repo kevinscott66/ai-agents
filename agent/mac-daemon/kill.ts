@@ -42,19 +42,30 @@ export async function killChild(
   if (child.processGroupId !== undefined) {
     const pgid = child.processGroupId;
     if (!Number.isSafeInteger(pgid) || pgid <= 1 || pgid === process.pid) throw new Error('invalid child process group');
+    // ESRCH — группы нет. EPERM на macOS — в группе остались одни зомби:
+    // лидер вышел, а Bun ещё не забрал его статус. Сигнал своему же прогону
+    // иначе EPERM не даёт, так что для нас это тоже «группы нет».
+    //
+    // 2026-09-18: EPERM пробрасывался, а все вызовы тут `void killChild(...)`,
+    // так что отказ уходил в unhandled rejection и ронял демон на отмене
+    // прогона (релиз a9385e69, `cancel id=… → killing` и сразу SystemError).
+    const dead = (error: unknown) => {
+      const code = (error as NodeJS.ErrnoException).code;
+      return code === 'ESRCH' || code === 'EPERM';
+    };
     const exists = () => {
       try { process.kill(-pgid,0); return true; }
-      catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false; throw error; }
+      catch (error) { if (dead(error)) return false; throw error; }
     };
     try { process.kill(-pgid,'SIGINT'); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return 'gone'; throw error; }
+    catch (error) { if (dead(error)) return 'gone'; throw error; }
     // The leader exiting is insufficient: a shell/tool may ignore SIGINT and
     // keep running in its group after the CLI has exited.
     const deadline = Date.now()+Math.max(0,graceMs);
     while (exists()) {
       if (Date.now() >= deadline) {
         try { process.kill(-pgid,'SIGKILL'); }
-        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+        catch (error) { if (!dead(error)) throw error; }
         return 'killed';
       }
       await Bun.sleep(Math.min(20,Math.max(1,deadline-Date.now())));

@@ -27,3 +27,28 @@ test('cancel kills a SIGINT-resistant grandchild even after its CLI parent exits
     await child.exited;
   }
 });
+
+// macOS: kill(-pgid, 0) отвечает EPERM, когда в группе одни зомби. Раньше это
+// пробрасывалось из `void killChild(...)` и роняло демон на отмене прогона.
+test('EPERM from a zombie-only process group counts as exited, not a crash', async () => {
+  const real = process.kill;
+  const eperm = () => Object.assign(new Error('kill() failed: EPERM'), {code: 'EPERM'});
+  let sigints = 0;
+  (process as any).kill = (pid: number, sig?: number | NodeJS.Signals) => {
+    if (pid !== -424242) return real.call(process, pid, sig as any);
+    if (sig === 'SIGINT') { sigints++; return true; }
+    throw eperm();
+  };
+  try {
+    const child = {kill: () => {}, exited: Promise.resolve(), processGroupId: 424242};
+    expect(await killChild(child, 50)).toBe('exited');
+    expect(sigints).toBe(1);
+    (process as any).kill = (pid: number, sig?: number | NodeJS.Signals) => {
+      if (pid !== -424242) return real.call(process, pid, sig as any);
+      throw eperm();
+    };
+    expect(await killChild(child, 50)).toBe('gone');
+  } finally {
+    (process as any).kill = real;
+  }
+});
