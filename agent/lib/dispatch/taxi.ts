@@ -19,6 +19,7 @@
  */
 import type { PayloadByType } from "../action-payload.ts";
 import { sendTaxiToMac } from "../mac-bridge.ts";
+import { watchPlacedOrder } from "../order-watch.ts";
 import { signedActions } from "../native-signing.ts";
 import { limitsFromEnv, maxRubFor, type SignedActions } from "../signed-actions.ts";
 import { log } from "../log.ts";
@@ -85,7 +86,7 @@ export function configureTaxi(patch: Partial<TaxiDeps>) {
 export const taxiEnabled = () => process.env.TAXI_ENABLED === "true";
 
 interface Quote { from: string; to: string; options: TaxiOption[]; at: number }
-interface PendingOrder { payload: string; userId: string; chatId: number; from: string; to: string; tariff: TaxiTariff; at: number }
+interface PendingOrder { payload: string; userId: string; chatId: number; agentKey: string; from: string; to: string; tariff: TaxiTariff; at: number }
 
 /** Последний расчёт на пользователя: заказывать можно только по нему. */
 const quotes = new Map<string, Quote>();
@@ -184,7 +185,7 @@ export async function handleOrderTaxi(payload: PayloadByType["ORDER_TAXI"], ctx:
       now,
     );
     for (const [key, order] of pendingOrders) if (now - order.at > TAXI_QUOTE_TTL_MS) pendingOrders.delete(key);
-    pendingOrders.set(nonce, { payload: signed, userId, chatId: ctx.chatId, from, to, tariff, at: now });
+    pendingOrders.set(nonce, { payload: signed, userId, chatId: ctx.chatId, agentKey: ctx.agentKey, from, to, tariff, at: now });
     return {
       ok: true,
       result: {
@@ -302,6 +303,9 @@ async function runSignedTaxi(nonce: string): Promise<void> {
   try { gate.complete(nonce, true, deps.now()); } catch (e) {
     log.error("[taxi] complete failed", { error: errorText(e) });
   }
+  // Дальше за заказом следит lib/order-watch.ts: сам спросит Mac и сам скажет
+  // владельцу, когда машина будет близко и когда поездка кончится.
+  watchPlacedOrder({ kind: "taxi", chatId: order.chatId, userId, agentKey: order.agentKey, state: confirmed.state });
   await tell(userId, `Такси ${TAXI_TARIFFS[order.tariff]} заказано: ${order.from} → ${order.to}, ${prepared.price_rub} ₽. Сейчас: ${TAXI_STATE_LABEL[confirmed.state]}.`);
 }
 

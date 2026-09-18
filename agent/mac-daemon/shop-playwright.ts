@@ -14,6 +14,7 @@ import {
   SHOP_SCREENSHOT_B64_MAX,
   parseDeliveryRubles,
   parseShopRubles,
+  parseShopEtaMinutes,
   SHOP_ADDRESSES_MAX,
   type ShopOrderState,
   type ShopService,
@@ -141,12 +142,21 @@ export function pageKit(page: any) {
   }, label.source);
   const screenshot = () => jpegScreenshot(page, SHOP_SCREENSHOT_B64_MAX);
   const probe = () => ariaProbe(page);
-  /** Состояние заказа по тексту страницы; порядок правил важен. */
-  const stateFromBody = async (rules: ReadonlyArray<[ShopOrderState, RegExp]>): Promise<ShopOrderState> => {
+  /**
+   * Состояние заказа по тексту страницы; порядок правил важен. Заодно снимаем
+   * обещанное время — оно на той же странице и нужно, чтобы предупредить
+   * владельца заранее. Нет его в тексте — `null`, догадок нет.
+   */
+  const stateFromBody = async (
+    rules: ReadonlyArray<[ShopOrderState, RegExp]>,
+  ): Promise<{ state: ShopOrderState; eta_min: number | null }> => {
     const body = await bodyText();
     const hit = rules.find(([, re]) => re.test(body));
     const state: ShopOrderState = hit ? hit[0] : /Заказов (?:пока )?нет|У вас нет заказов/i.test(body) ? "none" : "unknown";
-    return SHOP_ORDER_STATES.includes(state) ? state : "unknown";
+    return {
+      state: SHOP_ORDER_STATES.includes(state) ? state : "unknown",
+      eta_min: parseShopEtaMinutes(body),
+    };
   };
   return { bodyText, goto, text, totalNear, screenshot, probe, stateFromBody };
 }

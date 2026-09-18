@@ -2,8 +2,8 @@
  * T-320: Background-service wiring extracted from main() in orchestrator-team.ts.
  *
  * startBackgroundServices() starts all background services (watchdog, health,
- * miniapp, self-diag, backup, digest, reminders, db-maint, userbot, userbot-router,
- * mac-bridge) and returns a handle whose stop() tears them all down (except
+ * miniapp, self-diag, backup, digest, reminders, order-watch, db-maint, userbot,
+ * userbot-router, mac-bridge) and returns a handle whose stop() tears them all down (except
  * bots and process.exit, which stay in main's own signal handler).
  *
  * Аудит 2026-09-11: роутера юзерботов (`buildUserbotRouter`/`setUserbotRouter`)
@@ -32,6 +32,8 @@ import { startSelfDiagPoller, type SelfDiagPollerHandle } from "../lib/self-diag
 import { startBackupScheduler, type BackupSchedulerHandle } from "../lib/backup.ts";
 import { startDigestScheduler, type DigestSchedulerHandle } from "../lib/digest.ts";
 import { startReminderScheduler, type ReminderSchedulerHandle } from "../lib/reminders.ts";
+import { startOrderWatcher, type OrderWatchHandle } from "../lib/order-watch.ts";
+import { probeOrderOnMac } from "../lib/order-watch-mac.ts";
 import {
   startMaintScheduler,
   setSchedulerDisabled,
@@ -383,6 +385,29 @@ export async function startBackgroundServices(
     log.info("[reminders] disabled via REMINDERS_ENABLED=false");
   }
 
+  // Слежение за заказами (lib/order-watch.ts): такси, доставка, Лавка, Еда,
+  // Маркет. Тик раз в ORDER_WATCH_TICK_MS (дефолт 30 с), но спрашивает Mac
+  // только те заказы, которым подошёл срок. Пишет тот же бот и в тот же чат,
+  // что и напоминания, — chat_id берётся из строки слежения.
+  let orderWatch: OrderWatchHandle | null = null;
+  if (process.env.ORDER_WATCH_ENABLED !== "false") {
+    try {
+      orderWatch = startOrderWatcher({
+        poll: probeOrderOnMac,
+        send: async (chatId, text, agentKey) => {
+          const bot = bots.find((b) => b.def.key === agentKey) ?? lead;
+          if (!bot) throw new Error("no running bot to deliver the order update");
+          return bot.bot.telegram.sendMessage(chatId, text);
+        },
+        intervalMs: _envPositiveInt("ORDER_WATCH_TICK_MS"),
+      });
+    } catch (e) {
+      log.error("[order-watch] failed to start", { error: String(e) });
+    }
+  } else {
+    log.info("[order-watch] disabled via ORDER_WATCH_ENABLED=false");
+  }
+
   // C31 DB-maint: gcStaleTasks каждые 30 минут, archive + compact раз в сутки в 04:00 UTC.
   let maint: MaintSchedulerHandle | null = null;
   if (process.env.DB_MAINT_ENABLED !== "false") {
@@ -496,6 +521,7 @@ export async function startBackgroundServices(
       if (backup) backup.stop();
       if (digest) digest.stop();
       if (reminders) reminders.stop();
+      if (orderWatch) orderWatch.stop();
       if (maint) maint.stop();
       if (macBridge) macBridge.stop();
     },

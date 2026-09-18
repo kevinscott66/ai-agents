@@ -1647,6 +1647,60 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    // Слежение за оформленным заказом (lib/order-watch.ts): агент сам говорит,
+    // через сколько приедет такси или курьер и что посылка доехала до ПВЗ.
+    // Время в мс, как у `reminders`.
+    //
+    // 'polling' — промежуточный статус атомарного захвата, как 'sending' у
+    // напоминаний. Отличие в том, что зависшую строку здесь можно вернуть в
+    // очередь: опрос ничего не меняет на стороне Яндекса, а повторное
+    // сообщение отсекается сравнением с `state`/`eta_step`.
+    //
+    // Права: CANCEL_ORDER_WATCH без апрува — он только гасит собственное
+    // слежение этого же чата. LIST_ORDER_WATCH инлайновый, строки прав ему не
+    // нужно. Заводится слежение не инструментом, а самим оформлением заказа,
+    // которое уже прошло подписанный гейт.
+    name: "065_order_watch",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS order_watch (
+          id TEXT PRIMARY KEY,
+          kind TEXT NOT NULL
+            CHECK (kind IN ('taxi','delivery','lavka','eda','market')),
+          chat_id INTEGER NOT NULL,
+          user_id TEXT NOT NULL,
+          agent_key TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'watching'
+            CHECK (status IN ('watching','polling','done','failed','cancelled')),
+          state TEXT NOT NULL DEFAULT 'unknown',
+          eta_min INTEGER,
+          eta_step INTEGER,
+          driver TEXT,
+          started_at INTEGER NOT NULL,
+          next_poll_at INTEGER NOT NULL,
+          polled_at INTEGER,
+          notified_at INTEGER,
+          misses INTEGER NOT NULL DEFAULT 0,
+          error TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_order_watch_due
+          ON order_watch(status, next_poll_at);
+        CREATE INDEX IF NOT EXISTS idx_order_watch_chat
+          ON order_watch(chat_id, status);
+        -- У сервиса на Mac одна вкладка и один текущий заказ: второе активное
+        -- слежение за тем же сервисом писало бы владельцу дважды.
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_order_watch_one_per_kind
+          ON order_watch(kind) WHERE status IN ('watching','polling');
+      `);
+      const ins = db.prepare(
+        `INSERT OR IGNORE INTO permissions(agent_key, action_type, allowed, requires_approval)
+         VALUES (?, ?, 1, 0)`,
+      );
+      for (const c of CHARACTERS) ins.run(c.key, "CANCEL_ORDER_WATCH");
+    },
+  },
 ];
 
 /**

@@ -87,6 +87,7 @@ import {
   handleListRecentMessages,
   handleSchedulePost,
   handleCreateReminder,
+  handleCancelOrderWatch,
   handleCancelReminder,
   type MiscHandlerContext,
 } from "./dispatch/misc.ts";
@@ -1048,6 +1049,17 @@ export async function dispatchAction<T extends ActionType>(
         }
         const p = payload as PayloadByType["CANCEL_REMINDER"];
         return handleCancelReminder(p, {
+          agentKey: ctx.agentKey,
+          chatId: ctx.chatId,
+          resolveUserbot: () => resolveUserbotHandle(ctx),
+        });
+      }
+      case "CANCEL_ORDER_WATCH": {
+        if (nativeTurnContext.getStore()) {
+          return { ok: false, error: "order watches are available only in Telegram chats" };
+        }
+        const p = payload as PayloadByType["CANCEL_ORDER_WATCH"];
+        return handleCancelOrderWatch(p, {
           agentKey: ctx.agentKey,
           chatId: ctx.chatId,
           resolveUserbot: () => resolveUserbotHandle(ctx),

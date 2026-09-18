@@ -159,7 +159,8 @@ export interface ShopPage {
   fillContacts?(contacts: { name?: string; email?: string }): Promise<void>;
   checkout(): Promise<CheckoutInfo>;
   clickPay(): Promise<void>;
-  orderState(): Promise<ShopOrderState>;
+  /** Состояние заказа и, если страница его пишет, сколько ждать в минутах. */
+  orderState(): Promise<{ state: ShopOrderState; eta_min: number | null }>;
   screenshot(): Promise<string | null>;
   probe(): Promise<string>;
 }
@@ -394,7 +395,8 @@ export class ShopRunner {
       case "status": {
         await page.openOrders(request.service);
         await this.guard(page);
-        return { ok: true, op: "status", state: await page.orderState() };
+        const { state, eta_min } = await page.orderState();
+        return { ok: true, op: "status", state, eta_min };
       }
       case "set_address": {
         // Пока идёт заказ, адрес не трогаем: подписан старый.
@@ -525,7 +527,7 @@ export class ShopRunner {
     let state: ShopOrderState = "unknown";
     for (let i = 0; i < SHOP_STATE_POLL.attempts; i++) {
       try {
-        state = await page.orderState();
+        state = (await page.orderState()).state;
       } catch {
         state = "unknown";
       }

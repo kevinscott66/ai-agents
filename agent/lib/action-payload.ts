@@ -402,6 +402,12 @@ export interface CancelReminderPayload {
   id: string;
 }
 
+/** Снять слежение за заказом. Пиннится к чату вызова, как и напоминание. */
+export interface CancelOrderWatchPayload {
+  chatId?: number;
+  id: string;
+}
+
 /**
  * T-702: aieng proposes a new system-prompt for any agent. Mandatory
  * approval; on approval the agent_prompts row's applied_at is set. Actual
@@ -505,6 +511,7 @@ export type PayloadByType = {
   SCHEDULE_POST: SchedulePostPayload;
   CREATE_REMINDER: CreateReminderPayload;
   CANCEL_REMINDER: CancelReminderPayload;
+  CANCEL_ORDER_WATCH: CancelOrderWatchPayload;
   GRANT_PERMISSION: GrantPermissionPayload;
   UPDATE_AGENT_PROMPT: UpdateAgentPromptPayload;
   CHANGE_AGENT_STATUS: ChangeAgentStatusPayload;

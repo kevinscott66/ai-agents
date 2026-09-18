@@ -32,6 +32,7 @@ import {
   type DeliveryTariff,
 } from "../delivery.ts";
 import { sendDeliveryToMac } from "../mac-bridge.ts";
+import { watchPlacedOrder } from "../order-watch.ts";
 import { signedActions } from "../native-signing.ts";
 import { limitsFromEnv, maxRubFor, type SignedActions } from "../signed-actions.ts";
 import { log } from "../log.ts";
@@ -88,6 +89,7 @@ interface PendingOrder {
   payload: string;
   userId: string;
   chatId: number;
+  agentKey: string;
   from: string;
   to: string;
   tariff: DeliveryTariff;
@@ -197,7 +199,7 @@ export async function handleOrderDelivery(payload: PayloadByType["ORDER_DELIVERY
       now,
     );
     for (const [key, order] of pendingOrders) if (now - order.at > DELIVERY_QUOTE_TTL_MS) pendingOrders.delete(key);
-    pendingOrders.set(nonce, { payload: signed, userId, chatId: ctx.chatId, from, to, tariff, comment, at: now });
+    pendingOrders.set(nonce, { payload: signed, userId, chatId: ctx.chatId, agentKey: ctx.agentKey, from, to, tariff, comment, at: now });
     return {
       ok: true,
       result: {
@@ -310,6 +312,9 @@ async function runSignedDelivery(nonce: string): Promise<void> {
   try { gate.complete(nonce, true, deps.now()); } catch (e) {
     log.error("[delivery] complete failed", { error: errorText(e) });
   }
+  // Дальше за доставкой следит lib/order-watch.ts — владельцу не придётся
+  // спрашивать DELIVERY_STATUS, чтобы узнать, когда курьер будет у двери.
+  watchPlacedOrder({ kind: "delivery", chatId: order.chatId, userId, agentKey: order.agentKey, state: confirmed.state });
   await tell(userId, `Курьер ${DELIVERY_TARIFFS[order.tariff]} заказан: ${order.from} → ${order.to}, ${prepared.price_rub} ₽. Сейчас: ${DELIVERY_STATE_LABEL[confirmed.state]}.`);
 }
 

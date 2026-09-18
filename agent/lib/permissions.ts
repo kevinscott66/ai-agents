@@ -64,6 +64,10 @@ export const ACTION_TYPES = [
   // Напоминания в чат-источник (lib/reminders.ts). LIST_REMINDERS — инлайновый.
   "CREATE_REMINDER",
   "CANCEL_REMINDER",
+  // Слежение за заказом (lib/order-watch.ts). Заводит его само оформление,
+  // уже прошедшее подписанный гейт; модели остаются только чтение и отмена.
+  // LIST_ORDER_WATCH — инлайновый.
+  "CANCEL_ORDER_WATCH",
   // T-701/T-702/T-703: inter-agent mutation actions. ALWAYS approval-gated.
   "GRANT_PERMISSION",
   "UPDATE_AGENT_PROMPT",
