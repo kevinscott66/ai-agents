@@ -21,6 +21,7 @@ import {
   quoteShop,
   resetShopState,
   setShopAddress,
+  SHOP_BUSY_WAIT_MS,
   shopStatus,
 } from "../lib/dispatch/shop.ts";
 import { SignedActions } from "../lib/signed-actions.ts";
@@ -711,6 +712,69 @@ describe("SHOP_CHECKOUT: итог с оформления до подписи", 
     const res = buildPayload("ORDER_FOOD", { service: "lavka", lines: LINES, delivery_rub: 0 }, { agentKey: "orchestrator" });
     expect(res.ok).toBe(false);
     expect(JSON.stringify(res)).toContain("SHOP_CHECKOUT");
+  });
+});
+
+describe("браузер покупок занят", () => {
+  const ctx = { agentKey: "orchestrator", chatId: OWNER, triggerUserId: String(OWNER) };
+  const STATUS = { ok: true, op: "status", state: "delivering", eta_min: 20 };
+  const BUSY = { ok: true, stdout: JSON.stringify({ ok: false, code: "shop_busy" }) };
+  let restore: (() => void) | null = null;
+  beforeEach(() => {
+    resetShopState();
+    process.env.SHOP_ENABLED = "true";
+    process.env.MINIAPP_ADMIN_USER_IDS = `123,${OWNER}`;
+  });
+  afterEach(() => {
+    restore?.();
+    restore = null;
+    resetShopState();
+    for (const k of ENV_KEYS) {
+      if (savedEnv[k] === undefined) delete process.env[k]; else process.env[k] = savedEnv[k];
+    }
+  });
+
+  test("shop_busy — хвост брошенного запроса: сервер пережидает и повторяет", async () => {
+    let clock = T0;
+    let calls = 0;
+    restore = configureShop({
+      now: () => clock,
+      sleep: async (ms) => { clock += ms; },
+      send: async () => (++calls < 4 ? BUSY : { ok: true, stdout: JSON.stringify(STATUS) }),
+    });
+    expect(await shopStatus({ service: "eda" }, ctx)).toMatchObject({ ok: true, state: "delivering" });
+    expect(calls).toBe(4);
+  });
+
+  test("занят дольше SHOP_BUSY_WAIT_MS — отказ с кодом, без вечного цикла", async () => {
+    let clock = T0;
+    let calls = 0;
+    restore = configureShop({
+      now: () => clock,
+      sleep: async (ms) => { clock += ms; },
+      send: async () => { calls++; return BUSY; },
+    });
+    expect(await shopStatus({ service: "eda" }, ctx)).toMatchObject({ ok: false, code: "shop_busy" });
+    expect(clock - T0).toBeGreaterThanOrEqual(SHOP_BUSY_WAIT_MS);
+    expect(calls).toBeLessThan(30);
+  });
+
+  test("запросы к Mac идут по одному: второй ждёт первого, а не ловит shop_busy", async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    restore = configureShop({
+      now: () => T0,
+      send: async () => {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((r) => setTimeout(r, 5));
+        inFlight--;
+        return { ok: true, stdout: JSON.stringify(STATUS) };
+      },
+    });
+    const both = await Promise.all([shopStatus({ service: "eda" }, ctx), shopStatus({ service: "lavka" }, ctx)]);
+    expect(both.every((r) => r.ok)).toBe(true);
+    expect(maxInFlight).toBe(1);
   });
 });
 
