@@ -33,6 +33,7 @@
  *   bun mac-daemon/shop.ts eda-quote "ресторан" "блюдо" …
  *   bun mac-daemon/shop.ts eda-places "шаверма" [45]  — рестораны и время доставки
  *   bun mac-daemon/shop.ts market-quote "зарядка usb-c" …
+ *   bun mac-daemon/shop.ts selfcheck [eda|market]  — селекторы на публичном поиске, JSON без текста страницы
  */
 import {
   MARKET_PRODUCT_ID,
@@ -314,6 +315,25 @@ export class ShopRunner {
     if (held.op === "confirm") return { ok: false, code: "shop_paying", busy_op: held.op, busy_ms: Math.max(0, this.now() - held.since) };
     await this.close();
     return { ok: true, op: "reset", reset: true };
+  }
+
+  /**
+   * Замок на время починки селекторов: починщик открывает тот же профиль своим
+   * Chrome, и два браузера на одном профиле не живут. Браузер исполнителя
+   * закрывается, покупки до release получают shop_busy (без busy_op — это не
+   * операция покупки, и reset её не рвёт). Подготовленный заказ ждёт подписи —
+   * его не теряем: отказ.
+   */
+  async hold(): Promise<(() => void) | null> {
+    if (this.busy || this.activeSession()) return null;
+    this.busy = true;
+    await this.close();
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.busy = false;
+    };
   }
 
   async close(): Promise<void> {
@@ -656,6 +676,12 @@ export async function runShopRequest(raw: unknown, signal?: AbortSignal): Promis
   }
 }
 
+/** Замок покупок для починки селекторов (mac-daemon/selector-repair.ts); null — занято. */
+export function holdShopRunner(): Promise<(() => void) | null> {
+  runner ??= new ShopRunner(process.env);
+  return runner.hold();
+}
+
 export async function closeShopRunner(): Promise<void> {
   await runner?.close();
 }
@@ -683,6 +709,14 @@ async function cli(args: string[]) {
     await browser.close();
     return;
   }
+  if (command === "selfcheck") {
+    // Для починщика селекторов: только чтение, без окна и без ожидания Enter.
+    const service = rest[0] === "eda" || rest[0] === "market" ? rest[0] : "lavka";
+    const profile = checkShopProfile(env.SHOP_PROFILE_DIR);
+    const { runSelfcheck } = await import("./shop-selfcheck.ts");
+    console.log(JSON.stringify(await runSelfcheck(service, env, profile)));
+    return;
+  }
   if (command === "eda-places") {
     const query = normalizeShopQuery(rest[0]);
     const max = rest[1] === undefined ? undefined : Number(rest[1]);
@@ -708,7 +742,7 @@ async function cli(args: string[]) {
     printOutcome(out);
     return;
   }
-  throw new Error("usage: bun mac-daemon/shop.ts login [eda|market] | probe [eda|market] | quote \"молоко\" | eda-quote \"ресторан\" \"блюдо\" | eda-places \"шаверма\" [45] | market-quote \"товар\"");
+  throw new Error("usage: bun mac-daemon/shop.ts login [eda|market] | probe [eda|market] | quote \"молоко\" | eda-quote \"ресторан\" \"блюдо\" | eda-places \"шаверма\" [45] | market-quote \"товар\" | selfcheck [eda|market]");
 }
 
 if (import.meta.main) {

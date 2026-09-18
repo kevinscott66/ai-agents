@@ -335,3 +335,18 @@ Verification: local installed Claude accepted the readiness command and produced
    `market-selectors.ts`.
 4. Корзина Маркета должна быть пустой. Если после «В корзину» страница просит
    выбрать размер или цвет — отказ `options_required`; допродажу исполнитель закрывает.
+
+## Починка селекторов (SHOP_REPAIR)
+
+Кадр `repair {service, code}` (`selector-repair.ts`): свежая ветка от
+`origin/main` в `<SELECTOR_REPAIR_REPO>/.claude/worktrees/`, `bun install`,
+`claude --print` с неизменяемым заданием, проверка изменённых путей, коммит,
+пуш ветки и `gh pr create`. Мержа нет.
+
+- `SELECTOR_REPAIR_REPO` — клон репозитория с доступом `git push` и `gh`,
+  внутри `MAC_PROJECT_ROOTS`. Не задан — `repair_disabled`.
+- `bun shop.ts selfcheck [eda|market]` — только чтение: открывает страницу поиска
+  в профиле покупок и печатает счётчики селекторов и имена
+  `data-testid` / `data-auto` / `data-zone-name` (без текста страницы).
+- На время починки браузер покупок закрыт, покупки получают `shop_busy`.
+

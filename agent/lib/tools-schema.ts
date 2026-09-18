@@ -5,7 +5,7 @@ import { nativeTurnContext } from "./native-context.ts";
  * Аудит 2026-09-11: здесь было написано «все 12 инструментов идут через единый
  * `gateOrDispatch`». Неверно дважды. Инструментов в `TOOL_NAMES` тридцать семь
  * (число сверяется тестом audit-2026-09-11-tool-counts: в круге 29 оно уже
- * успело протухнуть на два, пока список рос); двадцать шесть — это
+ * успело протухнуть на два, пока список рос); двадцать семь — это
  * `INLINE_TOOL_NAMES` из `constants.ts`, то есть ровно тот набор, который через
  * `gateOrDispatch` как раз НЕ идёт: ни CALLER_RESTRICTED, ни строка permissions
  * к ним не применяются (см. разбор инлайновой ветки в `executeTool` ниже).
@@ -69,6 +69,7 @@ import { fetchGithubStatus, githubConfigured } from "./github.ts";
 import { log } from "./log.ts";
 import { formatMsk, isoMsk, listReminders } from "./reminders.ts";
 import { cancelFollowupTool, scheduleFollowupTool } from "./followups.ts";
+import { shopRepairTool } from "./shop-repair.ts";
 import { ORDER_WATCH_KINDS, listOrderWatches } from "./order-watch.ts";
 
 const ROLE_KEYS = CHARACTERS.map((c) => c.key);
@@ -1015,6 +1016,19 @@ export const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "SHOP_REPAIR",
+    description:
+      "Запустить на Mac починку селекторов покупок, когда SHOP_* второй раз подряд ответил unexpected_page или price_unreadable: вёрстка Яндекса изменилась. Mac правит только файлы вёрстки в отдельной ветке и открывает PR; мерж и выкатка — за владельцем. Отвечает сразу, итог (ссылка на PR или причина) придёт сам через несколько минут — не повторяй вызов. Только в личном чате владельца; один сервис — не чаще раза в 12 часов.",
+    input_schema: {
+      type: "object",
+      properties: {
+        service: { type: "string", enum: ["lavka", "eda", "market"], description: "Сервис, где сломалось." },
+        code: { type: "string", enum: ["unexpected_page", "price_unreadable"], description: "Код отказа SHOP_*." },
+      },
+      required: ["service", "code"],
+    },
+  },
+  {
     name: "CANCEL_FOLLOWUP",
     description: "Снять свою отложенную проверку по id (из ответа SCHEDULE_FOLLOWUP) — когда дело уже сделано или владелец передумал.",
     input_schema: {
@@ -1917,6 +1931,9 @@ async function dispatchTool(
   }
   if (name === "CANCEL_FOLLOWUP") {
     return fmt(cancelFollowupTool(i, ctx));
+  }
+  if (name === "SHOP_REPAIR") {
+    return fmt(shopRepairTool(i, ctx));
   }
   if (name === "LIST_REMINDERS") {
     // Нативный клиент — не Telegram-чат, напоминаний у него нет.
