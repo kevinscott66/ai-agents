@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { sanitizeChildEnv } from './child-env.ts';
+import { calendarHelperPath } from './calendar-helper.ts';
 import { parseCalendarDay } from '../lib/assistant-types.ts';
 
 export type AssistantOperation = 'calendar_today' | 'open_workspace';
@@ -15,7 +15,11 @@ export const nativeExec: NativeExec = (file, args, signal) => new Promise((resol
 
 export async function runAssistantOperation(
   operation: AssistantOperation,
-  env: NodeJS.ProcessEnv = { MAC_CALENDAR_ENABLED: process.env.MAC_CALENDAR_ENABLED, MAC_WORKSPACE_APPS: process.env.MAC_WORKSPACE_APPS },
+  env: NodeJS.ProcessEnv = {
+    MAC_CALENDAR_ENABLED: process.env.MAC_CALENDAR_ENABLED,
+    MAC_CALENDAR_BIN_DIR: process.env.MAC_CALENDAR_BIN_DIR,
+    MAC_WORKSPACE_APPS: process.env.MAC_WORKSPACE_APPS,
+  },
   exec: NativeExec = nativeExec,
   signal?: AbortSignal,
 ): Promise<string> {
@@ -28,7 +32,7 @@ export async function runAssistantOperation(
     check();
     if (operation === 'calendar_today') {
       if (env.MAC_CALENDAR_ENABLED !== 'true') throw new Error('calendar_disabled');
-      const helper = fileURLToPath(new URL('./bin/agent-calendar', import.meta.url));
+      const helper = calendarHelperPath(env.MAC_CALENDAR_BIN_DIR);
       const raw = await exec(helper, ['today'], deadline.signal);
       check();
       return JSON.stringify(parseCalendarDay(raw));

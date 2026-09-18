@@ -10,6 +10,7 @@ import { handleMacControl } from "../lib/dispatch/mac.ts";
 import { sendControlToMac } from "../lib/mac-bridge.ts";
 import { approvalPreview } from "../lib/approvals.ts";
 import { controlArgv, controlErrorCode, parseMacApps, runMacControl } from "../mac-daemon/macctl.ts";
+import { calendarHelperPath } from "../mac-daemon/calendar-helper.ts";
 import { parseBridgeMsg } from "../mac-daemon/protocol.ts";
 
 const ON = { MAC_CONTROL_ENABLED: "true", MAC_CALENDAR_ENABLED: "true", MAC_APPS: "notes=com.apple.Notes" };
@@ -72,7 +73,7 @@ describe("macctl", () => {
     expect(controlArgv({ command: "volume", level: 30 }, ON)).toEqual(["/usr/bin/osascript", ["-e", "set volume output volume 30"]]);
     expect(controlArgv({ command: "open_app", app: "notes" }, ON)).toEqual(["/usr/bin/open", ["-b", "com.apple.Notes"]]);
     const [helper, args] = controlArgv({ command: "reminder_add", title: "a; rm -rf ~", dueAt: 1_700_000_000_500 }, ON);
-    expect(helper.endsWith("/bin/agent-calendar")).toBe(true);
+    expect(helper.endsWith("/bin/agent-calendar-run")).toBe(true);
     expect(args).toEqual(["reminder-add", "a; rm -rf ~", "1700000000"]);
   });
 
@@ -94,6 +95,30 @@ describe("macctl", () => {
     expect(JSON.parse(await runMacControl({ command: "reminders" }, ON, async () => ok)).reminders).toHaveLength(1);
     await expect(runMacControl({ command: "reminders" }, ON, async () => '{"reminders":"x"}')).rejects.toThrow();
     expect(controlErrorCode(new Error("/Users/owner/secret path"))).toBe("control_failed");
+  });
+
+  test("календарь зовётся через прокладку, а она — из постоянной папки", () => {
+    // Помощника EventKit нельзя звать напрямую: TCC спрашивает разрешение у bun,
+    // диалога нет, доступа нет. И путь должен пережить выкатку — запись TCC
+    // привязана к нему, а папка релиза меняется на каждом релизе.
+    expect(calendarHelperPath("/opt/agent/bin/")).toBe("/opt/agent/bin/agent-calendar-run");
+    expect(calendarHelperPath(" /opt/agent/bin ")).toBe("/opt/agent/bin/agent-calendar-run");
+    expect(calendarHelperPath(undefined).endsWith("/mac-daemon/bin/agent-calendar-run")).toBe(true);
+    expect(calendarHelperPath("")).toBe(calendarHelperPath(undefined));
+    expect(() => calendarHelperPath("bin")).toThrow("calendar_bin_dir_invalid");
+    const [helper] = controlArgv({ command: "reminders" }, { ...ON, MAC_CALENDAR_BIN_DIR: "/opt/agent/bin" });
+    expect(helper).toBe("/opt/agent/bin/agent-calendar-run");
+    expect(controlErrorCode(new Error("calendar_bin_dir_invalid"))).toBe("calendar_bin_dir_invalid");
+  });
+
+  test("прокладка ищет помощника соседом и молчит в stderr", async () => {
+    // stderr помощника разбирается построчно: лишняя строка от прокладки
+    // превратила бы понятный код в native_command_failed.
+    const src = await Bun.file(new URL("../mac-daemon/calendar-spawn.c", import.meta.url)).text();
+    expect(src).toContain("responsibility_spawnattrs_setdisclaim");
+    expect(src).toContain('static const char HELPER[] = "agent-calendar";');
+    expect(src).not.toContain("fprintf");
+    expect(src).not.toContain("printf");
   });
 
   test("MAC_APPS must be well-formed", () => {
