@@ -4,7 +4,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { approvalCategories } from "../lib/approval-policy.ts";
@@ -70,7 +70,7 @@ import {
 } from "../mac-daemon/eda-playwright.ts";
 import { marketIdFromHref, marketUrlFor } from "../mac-daemon/market-playwright.ts";
 import { MARKET_TESTID, MARKET_TEXT } from "../mac-daemon/market-selectors.ts";
-import { EDA_TEXT } from "../mac-daemon/eda-selectors.ts";
+import { EDA_TESTID, EDA_TEXT } from "../mac-daemon/eda-selectors.ts";
 import type { ShopPlace } from "../lib/shop.ts";
 
 const T0 = Date.UTC(2026, 8, 17, 9, 0, 0);
@@ -1107,6 +1107,41 @@ describe("market: parsing and page helpers", () => {
     expect(EDA_TEXT.checkoutBlocked.test("Доступен только предзаказ")).toBe(true);
     expect(EDA_TEXT.checkoutBlocked.test("Минимальная сумма заказа 500 ₽")).toBe(true);
     expect(EDA_TEXT.checkoutBlocked.test("Доставим за 30 минут")).toBe(false);
+  });
+
+  test("меню Еды читается без блока «Выбор пользователей»", () => {
+    // Живьём на «Топ пончик» 75 карточек и 8 названий по два раза: блок
+    // «Выбор пользователей» лежит в `div#popular_3158171` и повторяет блюда из
+    // настоящих категорий (`div#5005180366_3158171`). Из-за повтора
+    // `cardIndex()` находит две карточки с одним названием, отказывается
+    // угадывать — и блюдо, которое сам же предложил поиск, не кладётся в корзину.
+    expect(EDA_TESTID.menuCard).toBe(`${EDA_TESTID.dishCard}:not(${EDA_TESTID.popularBlock} *)`);
+    expect(EDA_TESTID.popularBlock).toBe('[id^="popular_"]');
+    // Префикс из селектора отличает блок повторов от контейнера категории.
+    const prefix = EDA_TESTID.popularBlock.slice('[id^="'.length, -'"]'.length);
+    expect("popular_3158171".startsWith(prefix)).toBe(true);
+    expect("5005180366_3158171".startsWith(prefix)).toBe(false);
+  });
+
+  test("карточки меню везде берутся одним селектором", () => {
+    // `readMenu()` возвращает массив, а клики идут через `.nth(i)` по тому же
+    // селектору: стоит где-то одному остаться `dishCard`, и индексы разъедутся —
+    // в корзину поедет соседнее блюдо.
+    const src = readFileSync(new URL("../mac-daemon/eda-playwright.ts", import.meta.url), "utf8");
+    expect(src.includes("EDA_TESTID.dishCard")).toBe(false);
+    expect(src.includes("sel.dishCard")).toBe(false);
+    expect(src.includes("EDA_TESTID.menuCard")).toBe(true);
+  });
+
+  test("«Ресторан ещё закрыт» — тоже закрытый ресторан", () => {
+    // Живьём на Бургер Кинге страница пишет «Ресторан ещё закрыт», а прошлый
+    // шаблон ждал «Ресторан закрыт» — закрытое заведение проходило проверку.
+    expect(EDA_TEXT.placeClosed.test("Ресторан ещё закрыт")).toBe(true);
+    expect(EDA_TEXT.placeClosed.test("Ресторан еще закрыт")).toBe(true);
+    expect(EDA_TEXT.placeClosed.test("Ресторан закрыт")).toBe(true);
+    expect(EDA_TEXT.placeClosed.test("Сейчас закрыт")).toBe(true);
+    expect(EDA_TEXT.placeClosed.test("Откроется в 10:00")).toBe(true);
+    expect(EDA_TEXT.placeClosed.test("Ресторан открыт круглосуточно")).toBe(false);
   });
 
   test("daemon frame: market lines need a card number id, no place", () => {

@@ -235,10 +235,10 @@ export function edaShopPage(page: any): ShopPage {
 
   /** Прокрутить меню до конца, чтобы догрузились карточки, и прочитать их. */
   const readMenu = async (): Promise<RawDish[]> => {
-    await page.locator(EDA_TESTID.dishCard).first().waitFor({ state: "visible", timeout: UI_TIMEOUT_MS }).catch(() => {});
+    await page.locator(EDA_TESTID.menuCard).first().waitFor({ state: "visible", timeout: UI_TIMEOUT_MS }).catch(() => {});
     let count = -1;
     for (let i = 0; i < EDA_MENU_SCROLLS; i++) {
-      const next = await page.locator(EDA_TESTID.dishCard).count().catch(() => 0);
+      const next = await page.locator(EDA_TESTID.menuCard).count().catch(() => 0);
       if (next === count) break;
       count = next;
       await page.mouse.wheel(0, 4_000).catch(() => {});
@@ -246,7 +246,7 @@ export function edaShopPage(page: any): ShopPage {
     }
     return page.evaluate((sel: typeof EDA_TESTID) => {
       const doc = (globalThis as any).document;
-      return [...doc.querySelectorAll(sel.dishCard)].slice(0, 600).map((card: any) => ({
+      return [...doc.querySelectorAll(sel.menuCard)].slice(0, 600).map((card: any) => ({
         title: String(card.querySelector(sel.dishTitle)?.innerText ?? ""),
         meta: String(card.querySelector(sel.dishMeta)?.innerText ?? ""),
         price: String(card.querySelector(sel.dishPrice)?.innerText ?? ""),
@@ -280,7 +280,7 @@ export function edaShopPage(page: any): ShopPage {
   /** Окно блюда по карточке: клик по фото (по заголовку окно не открывается). */
   const openDialog = async (index: number): Promise<boolean> => {
     await closeDialogs();
-    const card = page.locator(EDA_TESTID.dishCard).nth(index);
+    const card = page.locator(EDA_TESTID.menuCard).nth(index);
     await card.scrollIntoViewIfNeeded({ timeout: UI_TIMEOUT_MS }).catch(() => {});
     await card.click({ position: { x: 40, y: 40 }, timeout: UI_TIMEOUT_MS }).catch(() => {});
     return visible(fullDialog(), UI_TIMEOUT_MS);
@@ -523,7 +523,7 @@ export function edaShopPage(page: any): ShopPage {
     async product() {
       const i = await cardIndex();
       if (i < 0) return { name: null, price_rub: null, available: false };
-      const card = page.locator(EDA_TESTID.dishCard).nth(i);
+      const card = page.locator(EDA_TESTID.menuCard).nth(i);
       const name = dishName((await text(card.locator(EDA_TESTID.dishTitle).first())) ?? "", (await text(card.locator(EDA_TESTID.dishMeta).first())) ?? "");
       const price = parseShopRubles(await text(card.locator(EDA_TESTID.dishPrice).first()));
       const plus = await visible(card.locator(EDA_TESTID.dishPlus).first());
@@ -533,7 +533,7 @@ export function edaShopPage(page: any): ShopPage {
     async setProductQty(qty) {
       const i = await cardIndex();
       if (i < 0) return qty === 0 ? "ok" : "blocked";
-      const card = page.locator(EDA_TESTID.dishCard).nth(i);
+      const card = page.locator(EDA_TESTID.menuCard).nth(i);
       let current = await counterIn(card);
       for (let n = 0; n < QTY_CLICKS_MAX && current >= 0 && current !== qty; n++) {
         const button = card.locator(current < qty ? EDA_TESTID.dishPlus : EDA_TESTID.dishMinus).first();
