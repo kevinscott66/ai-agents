@@ -52,7 +52,7 @@ export const ACTION_TYPES = [
   // затем подпись на телефоне. TAXI_QUOTE и TAXI_STATUS — инлайновые.
   "ORDER_TAXI",
   "TAXI_CANCEL",
-  // Шаг 10a: ORDER_FOOD — Лавка, тот же путь. SHOP_QUOTE и SHOP_STATUS — инлайновые.
+  // Шаг 10a: ORDER_FOOD — Лавка, тот же путь. SHOP_QUOTE, SHOP_PLACES и SHOP_STATUS — инлайновые.
   "ORDER_FOOD",
   // Шаг 10c: MARKET_PURCHASE — Маркет, тот же путь и те же SHOP_QUOTE/SHOP_STATUS.
   "MARKET_PURCHASE",
@@ -191,6 +191,7 @@ export const CALLER_RESTRICTED: Record<string, string> = {
   ORDER_FOOD: "orchestrator",
   MARKET_PURCHASE: "orchestrator",
   SHOP_QUOTE: "orchestrator",
+  SHOP_PLACES: "orchestrator",
   SHOP_STATUS: "orchestrator",
   SHOP_SET_ADDRESS: "orchestrator",
   ORDER_DELIVERY: "orchestrator",

@@ -40,6 +40,11 @@ export const EDA_TESTID = {
   placeLink: 'a[href^="/r/"]',
   // сниппет на главной и заголовок карточки в поиске
   placeTitle: '[data-testid="place-snippet-title"], [data-testid="place-header-title"]',
+  /**
+   * Сверено: строка под названием с временем доставки — «20 – 25 мин» на
+   * главной, «4.8 (1800+) · 20 – 25 мин» в поиске.
+   */
+  placeMeta: '[data-testid="snippet-left-meta"], [data-testid="place-header-lower-meta"]',
   dishCard: DISH_CARD,
   popularBlock: POPULAR_BLOCK,
   /**

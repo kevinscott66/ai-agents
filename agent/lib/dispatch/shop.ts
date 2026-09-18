@@ -1,7 +1,9 @@
 /**
  * Шаги 10a–10c: покупки в Яндекс Лавке, Яндекс Еде и Яндекс Маркете через браузер на Mac владельца.
  *
- *   SHOP_QUOTE  {service?, place?, queries}             — инлайново: адрес, доставка,
+ *   SHOP_PLACES {query, max_eta_min?}                   — инлайново: рестораны Еды по
+ *                                                         запросу и время доставки;
+ *   SHOP_QUOTE  {service?, place?, max_eta_min?, queries} — инлайново: адрес, доставка,
  *                                                         ресторан (Еда) и до трёх
  *                                                         товаров на запрос;
  *   ORDER_FOOD  {service, place?, lines[{id,name,qty,price_rub,options?}], delivery_rub}
@@ -30,7 +32,12 @@ import { signedActions } from "../native-signing.ts";
 import { limitsFromEnv, maxRubFor, type SignedActions } from "../signed-actions.ts";
 import { log } from "../log.ts";
 import {
+  isShopMaxEta,
   MARKET_DELIVERY_MAX,
+  SHOP_MAX_ETA_MAX,
+  SHOP_MAX_ETA_MIN,
+  shopPlaceEtaText,
+  shopPlaceFits,
   normalizeShopAddress,
   normalizeShopPlaceName,
   normalizeShopQuery,
@@ -173,14 +180,21 @@ export async function quoteShop(input: Record<string, unknown>, ctx: ShopInlineC
   const placeQuery = needsPlace ? normalizeShopQuery(input.place) : undefined;
   if (needsPlace && !placeQuery) return { ok: false, error: "place — название ресторана, 2..80 символов" };
   if (!needsPlace && input.place !== undefined) return { ok: false, error: `у ${service} нет ресторана: place не нужен` };
+  const maxEta = input.max_eta_min;
+  if (maxEta !== undefined && !needsPlace) return { ok: false, error: `у ${service} нет ресторана: max_eta_min не нужен` };
+  if (maxEta !== undefined && !isShopMaxEta(maxEta)) return { ok: false, error: MAX_ETA_ERROR };
   const userId = ctx.triggerUserId!;
   try {
-    const request: ShopRequest = { op: "quote", service, ...(placeQuery ? { place: placeQuery } : {}), queries: unique };
+    const request: ShopRequest = {
+      op: "quote", service, ...(placeQuery ? { place: placeQuery } : {}), ...(maxEta !== undefined ? { max_eta_min: maxEta } : {}), queries: unique,
+    };
     const out = await askMac(request, userId, ctx.chatId);
     if (!out.ok) return { ok: false, error: failText(out), code: out.code };
     if (out.op !== "quote") return { ok: false, error: "invalid_shop_result" };
     // Ресторан приходит ровно у тех сервисов, где он нужен.
     if (needsPlace !== (out.place !== undefined)) return { ok: false, error: "invalid_shop_result" };
+    // С пределом Mac обязан вернуть успевающий ресторан — не верим на слово.
+    if (maxEta !== undefined && !shopPlaceFits(out.place!, maxEta)) return { ok: false, error: "invalid_shop_result" };
     const items = new Map<string, ShopCandidate>();
     for (const r of out.results) for (const c of r.candidates) items.set(c.id, c);
     quotes.set(userId, { service, ...(out.place ? { place: out.place } : {}), address: out.address, delivery_rub: out.delivery_rub, items, at: deps.now() });
@@ -189,6 +203,7 @@ export async function quoteShop(input: Record<string, unknown>, ctx: ShopInlineC
       service,
       store: SHOP_SERVICES[service],
       ...(out.place ? { place: out.place.name } : {}),
+      ...(out.place?.eta ? { place_eta: shopPlaceEtaText(out.place.eta) } : {}),
       address: out.address,
       delivery_rub: out.delivery_rub,
       results: out.results,
@@ -204,6 +219,47 @@ export async function quoteShop(input: Record<string, unknown>, ctx: ShopInlineC
           ? `delivery_rub — сколько владелец готов заплатить за доставку (0..${MARKET_DELIVERY_MAX}; не сказал — спроси или 0). `
           : "delivery_rub — из расчёта (null → 0). ") +
         "Если товар неочевиден, спроси владельца, какой из вариантов.",
+    };
+  } catch (e) {
+    return { ok: false, error: errorText(e) };
+  }
+}
+
+const MAX_ETA_ERROR = `max_eta_min — целые минуты от ${SHOP_MAX_ETA_MIN} до ${SHOP_MAX_ETA_MAX}`;
+
+/**
+ * SHOP_PLACES: рестораны Еды по запросу («шаверма», «пицца», название) и
+ * сколько каждый сейчас везёт. С пределом — только успевающие, быстрые
+ * первыми. Ничего не открывает в ресторанах и не трогает корзину.
+ */
+export async function listShopPlaces(input: Record<string, unknown>, ctx: ShopInlineContext): Promise<ShopToolResult> {
+  const refusal = ownerRefusal(ctx.agentKey, ctx.chatId, ctx.triggerUserId, inlineDelegated(ctx));
+  if (refusal) return { ok: false, error: refusal };
+  const query = normalizeShopQuery(input.query);
+  if (!query) return { ok: false, error: "query — что искать, одна строка 2..80 символов" };
+  const maxEta = input.max_eta_min;
+  if (maxEta !== undefined && !isShopMaxEta(maxEta)) return { ok: false, error: MAX_ETA_ERROR };
+  try {
+    const out = await askMac(
+      { op: "places", service: "eda", query, ...(maxEta !== undefined ? { max_eta_min: maxEta } : {}) },
+      ctx.triggerUserId!, ctx.chatId,
+    );
+    if (!out.ok) return { ok: false, error: failText(out), code: out.code };
+    if (out.op !== "places") return { ok: false, error: "invalid_shop_result" };
+    if (maxEta !== undefined && !out.places.every((p) => shopPlaceFits(p, maxEta))) return { ok: false, error: "invalid_shop_result" };
+    return {
+      ok: true,
+      store: SHOP_SERVICES.eda,
+      address: out.address,
+      ...(maxEta !== undefined ? { max_eta_min: maxEta } : {}),
+      places: out.places.map((p) => ({ name: p.name, eta: p.eta ? shopPlaceEtaText(p.eta) : null })),
+      note:
+        (out.places.length
+          ? "eta — сколько ресторан сейчас обещает везти (null — не пишет, скорее всего закрыт). Покажи владельцу варианты или возьми тот, что он назвал; "
+          : maxEta !== undefined ? "Никто не успевает к этому сроку: скажи владельцу и спроси, подождёт ли дольше. " : "Ничего не нашлось: спроси владельца, как ещё поискать. ") +
+        "дальше — SHOP_QUOTE {service: \"eda\", place: name ровно отсюда" +
+        (maxEta !== undefined ? ", max_eta_min — тот же" : "") +
+        ", queries}. У сети бывает несколько точек с одним названием: с max_eta_min расчёт возьмёт самую быструю из успевающих.",
     };
   } catch (e) {
     return { ok: false, error: errorText(e) };

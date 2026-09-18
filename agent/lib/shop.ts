@@ -54,6 +54,13 @@ export const SHOP_ADDRESS_MAX = 200;
 export const SHOP_SESSION_TTL_MS = 5 * 60_000;
 /** Сколько живёт расчёт, по которому можно заказать. */
 export const SHOP_QUOTE_TTL_MS = 15 * 60_000;
+/** Сколько ресторанов отдаёт SHOP_PLACES. */
+export const SHOP_PLACES_MAX = 10;
+/** Предел времени доставки, который может задать владелец, минут. */
+export const SHOP_MAX_ETA_MIN = 10;
+export const SHOP_MAX_ETA_MAX = 180;
+/** Потолок обещания на карточке ресторана: больше — ошибка разбора, а не доставка. */
+export const SHOP_PLACE_ETA_MAX = 240;
 /** Скриншот в кадре моста: base64 должен уместиться в хвост потока (64 КБ). */
 export const SHOP_SCREENSHOT_B64_MAX = 56_000;
 
@@ -126,6 +133,7 @@ export const SHOP_PRE_ORDER_CODES = [
   "captcha",
   "unexpected_page",
   "place_not_found",
+  "place_too_slow",
   "product_not_found",
   "product_mismatch",
   "out_of_stock",
@@ -172,14 +180,89 @@ export interface ShopLine {
   options?: ShopOptionPick[];
 }
 
+/** Обещание ресторана на карточке: «20 – 25 мин» → {from_min: 20, to_min: 25}. */
+export interface ShopPlaceEta {
+  from_min: number;
+  to_min: number;
+}
+
 export interface ShopPlace {
   ref: string;
   name: string;
+  /** Нет — карточка время не пишет (ресторан закрыт или предзаказ). */
+  eta?: ShopPlaceEta;
 }
 
-/** `place` есть ровно у сервисов, где shopNeedsPlace: в quote — название для поиска, в prepare — ref. */
+/**
+ * Время доставки с карточки ресторана: «4.8 (1800+) · 20 – 25 мин» или
+ * «35 – 45 мин». Одно число («25 мин») — это и начало, и конец. Часов на
+ * карточках нет; нет минут — null.
+ */
+export function parseShopPlaceEta(text: unknown): ShopPlaceEta | null {
+  if (typeof text !== "string") return null;
+  const s = text.replace(/[\u00a0\u202f\u2009]/g, " ");
+  const range = s.match(/(?:^|[^\d])(\d{1,3})\s*[–—-]\s*(\d{1,3})\s*мин/);
+  const one = range ? null : s.match(/(?:^|[^\d])(\d{1,3})\s*мин/);
+  const from = Number(range ? range[1] : one?.[1]);
+  const to = Number(range ? range[2] : one?.[1]);
+  if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 1 || from > to || to > SHOP_PLACE_ETA_MAX) return null;
+  return { from_min: from, to_min: to };
+}
+
+export const shopPlaceEtaText = (eta: ShopPlaceEta) =>
+  eta.from_min === eta.to_min ? `${eta.to_min} мин` : `${eta.from_min}–${eta.to_min} мин`;
+
+/** Предел времени от модели: целые минуты в [SHOP_MAX_ETA_MIN, SHOP_MAX_ETA_MAX]. */
+export const isShopMaxEta = (v: unknown): v is number =>
+  Number.isSafeInteger(v) && (v as number) >= SHOP_MAX_ETA_MIN && (v as number) <= SHOP_MAX_ETA_MAX;
+
+/** Успевает ли ресторан: конец обещанного интервала не позже предела. Без времени — нет. */
+export const shopPlaceFits = (p: ShopPlace, maxEtaMin: number) => p.eta !== undefined && p.eta.to_min <= maxEtaMin;
+
+const foldPlace = (s: string) => s.toLowerCase().replace(/ё/g, "е").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+
+/**
+ * Ресторан по названию: точные совпадения, иначе названия, содержащие запрос.
+ * Первый попавшийся по другому названию не берём — владелец просил конкретный.
+ * У одной сети бывает несколько точек с одним названием и разным временем:
+ * с пределом берём самую быструю из успевающих, а если не успевает ни одна —
+ * too_slow (ресторан есть, но везёт дольше). Без предела — первая, как в выдаче.
+ */
+export function pickShopPlace(
+  query: string,
+  places: ReadonlyArray<ShopPlace>,
+  maxEtaMin?: number,
+): { place: ShopPlace } | { too_slow: ShopPlace } | null {
+  const q = foldPlace(query);
+  if (!q) return null;
+  const same = places.filter((p) => foldPlace(p.name) === q);
+  const pool = same.length ? same : places.filter((p) => foldPlace(p.name).includes(q));
+  if (!pool.length) return null;
+  if (maxEtaMin === undefined) return { place: pool[0]! };
+  const fast = pool.filter((p) => shopPlaceFits(p, maxEtaMin)).sort((a, b) => a.eta!.to_min - b.eta!.to_min);
+  return fast.length ? { place: fast[0]! } : { too_slow: pool[0]! };
+}
+
+/**
+ * Рестораны для SHOP_PLACES: без повторов, с пределом — только успевающие,
+ * быстрые первыми (без времени — в конце), не больше SHOP_PLACES_MAX.
+ */
+export function rankShopPlaces(places: ReadonlyArray<ShopPlace>, maxEtaMin?: number): ShopPlace[] {
+  const seen = new Set<string>();
+  const unique = places.filter((p) => !seen.has(p.ref) && seen.add(p.ref));
+  const kept = maxEtaMin === undefined ? unique : unique.filter((p) => shopPlaceFits(p, maxEtaMin));
+  const key = (p: ShopPlace) => p.eta?.to_min ?? Number.POSITIVE_INFINITY;
+  return kept.map((p, i) => ({ p, i })).sort((a, b) => key(a.p) - key(b.p) || a.i - b.i).map(({ p }) => p).slice(0, SHOP_PLACES_MAX);
+}
+
+/**
+ * `place` есть ровно у сервисов, где shopNeedsPlace: в quote — название для поиска, в prepare — ref.
+ * `max_eta_min` — только у Еды: ресторан должен успеть за столько минут.
+ * `places` — только Еда: какие рестораны находятся по запросу («шаверма»).
+ */
 export type ShopRequest =
-  | { op: "quote"; service: ShopService; place?: string; queries: string[] }
+  | { op: "quote"; service: ShopService; place?: string; max_eta_min?: number; queries: string[] }
+  | { op: "places"; service: ShopService; query: string; max_eta_min?: number }
   | { op: "prepare"; session: string; service: ShopService; place?: string; lines: ShopLine[] }
   | { op: "confirm"; session: string; maxRub: number }
   | { op: "abandon"; session: string }
@@ -251,6 +334,7 @@ export interface ShopPreparedLine {
 
 export type ShopOutcome =
   | { ok: true; op: "quote"; address: string; place?: ShopPlace; delivery_rub: number | null; results: ShopQuoteResult[] }
+  | { ok: true; op: "places"; address: string; places: ShopPlace[] }
   | { ok: true; op: "prepare"; address: string; lines: ShopPreparedLine[]; total_rub: number }
   | { ok: true; op: "confirm"; state: ShopOrderState }
   | { ok: true; op: "abandon" }
@@ -416,10 +500,22 @@ export function parseShopRequest(raw: unknown): ShopRequest | null {
     case "quote": {
       if (!isService(m.service) || !Array.isArray(m.queries)) return null;
       const place = shopNeedsPlace(m.service);
-      if (keys !== (place ? "op,place,queries,service" : "op,queries,service")) return null;
+      const eta = place && m.max_eta_min !== undefined;
+      if (keys !== (place ? (eta ? "max_eta_min,op,place,queries,service" : "op,place,queries,service") : "op,queries,service")) return null;
       if (place && !exact(normalizeShopQuery, m.place)) return null;
+      if (eta && !isShopMaxEta(m.max_eta_min)) return null;
       if (m.queries.length < 1 || m.queries.length > SHOP_ITEMS_MAX || !m.queries.every((q) => exact(normalizeShopQuery, q))) return null;
-      return { op: "quote", service: m.service, ...(place ? { place: m.place as string } : {}), queries: [...(m.queries as string[])] };
+      return {
+        op: "quote", service: m.service, ...(place ? { place: m.place as string } : {}),
+        ...(eta ? { max_eta_min: m.max_eta_min as number } : {}), queries: [...(m.queries as string[])],
+      };
+    }
+    case "places": {
+      if (!isService(m.service) || !shopNeedsPlace(m.service)) return null;
+      const eta = m.max_eta_min !== undefined;
+      if (keys !== (eta ? "max_eta_min,op,query,service" : "op,query,service")) return null;
+      if (!exact(normalizeShopQuery, m.query) || (eta && !isShopMaxEta(m.max_eta_min))) return null;
+      return { op: "places", service: m.service, query: m.query as string, ...(eta ? { max_eta_min: m.max_eta_min as number } : {}) };
     }
     case "prepare": {
       if (!session(m.session) || !isService(m.service)) return null;
@@ -496,6 +592,17 @@ export function parseShopEtaMinutes(text: unknown): number | null {
   return isEta(value) ? value : null;
 }
 
+/** Ресторан в ответе Mac: ref, название и, если карточка его пишет, время. Демон до выката времени шлёт без eta. */
+function parsePlace(p: unknown): ShopPlace | null {
+  if (!isObject(p) || typeof p.ref !== "string" || !SHOP_PLACE_REF.test(p.ref) || !exact(normalizeShopPlaceName, p.name)) return null;
+  if (p.eta === undefined) return keysOf(p) === "name,ref" ? { ref: p.ref, name: p.name as string } : null;
+  const e = p.eta;
+  if (keysOf(p) !== "eta,name,ref" || !isObject(e) || keysOf(e) !== "from_min,to_min") return null;
+  const eta = parseShopPlaceEta(`${e.from_min}–${e.to_min} мин`);
+  if (!eta || eta.from_min !== e.from_min || eta.to_min !== e.to_min) return null;
+  return { ref: p.ref, name: p.name as string, eta };
+}
+
 /** Ответ Mac → проверенный результат. Кривой ответ — исключение, а не догадка. */
 export function parseShopOutcome(raw: string, expected: ShopRequest["op"]): ShopOutcome {
   const d = JSON.parse(raw) as Record<string, unknown>;
@@ -518,11 +625,7 @@ export function parseShopOutcome(raw: string, expected: ShopRequest["op"]): Shop
       const address = normalizeShopAddress(d.address);
       if (!address || address !== d.address || !(d.delivery_rub === null || isFee(d.delivery_rub))) return bad();
       let place: ShopPlace | undefined;
-      if (d.place !== undefined) {
-        const p = d.place;
-        if (!isObject(p) || keysOf(p) !== "name,ref" || typeof p.ref !== "string" || !SHOP_PLACE_REF.test(p.ref) || !exact(normalizeShopPlaceName, p.name)) return bad();
-        place = { ref: p.ref, name: p.name as string };
-      }
+      if (d.place !== undefined) place = parsePlace(d.place) ?? bad();
       if (!Array.isArray(d.results) || d.results.length < 1 || d.results.length > SHOP_ITEMS_MAX) return bad();
       const results = d.results.map((r): ShopQuoteResult => {
         if (!isObject(r) || !exact(normalizeShopQuery, r.query) || !Array.isArray(r.candidates) || r.candidates.length > SHOP_CANDIDATES_MAX) return bad();
@@ -538,6 +641,13 @@ export function parseShopOutcome(raw: string, expected: ShopRequest["op"]): Shop
       const choices = results.reduce((n, r) => n + r.candidates.reduce((m, c) => m + (c.options ?? []).reduce((k, g) => k + g.choices.length, 0), 0), 0);
       if (choices > SHOP_QUOTE_CHOICES_MAX) return bad();
       return { ok: true, op: "quote", address, ...(place ? { place } : {}), delivery_rub: d.delivery_rub as number | null, results };
+    }
+    case "places": {
+      const address = normalizeShopAddress(d.address);
+      if (!address || address !== d.address || !Array.isArray(d.places) || d.places.length > SHOP_PLACES_MAX) return bad();
+      const places = d.places.map((p) => parsePlace(p) ?? bad());
+      if (new Set(places.map((p) => p.ref)).size !== places.length) return bad();
+      return { ok: true, op: "places", address, places };
     }
     case "prepare": {
       const address = normalizeShopAddress(d.address);
@@ -593,6 +703,7 @@ export const SHOP_FAIL_LABEL: Record<ShopFailCode, string> = {
   captcha: "Яндекс показал капчу — агент её не решает, нужен владелец",
   unexpected_page: "открылась неожиданная страница — остановился",
   place_not_found: "ресторан не найден или сейчас не принимает заказы",
+  place_too_slow: "ресторан есть, но сейчас везёт дольше заданного времени — подбери другой через SHOP_PLACES",
   product_not_found: "товар не найден",
   product_mismatch: "на странице товара другое название — остановился",
   out_of_stock: "товара нет в наличии",

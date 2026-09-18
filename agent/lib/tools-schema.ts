@@ -5,7 +5,7 @@ import { nativeTurnContext } from "./native-context.ts";
  * Аудит 2026-09-11: здесь было написано «все 12 инструментов идут через единый
  * `gateOrDispatch`». Неверно дважды. Инструментов в `TOOL_NAMES` тридцать семь
  * (число сверяется тестом audit-2026-09-11-tool-counts: в круге 29 оно уже
- * успело протухнуть на два, пока список рос); двадцать два — это
+ * успело протухнуть на два, пока список рос); двадцать три — это
  * `INLINE_TOOL_NAMES` из `constants.ts`, то есть ровно тот набор, который через
  * `gateOrDispatch` как раз НЕ идёт: ни CALLER_RESTRICTED, ни строка permissions
  * к ним не применяются (см. разбор инлайновой ветки в `executeTool` ниже).
@@ -27,7 +27,7 @@ import { getErrorMessage } from "./errors.ts";
 import { INLINE_TOOL_NAMES } from "./constants.ts";
 import { listCloudflareDns } from "./dispatch/cloudflare.ts";
 import { quoteTaxi, taxiStatus } from "./dispatch/taxi.ts";
-import { quoteShop, setShopAddress, shopStatus } from "./dispatch/shop.ts";
+import { listShopPlaces, quoteShop, setShopAddress, shopStatus } from "./dispatch/shop.ts";
 import { deliveryStatus, quoteDelivery } from "./dispatch/delivery.ts";
 import Anthropic from "@anthropic-ai/sdk";
 import type { Telegram } from "telegraf";
@@ -761,6 +761,11 @@ export const TOOLS: Anthropic.Tool[] = [
       properties: {
         service: { type: "string", enum: ["lavka", "eda", "market"], description: "lavka — продукты (по умолчанию), eda — ресторан, market — Маркет." },
         place: { type: "string", description: "Только для eda: название ресторана, как сказал владелец («Жарицца Пицца»)." },
+        max_eta_min: {
+          type: "integer",
+          description:
+            "Только для eda и только если владелец назвал срок: за сколько минут ресторан должен довезти («за 45 минут», «35–45 минут» → 45). Ресторан, который сейчас обещает дольше, не подойдёт — будет отказ place_too_slow.",
+        },
         queries: {
           type: "array",
           items: { type: "string" },
@@ -768,6 +773,22 @@ export const TOOLS: Anthropic.Tool[] = [
         },
       },
       required: ["queries"],
+    },
+  },
+  {
+    name: "SHOP_PLACES",
+    description:
+      "Рестораны Яндекс Еды по запросу («шаверма», «пицца», «суши» или название) через браузер на Mac владельца: название и сколько ресторан сейчас обещает везти (eta, например «20–25 мин»). Нужен, когда владелец не назвал ресторан или поставил срок доставки. С max_eta_min — только успевающие, быстрые первыми. Ничего не кладёт в корзину и не заказывает. Только когда владелец сам попросил в своём личном чате.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Что искать, как сказал владелец: блюдо, кухня или ресторан." },
+        max_eta_min: {
+          type: "integer",
+          description: "Только если владелец назвал срок: за сколько минут надо довезти («за 45 минут», «35–45 минут» → 45), от 10 до 180.",
+        },
+      },
+      required: ["query"],
     },
   },
   {
@@ -1751,6 +1772,9 @@ export async function executeTool(
   }
   if (name === "SHOP_QUOTE") {
     return fmt(await quoteShop(i, ctx));
+  }
+  if (name === "SHOP_PLACES") {
+    return fmt(await listShopPlaces(i, ctx));
   }
   if (name === "SHOP_STATUS") {
     return fmt(await shopStatus(i, ctx));
