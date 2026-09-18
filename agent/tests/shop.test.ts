@@ -159,6 +159,7 @@ function fakePage() {
     current: "",
     state: "none" as ShopOrderState,
     stateAfterPay: "accepted" as ShopOrderState,
+    eta_min: null as number | null,
     clicks: [] as string[],
     shots: 0,
     place: null as ShopPlace | null,
@@ -192,7 +193,7 @@ function fakePage() {
     openCheckout: async () => { s.current = "checkout"; return s.cart.size > 0; },
     checkout: async () => ({ total_rub: total(), blocked: false, saved_card: true, pay_button: true, ...s.checkout }),
     clickPay: async () => { s.clicks.push("pay"); s.state = s.stateAfterPay; },
-    orderState: async () => s.state,
+    orderState: async () => ({ state: s.state, eta_min: s.eta_min }),
     screenshot: async () => { s.shots++; return "U0NSRUVO"; },
     probe: async () => "",
   };
@@ -375,7 +376,7 @@ describe("mac runner", () => {
     await r.run(prepare);
     expect(await r.run({ op: "confirm", session: SESSION, maxRub: 1000 })).toEqual({ ok: true, op: "confirm", state: "unknown" });
     s.state = "delivering";
-    expect(await r.run({ op: "status", service: "lavka" })).toEqual({ ok: true, op: "status", state: "delivering" });
+    expect(await r.run({ op: "status", service: "lavka" })).toEqual({ ok: true, op: "status", state: "delivering", eta_min: null });
     await r.close();
   });
 
@@ -462,7 +463,7 @@ describe("server flow", () => {
   });
 
   test("owner only, own chat, not delegated, orchestrator only", async () => {
-    h = await harness({ quote: QUOTE, status: { ok: true, op: "status", state: "none" } });
+    h = await harness({ quote: QUOTE, status: { ok: true, op: "status", state: "none", eta_min: null } });
     expect((await quoteShop({ queries: ["молоко"] }, { ...h.ctx, chatId: -100 })).ok).toBe(false);
     expect((await quoteShop({ queries: ["молоко"] }, { ...h.ctx, agentKey: "qa" })).ok).toBe(false);
     expect((await quoteShop({ queries: ["молоко"] }, { ...h.ctx, triggerUserId: "555", chatId: 555 })).ok).toBe(false);

@@ -907,6 +907,15 @@ export function buildPayload<T extends ActionType>(
       };
       return { ok: true, payload: payload as PayloadFor<T> };
     }
+    case "CANCEL_ORDER_WATCH": {
+      const id = typeof i.id === "string" ? i.id.trim() : "";
+      if (!id) return { ok: false, error: "id is required (see LIST_ORDER_WATCH)" };
+      const payload: PayloadFor<"CANCEL_ORDER_WATCH"> = {
+        chatId,
+        id,
+      };
+      return { ok: true, payload: payload as PayloadFor<T> };
+    }
     case "MAC_CONTROL": {
       // Время приходит строкой, как у CREATE_REMINDER (без смещения — МСК), и
       // превращается в мс здесь; дальше команду сверяет строгий parseMacControl.

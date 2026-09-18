@@ -52,6 +52,8 @@ export const CHAT_PINNED_ACTIONS = new Set<string>([
   // чат, где его попросили. Отмена тоже в пределах своего чата.
   "CREATE_REMINDER",
   "CANCEL_REMINDER",
+  // Слежение за заказом пишет в чат так же отложенно и так же без человека.
+  "CANCEL_ORDER_WATCH",
 ]);
 
 /**

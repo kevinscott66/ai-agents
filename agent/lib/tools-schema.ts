@@ -3,9 +3,9 @@ import { nativeTurnContext } from "./native-context.ts";
  * C5/R-A: Anthropic tool_use схема + диспатчер.
  *
  * Аудит 2026-09-11: здесь было написано «все 12 инструментов идут через единый
- * `gateOrDispatch`». Неверно дважды. Инструментов в `TOOL_NAMES` тридцать шесть
+ * `gateOrDispatch`». Неверно дважды. Инструментов в `TOOL_NAMES` тридцать семь
  * (число сверяется тестом audit-2026-09-11-tool-counts: в круге 29 оно уже
- * успело протухнуть на два, пока список рос); двадцать один — это
+ * успело протухнуть на два, пока список рос); двадцать два — это
  * `INLINE_TOOL_NAMES` из `constants.ts`, то есть ровно тот набор, который через
  * `gateOrDispatch` как раз НЕ идёт: ни CALLER_RESTRICTED, ни строка permissions
  * к ним не применяются (см. разбор инлайновой ветки в `executeTool` ниже).
@@ -68,6 +68,7 @@ import { parseChannelId, fetchChannelStats, tgstatConfigured } from "./tgstat.ts
 import { fetchGithubStatus, githubConfigured } from "./github.ts";
 import { log } from "./log.ts";
 import { formatMsk, isoMsk, listReminders } from "./reminders.ts";
+import { ORDER_WATCH_KINDS, listOrderWatches } from "./order-watch.ts";
 
 const ROLE_KEYS = CHARACTERS.map((c) => c.key);
 
@@ -811,7 +812,7 @@ export const TOOLS: Anthropic.Tool[] = [
   {
     name: "SHOP_STATUS",
     description:
-      "Read-only: состояние последнего заказа в Яндекс Лавке, Яндекс Еде или Яндекс Маркете на Mac владельца — принят, готовится или собирается, курьер в пути, доставлен, отменён. Только для владельца в его личном чате.",
+      "Read-only: состояние последнего заказа в Яндекс Лавке, Яндекс Еде или Яндекс Маркете на Mac владельца — принят, готовится или собирается, курьер в пути, приехал в пункт выдачи (Маркет), доставлен, отменён; eta_min — сколько минут обещает страница, если обещает. Только для владельца в его личном чате.",
     input_schema: { type: "object", properties: { service: { type: "string", enum: ["lavka", "eda", "market"] } } },
   },
   {
@@ -964,6 +965,24 @@ export const TOOLS: Anthropic.Tool[] = [
       required: ["id"],
     },
   },
+  {
+    name: "LIST_ORDER_WATCH",
+    description:
+      "Read-only: активные слежения за заказами этого чата — id, kind (taxi/delivery/lavka/eda/market), state, eta_min, started_at (МСК). Слежение заводится само при оформлении заказа.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "CANCEL_ORDER_WATCH",
+    description:
+      "Перестать следить за заказом этого чата по id (id — из LIST_ORDER_WATCH). Сам заказ это не отменяет — только уведомления о нём.",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "id слежения." },
+      },
+      required: ["id"],
+    },
+  },
 ];
 
 export interface ExecCtx {
@@ -1070,6 +1089,7 @@ export const TOOL_NAMES = new Set<string>([
   "SCHEDULE_POST",
   "CREATE_REMINDER",
   "CANCEL_REMINDER",
+  "CANCEL_ORDER_WATCH",
 ]);
 
 /**
@@ -1769,6 +1789,28 @@ export async function executeTool(
         truncated: total > rows.length,
         reminders,
       });
+    } catch (e) {
+      return fmt({ ok: false, error: getErrorMessage(e) });
+    }
+  }
+  if (name === "LIST_ORDER_WATCH") {
+    // Как и напоминания: слежение живёт в Telegram-чате, у нативного его нет.
+    if (nativeTurnContext.getStore()) {
+      return fmt({ ok: false, error: "order watches are available only in Telegram chats" });
+    }
+    try {
+      // Только чат вызова: чужие заказы не перечисляются.
+      const watches = listOrderWatches(ctx.chatId).map((w) => ({
+        id: w.id,
+        kind: w.kind,
+        title: ORDER_WATCH_KINDS[w.kind],
+        status: w.status,
+        state: w.state,
+        eta_min: w.eta_min,
+        started_at: isoMsk(w.started_at),
+        started_at_msk: formatMsk(w.started_at),
+      }));
+      return fmt({ ok: true, count: watches.length, watches });
     } catch (e) {
       return fmt({ ok: false, error: getErrorMessage(e) });
     }

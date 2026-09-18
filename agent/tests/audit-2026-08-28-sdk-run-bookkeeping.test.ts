@@ -109,6 +109,7 @@ describe("набор безопасных тулзов", () => {
         "DELIVERY_STATUS",
         "LIST_SCHEDULED_POSTS",
         "LIST_REMINDERS",
+        "LIST_ORDER_WATCH",
       ].sort(),
     );
   });

@@ -144,19 +144,25 @@ export const SHOP_PRE_ORDER_CODES = [
 export type ShopFailCode = (typeof SHOP_PRE_ORDER_CODES)[number];
 const FAIL_CODES: readonly string[] = SHOP_PRE_ORDER_CODES;
 
+/** Потолок обещанного времени: дальше это уже не доставка, а ошибка разбора. */
+export const SHOP_ETA_MAX = 600;
+
 export const SHOP_ORDER_STATES = [
   "none",
   "payment_pending",
   "accepted",
   "assembling",
   "delivering",
+  // Маркет: посылка доехала до пункта выдачи и ждёт владельца. У Лавки и Еды
+  // такой стадии нет — курьер везёт до двери, там `delivering` → `delivered`.
+  "pickup_ready",
   "delivered",
   "cancelled",
   "unknown",
 ] as const;
 export type ShopOrderState = (typeof SHOP_ORDER_STATES)[number];
 /** Состояния, в которых заказ точно оформлен и оплачен. */
-export const SHOP_PLACED_STATES: readonly ShopOrderState[] = ["accepted", "assembling", "delivering", "delivered"];
+export const SHOP_PLACED_STATES: readonly ShopOrderState[] = ["accepted", "assembling", "delivering", "pickup_ready", "delivered"];
 
 export interface ShopLine {
   id: string;
@@ -248,7 +254,7 @@ export type ShopOutcome =
   | { ok: true; op: "prepare"; address: string; lines: ShopPreparedLine[]; total_rub: number }
   | { ok: true; op: "confirm"; state: ShopOrderState }
   | { ok: true; op: "abandon" }
-  | { ok: true; op: "status"; state: ShopOrderState }
+  | { ok: true; op: "status"; state: ShopOrderState; eta_min: number | null }
   /** Адрес после попытки: matched — нашёлся ровно один сохранённый и он выбран. */
   | { ok: true; op: "set_address"; matched: boolean; address: string | null; saved_count: number }
   | { ok: false; code: ShopFailCode; price_rub?: number; screenshot?: string };
@@ -257,6 +263,8 @@ const isService = (v: unknown): v is ShopService => typeof v === "string" && Obj
 const keysOf = (m: Record<string, unknown>) => Object.keys(m).sort().join(",");
 const isRub = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) > 0 && (v as number) <= 1_000_000;
 const isFee = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) >= 0 && (v as number) <= 10_000;
+/** Обещанное время в минутах: как у такси и Доставки, 0..600 или «не знаем». */
+const isEta = (v: unknown): v is number | null => v === null || (Number.isSafeInteger(v) && (v as number) >= 0 && (v as number) <= SHOP_ETA_MAX);
 const isQty = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) >= 1 && (v as number) <= SHOP_QTY_MAX;
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
@@ -466,6 +474,28 @@ export function parseDeliveryRubles(text: unknown): number | null {
 
 const b64 = (v: unknown) => typeof v === "string" && v.length <= SHOP_SCREENSHOT_B64_MAX && /^[A-Za-z0-9+/=]+$/.test(v);
 
+/**
+ * Сколько ещё ждать, по тексту страницы заказа: «Осталось 15 мин», «Доставим
+ * через 30–40 мин», «Курьер приедет через 1 ч 10 мин».
+ *
+ * Два правила, оба ради честности перед владельцем. Первое: числу должно
+ * предшествовать слово про ожидание — иначе на странице заказов поймаешь «30–40
+ * мин» из чужой карточки. Второе: у диапазона берём верхнюю границу — обещать
+ * лучше пессимистично. Ничего не нашли — `null`, то есть «не знаем», а не ноль.
+ */
+export function parseShopEtaMinutes(text: unknown): number | null {
+  if (typeof text !== "string" || !text || text.length > 20_000) return null;
+  const s = text.replace(/[\u00a0\u202f\u2009]/g, " ").replace(/\s+/g, " ");
+  const cue = "(?:остал|через|прибу|доставим|достав[ия]т|приедет|подача|будет у вас|ожидан)[^.;!?]{0,40}?";
+  const h = s.match(new RegExp(cue + "(\\d{1,2})\\s*ч(?:ас[а-я]*)?(?:\\s*(\\d{1,2})\\s*мин)?", "iu"));
+  const m = s.match(new RegExp(cue + "(\\d{1,3})(?:\\s*[–—-]\\s*(\\d{1,3}))?\\s*мин", "iu"));
+  // Что встретилось раньше, то и про этот заказ.
+  const first = h && m ? (h.index! <= m.index! ? h : m) : (h ?? m);
+  if (!first) return null;
+  const value = first === h ? Number(h![1]) * 60 + Number(h![2] ?? 0) : Number(m![2] ?? m![1]);
+  return isEta(value) ? value : null;
+}
+
 /** Ответ Mac → проверенный результат. Кривой ответ — исключение, а не догадка. */
 export function parseShopOutcome(raw: string, expected: ShopRequest["op"]): ShopOutcome {
   const d = JSON.parse(raw) as Record<string, unknown>;
@@ -520,8 +550,14 @@ export function parseShopOutcome(raw: string, expected: ShopRequest["op"]): Shop
       return { ok: true, op: "prepare", address, lines, total_rub: d.total_rub };
     }
     case "confirm":
-    case "status":
-      return state(d.state) ? { ok: true, op: expected, state: d.state } : bad();
+      return state(d.state) ? { ok: true, op: "confirm", state: d.state } : bad();
+    case "status": {
+      // `eta_min` появился позже самого `status`. Демон и сервер катятся
+      // порознь, поэтому отсутствие поля — это «не знаем», а не отказ; мусор
+      // в поле по-прежнему отказ.
+      const eta = d.eta_min === undefined ? null : d.eta_min;
+      return state(d.state) && isEta(eta) ? { ok: true, op: "status", state: d.state, eta_min: eta } : bad();
+    }
     case "abandon":
       return { ok: true, op: "abandon" };
     case "set_address": {
@@ -541,6 +577,7 @@ export const SHOP_STATE_LABEL: Record<ShopOrderState, string> = {
   accepted: "заказ принят",
   assembling: "собирают",
   delivering: "курьер в пути",
+  pickup_ready: "приехал в пункт выдачи, можно забирать",
   delivered: "доставлен",
   cancelled: "заказ отменён",
   unknown: "состояние не распознано",

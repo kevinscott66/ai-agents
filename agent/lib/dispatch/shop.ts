@@ -25,6 +25,7 @@
  */
 import type { PayloadByType } from "../action-payload.ts";
 import { sendShopToMac } from "../mac-bridge.ts";
+import { watchPlacedOrder } from "../order-watch.ts";
 import { signedActions } from "../native-signing.ts";
 import { limitsFromEnv, maxRubFor, type SignedActions } from "../signed-actions.ts";
 import { log } from "../log.ts";
@@ -116,6 +117,7 @@ interface PendingOrder {
   payload: string;
   userId: string;
   chatId: number;
+  agentKey: string;
   service: ShopService;
   place?: ShopPlace;
   address: string;
@@ -218,7 +220,7 @@ export async function shopStatus(input: Record<string, unknown>, ctx: ShopInline
     const out = await askMac({ op: "status", service }, ctx.triggerUserId!, ctx.chatId);
     if (!out.ok) return { ok: false, error: failText(out), code: out.code };
     if (out.op !== "status") return { ok: false, error: "invalid_shop_result" };
-    return { ok: true, service, state: out.state, state_text: SHOP_STATE_LABEL[out.state] };
+    return { ok: true, service, state: out.state, state_text: SHOP_STATE_LABEL[out.state], eta_min: out.eta_min };
   } catch (e) {
     return { ok: false, error: errorText(e) };
   }
@@ -347,7 +349,7 @@ async function issueShopOrder(service: ShopService, payload: OrderInput, ctx: Sh
       now,
     );
     for (const [key, order] of pendingOrders) if (now - order.at > SHOP_QUOTE_TTL_MS) pendingOrders.delete(key);
-    pendingOrders.set(nonce, { payload: signed, userId, chatId: ctx.chatId, service, ...(quote.place ? { place: quote.place } : {}), address: quote.address, lines: signedLines, at: now });
+    pendingOrders.set(nonce, { payload: signed, userId, chatId: ctx.chatId, agentKey: ctx.agentKey, service, ...(quote.place ? { place: quote.place } : {}), address: quote.address, lines: signedLines, at: now });
     return {
       ok: true,
       result: {
@@ -466,6 +468,9 @@ async function runSignedShop(nonce: string): Promise<void> {
   try { gate.complete(nonce, true, deps.now()); } catch (e) {
     log.error("[shop] complete failed", { error: errorText(e) });
   }
+  // Дальше за заказом следит lib/order-watch.ts. У Маркета слежение кончается
+  // на пункте выдачи — ровно то событие, ради которого его и заводят.
+  watchPlacedOrder({ kind: order.service, chatId: order.chatId, userId, agentKey: order.agentKey, state: confirmed.state });
   await tell(userId, `${store}: заказ оформлен — ${order.lines.map(shopLineText).join("; ")}. Итог ${prepared.total_rub} ₽. Сейчас: ${SHOP_STATE_LABEL[confirmed.state]}.`);
 }
 
