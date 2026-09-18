@@ -292,6 +292,27 @@ describe("mac runner", () => {
     }
   });
 
+  test("оформление подписывается именем и почтой из окружения", async () => {
+    // Еда просит имя и почту «для уточнения по заказу». Значения живут в
+    // пускаче, а не в репозитории: исполнитель только передаёт их странице,
+    // и та заполняет пустое поле. Нет значений — нечего и передавать.
+    const { page } = fakePage();
+    const seen: Array<{ name?: string; email?: string }> = [];
+    page.fillContacts = async (c) => { seen.push(c); };
+    const withEnv = runner(page, { SHOP_ENABLED: "true", SHOP_PROFILE_DIR: "/profile", SHOP_CONTACT_NAME: "Имя Фамилия", SHOP_CONTACT_EMAIL: "kto@example.com" });
+    expect((await withEnv.run(prepare) as { ok: boolean }).ok).toBe(true);
+    expect(seen).toEqual([{ name: "Имя Фамилия", email: "kto@example.com" }]);
+    await withEnv.close();
+
+    const { page: bare } = fakePage();
+    const blank: Array<{ name?: string; email?: string }> = [];
+    bare.fillContacts = async (c) => { blank.push(c); };
+    const noEnv = runner(bare);
+    expect((await noEnv.run(prepare) as { ok: boolean }).ok).toBe(true);
+    expect(blank).toEqual([{ name: undefined, email: undefined }]);
+    await noEnv.close();
+  });
+
   test("prepare fills the cart; confirm pays once when the total holds", async () => {
     const { s, page } = fakePage();
     const r = runner(page);
@@ -1155,6 +1176,14 @@ describe("market: parsing and page helpers", () => {
     expect(EDA_TEXT.total.test("Способ оплаты")).toBe(false);
     expect(EDA_TEXT.total.test("Товары в заказе")).toBe(false);
     expect(EDA_TEXT.total.test("Сервисный сбор")).toBe(false);
+  });
+
+  test("поля «Личные данные» на оформлении Еды — по именам формы", () => {
+    // Сверено живьём: у полей нет testid, зато есть name. Имя приходит
+    // заполненным, почта пустая и не обязательная — кнопка оплаты активна и
+    // без неё, поэтому пустая почта не повод отказываться от заказа.
+    expect(EDA_TESTID.contactName).toBe('input[name="name"]');
+    expect(EDA_TESTID.contactEmail).toBe('input[name="email"]');
   });
 
   test("daemon frame: market lines need a card number id, no place", () => {

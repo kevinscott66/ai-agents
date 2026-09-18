@@ -648,6 +648,24 @@ export function edaShopPage(page: any): ShopPage {
       await wait(1_000);
       return true;
     },
+    /**
+     * Подписать заказ: пустое поле заполняем, заполненное не трогаем. Сами
+     * значения нигде не печатаются — ни в лог, ни в отказ.
+     */
+    async fillContacts(contacts) {
+      const pairs: ReadonlyArray<[string, string | undefined]> = [
+        [EDA_TESTID.contactName, contacts.name],
+        [EDA_TESTID.contactEmail, contacts.email],
+      ];
+      for (const [sel, value] of pairs) {
+        if (!value) continue;
+        const input = page.locator(sel).first();
+        if (!(await visible(input, UI_TIMEOUT_MS))) continue;
+        if (String(await input.inputValue().catch(() => "x")).trim()) continue;
+        await input.fill(value, { timeout: UI_TIMEOUT_MS }).catch(() => {});
+        await wait(300);
+      }
+    },
     async checkout() {
       const body = await bodyText();
       return {

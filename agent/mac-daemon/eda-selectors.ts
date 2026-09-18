@@ -69,6 +69,13 @@ export const EDA_TESTID = {
   // «Заказ на этот адрес?» — тоже role=dialog, поэтому окно адресов узнаём по списку внутри
   addressDialog: '[role="dialog"]:has([role="radiogroup"])',
   addressRadio: 'button[role="radio"]',
+  /**
+   * Оформление, блок «Личные данные». Сверено живьём: у полей нет testid, зато
+   * есть имена формы; имя приходит заполненным («Пользователь»), почта пустая и
+   * не обязательная — кнопка оплаты активна и без неё.
+   */
+  contactName: 'input[name="name"]',
+  contactEmail: 'input[name="email"]',
   // корзина — боковая панель на странице ресторана
   cartRow: '[data-testid="product-card-row-root"]',
   cartRowName: '[data-testid="cart-item-name"]',
