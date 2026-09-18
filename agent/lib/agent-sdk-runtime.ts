@@ -389,7 +389,7 @@ function shapeFromProps(
  * дважды.
  */
 export const SDK_SIDE_EFFECT_FREE_TOOLS: ReadonlySet<string> = new Set(
-  [...INLINE_TOOL_NAMES].filter((n) => n !== "CANCEL_SCHEDULED_POST" && n !== "SHOP_SET_ADDRESS"),
+  [...INLINE_TOOL_NAMES].filter((n) => n !== "CANCEL_SCHEDULED_POST" && n !== "SHOP_SET_ADDRESS" && n !== "SHOP_CHECKOUT"),
 );
 
 /** Счётчик фактически исполненных инструментов одного прогона. */

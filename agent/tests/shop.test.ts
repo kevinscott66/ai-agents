@@ -11,6 +11,7 @@ import { approvalCategories } from "../lib/approval-policy.ts";
 import { approvalPreview } from "../lib/approvals.ts";
 import { buildPayload } from "../lib/dispatch/build-payload.ts";
 import {
+  checkoutShop,
   configureShop,
   executeSignedShop,
   handleMarketPurchase,
@@ -417,11 +418,26 @@ async function harness(script: Script, limits = { maxRub: 1000, dailyMax: 5, dev
   const requests: ShopRequest[] = [];
   const texts: string[] = [];
   const photos: string[] = [];
+  // Предпросмотр SHOP_CHECKOUT перед заказом: свои ответы Mac и свой журнал,
+  // чтобы проверки исполнителя видели только его запросы.
+  type Preview = { total: number; prepare?: ShopOutcome; abandon?: boolean };
+  let preview: Preview | null = null;
+  const previewRequests: ShopRequest[] = [];
   const restore = configureShop({
     gate: () => gate,
     now: () => T0,
     session: () => SESSION,
     send: async (request) => {
+      if (preview) {
+        previewRequests.push(request);
+        if (request.op === "abandon") {
+          return preview.abandon === false ? { ok: false, stdout: "", error: "mac_unreachable" } : { ok: true, stdout: JSON.stringify({ ok: true, op: "abandon" }) };
+        }
+        if (request.op !== "prepare") return { ok: false, stdout: "", error: "unexpected_op" };
+        if (preview.prepare) return { ok: true, stdout: JSON.stringify(preview.prepare) };
+        const prepared = { ok: true, op: "prepare", address: ADDRESS, lines: request.lines.map((l) => ({ id: l.id, qty: l.qty, price_rub: 1 })), total_rub: preview.total };
+        return { ok: true, stdout: JSON.stringify(prepared) };
+      }
       requests.push(request);
       const out = script[request.op];
       if (out instanceof Error) return { ok: false, stdout: "", error: out.message };
@@ -435,15 +451,27 @@ async function harness(script: Script, limits = { maxRub: 1000, dailyMax: 5, dev
   });
   const ctx = { agentKey: "orchestrator", chatId: OWNER, triggerUserId: String(OWNER) };
   const quote = () => quoteShop({ queries: ["молоко", "хлеб"] }, ctx);
-  const order = (lines = [{ ...MILK, qty: 2 }], delivery_rub = 0) =>
-    handleOrderFood({ service: "lavka", lines, delivery_rub, _userId: String(OWNER) }, { agentKey: "orchestrator", chatId: OWNER });
+  /** SHOP_CHECKOUT с заданным итогом (по умолчанию — товары плюс доставка из расчёта, без сборов). */
+  const checkout = async (lines: Array<Record<string, unknown>>, total?: number, extra: Record<string, unknown> = {}, mac: Omit<Preview, "total"> = {}) => {
+    preview = { total: total ?? lines.reduce((sum, l) => sum + (l.qty as number) * (l.price_rub as number), 0), ...mac };
+    try {
+      return await checkoutShop({ service: "lavka", lines, ...extra }, ctx);
+    } finally {
+      preview = null;
+    }
+  };
+  const order = async (lines = [{ ...MILK, qty: 2 }], delivery_rub = 0, total_rub?: number) => {
+    await checkout(lines, total_rub);
+    const total = total_rub ?? lines.reduce((sum, l) => sum + l.qty * l.price_rub, 0) + delivery_rub;
+    return handleOrderFood({ service: "lavka", lines, delivery_rub, total_rub: total, _userId: String(OWNER) }, { agentKey: "orchestrator", chatId: OWNER });
+  };
   const sign = async () => {
     const { nonce, payload } = gate.pending(T0).at(-1)!;
     await gate.approve(nonce, await owner.sign(payload), T0);
     return nonce;
   };
   const status = (nonce: string) => (gate.db.query("SELECT status FROM signed_actions WHERE nonce=?").get(nonce) as { status: string }).status;
-  return { gate, requests, texts, photos, restore, ctx, quote, order, sign, status };
+  return { gate, requests, previewRequests, texts, photos, restore, ctx, quote, checkout, order, sign, status };
 }
 
 const ADDRESS = "Краснодар, Красная 1";
@@ -478,7 +506,7 @@ describe("server flow", () => {
     expect((await quoteShop({ queries: ["молоко"] }, { ...h.ctx, agentKey: "qa" })).ok).toBe(false);
     expect((await quoteShop({ queries: ["молоко"] }, { ...h.ctx, triggerUserId: "555", chatId: 555 })).ok).toBe(false);
     expect((await quoteShop({ queries: ["молоко"] }, { ...h.ctx, delegationChain: ["orchestrator", "devops"] })).ok).toBe(false);
-    expect((await handleOrderFood({ service: "lavka", lines: [{ ...MILK, qty: 1 }], delivery_rub: 0, _userId: String(OWNER), _delegated: true }, { agentKey: "orchestrator", chatId: OWNER })).ok).toBe(false);
+    expect((await handleOrderFood({ service: "lavka", lines: [{ ...MILK, qty: 1 }], delivery_rub: 0, total_rub: 99, _userId: String(OWNER), _delegated: true }, { agentKey: "orchestrator", chatId: OWNER })).ok).toBe(false);
     expect((await quoteShop({ queries: [] }, h.ctx)).ok).toBe(false);
     expect(h.requests).toEqual([]);
     expect(await shopStatus({}, h.ctx)).toMatchObject({ ok: true, state: "none" });
@@ -609,6 +637,83 @@ describe("server flow", () => {
   });
 });
 
+describe("SHOP_CHECKOUT: итог с оформления до подписи", () => {
+  let h: Awaited<ReturnType<typeof harness>> | null = null;
+  const LINES = [{ ...MILK, qty: 2 }];
+  beforeEach(() => {
+    resetShopState();
+    process.env.SHOP_ENABLED = "true";
+    process.env.MINIAPP_ADMIN_USER_IDS = `123,${OWNER}`;
+  });
+  afterEach(() => {
+    h?.restore();
+    h = null;
+    resetShopState();
+    for (const k of ENV_KEYS) {
+      if (savedEnv[k] === undefined) delete process.env[k]; else process.env[k] = savedEnv[k];
+    }
+  });
+
+  test("сборы: итог с оформления, корзина очищена, подпись и карточка на итог", async () => {
+    h = await harness({ quote: QUOTE, prepare: { ...PREPARED, total_rub: 277 }, confirm: { ok: true, op: "confirm", state: "accepted" } });
+    await h.quote();
+    const res = await h.checkout(LINES, 277);
+    expect(res).toMatchObject({ ok: true, items_rub: 198, delivery_rub: 0, extra_rub: 79, total_rub: 277 });
+    expect(JSON.stringify(res)).toContain("маленький заказ");
+    expect(h.previewRequests.map((r) => r.op)).toEqual(["prepare", "abandon"]);
+    const order = await handleOrderFood({ service: "lavka", lines: LINES, delivery_rub: 0, total_rub: 277, _userId: String(OWNER) }, { agentKey: "orchestrator", chatId: OWNER });
+    expect(order).toMatchObject({ ok: true, result: { status: "awaiting_signature", amount_rub: 277 } });
+    const { payload } = h.gate.pending(T0).at(-1)!;
+    expect(JSON.parse(payload)).toMatchObject({ amount_rub: 277, params: { fees_rub: 79 } });
+    expect(approvalPreview("ORDER_FOOD", { service: "lavka", lines: LINES, delivery_rub: 0, total_rub: 277 })).toContain("сборы 79 ₽");
+    const nonce = await h.sign();
+    await executeSignedShop(nonce);
+    expect(h.status(nonce)).toBe("executed");
+  });
+
+  test("без SHOP_CHECKOUT, с другим итогом или другими позициями — отказ", async () => {
+    h = await harness({ quote: QUOTE });
+    await h.quote();
+    const order = (total_rub: number, lines = LINES) =>
+      handleOrderFood({ service: "lavka", lines, delivery_rub: 0, total_rub, _userId: String(OWNER) }, { agentKey: "orchestrator", chatId: OWNER });
+    expect(await order(198)).toMatchObject({ ok: false });
+    await h.checkout(LINES, 277);
+    expect(await order(198)).toMatchObject({ ok: false });
+    expect(await order(99, [{ ...MILK, qty: 1 }])).toMatchObject({ ok: false });
+    expect(h.gate.pending(T0)).toEqual([]);
+  });
+
+  test("отказ Mac на сборке: корзину всё равно очищают", async () => {
+    h = await harness({ quote: QUOTE });
+    await h.quote();
+    const res = await h.checkout(LINES, 0, {}, { prepare: { ok: false, op: "prepare", code: "captcha", error: "captcha" } as ShopOutcome });
+    expect(res).toMatchObject({ ok: false });
+    expect(h.previewRequests.map((r) => r.op)).toEqual(["prepare", "abandon"]);
+  });
+
+  test("корзина не очистилась — итог не запоминается", async () => {
+    h = await harness({ quote: QUOTE });
+    await h.quote();
+    expect(await h.checkout(LINES, 198, {}, { abandon: false })).toMatchObject({ ok: false });
+    const order = await handleOrderFood({ service: "lavka", lines: LINES, delivery_rub: 0, total_rub: 198, _userId: String(OWNER) }, { agentKey: "orchestrator", chatId: OWNER });
+    expect(order).toMatchObject({ ok: false });
+  });
+
+  test("неправдоподобный итог и Маркет — отказ", async () => {
+    h = await harness({ quote: QUOTE });
+    await h.quote();
+    expect(await h.checkout(LINES, 198 + 5_000)).toMatchObject({ ok: false, error: "invalid_shop_result" });
+    expect(await h.checkout(LINES, 198, { service: "market" })).toMatchObject({ ok: false });
+    expect(h.previewRequests.map((r) => r.op)).toEqual(["prepare", "abandon"]);
+  });
+
+  test("buildPayload без total_rub — отказ со ссылкой на SHOP_CHECKOUT", () => {
+    const res = buildPayload("ORDER_FOOD", { service: "lavka", lines: LINES, delivery_rub: 0 }, { agentKey: "orchestrator" });
+    expect(res.ok).toBe(false);
+    expect(JSON.stringify(res)).toContain("SHOP_CHECKOUT");
+  });
+});
+
 describe("chat approval", () => {
   test("order is money; preview shows the ceiling", () => {
     const payload = { service: "lavka", lines: [{ ...MILK, qty: 2 }], delivery_rub: 0 };
@@ -618,12 +723,12 @@ describe("chat approval", () => {
 
   test("buildPayload normalizes and rejects junk", () => {
     const line = { id: MILK.id, name: "Молоко  3,2% 1 л", qty: 2, price_rub: 99 };
-    expect(buildPayload("ORDER_FOOD", { service: "лавка", lines: [line], delivery_rub: 0 }, { agentKey: "orchestrator" }))
-      .toEqual({ ok: true, payload: { service: "lavka", lines: [{ ...MILK, qty: 2 }], delivery_rub: 0 } });
-    expect(buildPayload("ORDER_FOOD", { service: "lavka", lines: [{ ...line, qty: "2" }], delivery_rub: 0 }, { agentKey: "orchestrator" }).ok).toBe(false);
-    expect(buildPayload("ORDER_FOOD", { service: "lavka", lines: [line, line], delivery_rub: 0 }, { agentKey: "orchestrator" }).ok).toBe(false);
-    expect(buildPayload("ORDER_FOOD", { service: "market", lines: [line], delivery_rub: 0 }, { agentKey: "orchestrator" }).ok).toBe(false);
-    expect(buildPayload("ORDER_FOOD", { service: "lavka", lines: [], delivery_rub: 0 }, { agentKey: "orchestrator" }).ok).toBe(false);
+    expect(buildPayload("ORDER_FOOD", { service: "лавка", lines: [line], delivery_rub: 0, total_rub: 198 }, { agentKey: "orchestrator" }))
+      .toEqual({ ok: true, payload: { service: "lavka", lines: [{ ...MILK, qty: 2 }], delivery_rub: 0, total_rub: 198 } });
+    expect(buildPayload("ORDER_FOOD", { service: "lavka", lines: [{ ...line, qty: "2" }], delivery_rub: 0, total_rub: 198 }, { agentKey: "orchestrator" }).ok).toBe(false);
+    expect(buildPayload("ORDER_FOOD", { service: "lavka", lines: [line, line], delivery_rub: 0, total_rub: 198 }, { agentKey: "orchestrator" }).ok).toBe(false);
+    expect(buildPayload("ORDER_FOOD", { service: "market", lines: [line], delivery_rub: 0, total_rub: 198 }, { agentKey: "orchestrator" }).ok).toBe(false);
+    expect(buildPayload("ORDER_FOOD", { service: "lavka", lines: [], delivery_rub: 0, total_rub: 198 }, { agentKey: "orchestrator" }).ok).toBe(false);
   });
 });
 
@@ -975,8 +1080,11 @@ describe("eda: server flow", () => {
     delivery_rub: 99,
     results: [{ query: "чизбургер", candidates: [BURGER] }],
   };
-  const edaOrder = (place: string | null = PLACE.name, lines = [{ ...BURGER, qty: 2 }]) =>
-    handleOrderFood({ service: "eda", ...(place === null ? {} : { place }), lines, delivery_rub: 99, _userId: String(OWNER) }, { agentKey: "orchestrator", chatId: OWNER });
+  const edaOrder = async (place: string | null = PLACE.name, lines = [{ ...BURGER, qty: 2 }]) => {
+    const total_rub = lines.reduce((sum, l) => sum + l.qty * l.price_rub, 0) + 99;
+    await h!.checkout(lines, total_rub, { service: "eda", ...(place === null ? {} : { place }) });
+    return handleOrderFood({ service: "eda", ...(place === null ? {} : { place }), lines, delivery_rub: 99, total_rub, _userId: String(OWNER) }, { agentKey: "orchestrator", chatId: OWNER });
+  };
   beforeEach(() => {
     resetShopState();
     process.env.SHOP_ENABLED = "true";
@@ -1057,21 +1165,21 @@ describe("eda: server flow", () => {
   test("buildPayload: options normalized, empty dropped", () => {
     const ctx = { agentKey: "orchestrator" };
     const line = { ...BURGER, qty: 1 };
-    expect(buildPayload("ORDER_FOOD", { service: "eda", place: PLACE.name, lines: [{ ...line, options: [{ group: " Соус", name: "Сырный " }] }], delivery_rub: 0 }, ctx))
-      .toEqual({ ok: true, payload: { service: "eda", place: PLACE.name, lines: [{ ...line, options: [{ group: "Соус", name: "Сырный" }] }], delivery_rub: 0 } });
-    expect(buildPayload("ORDER_FOOD", { service: "eda", place: PLACE.name, lines: [{ ...line, options: [] }], delivery_rub: 0 }, ctx))
-      .toEqual({ ok: true, payload: { service: "eda", place: PLACE.name, lines: [line], delivery_rub: 0 } });
-    expect(buildPayload("ORDER_FOOD", { service: "eda", place: PLACE.name, lines: [{ ...line, options: [{ group: "Соус" }] }], delivery_rub: 0 }, ctx).ok).toBe(false);
+    expect(buildPayload("ORDER_FOOD", { service: "eda", place: PLACE.name, lines: [{ ...line, options: [{ group: " Соус", name: "Сырный " }] }], delivery_rub: 0, total_rub: 400 }, ctx))
+      .toEqual({ ok: true, payload: { service: "eda", place: PLACE.name, lines: [{ ...line, options: [{ group: "Соус", name: "Сырный" }] }], delivery_rub: 0, total_rub: 400 } });
+    expect(buildPayload("ORDER_FOOD", { service: "eda", place: PLACE.name, lines: [{ ...line, options: [] }], delivery_rub: 0, total_rub: 400 }, ctx))
+      .toEqual({ ok: true, payload: { service: "eda", place: PLACE.name, lines: [line], delivery_rub: 0, total_rub: 400 } });
+    expect(buildPayload("ORDER_FOOD", { service: "eda", place: PLACE.name, lines: [{ ...line, options: [{ group: "Соус" }] }], delivery_rub: 0, total_rub: 400 }, ctx).ok).toBe(false);
   });
 
   test("buildPayload: place required for eda, refused for lavka", () => {
     const line = { ...BURGER, qty: 1 };
     const ctx = { agentKey: "orchestrator" };
-    expect(buildPayload("ORDER_FOOD", { service: "еда", place: " Бургер  Хаус ", lines: [line], delivery_rub: 0 }, ctx))
-      .toEqual({ ok: true, payload: { service: "eda", place: PLACE.name, lines: [line], delivery_rub: 0 } });
-    expect(buildPayload("ORDER_FOOD", { service: "eda", lines: [line], delivery_rub: 0 }, ctx).ok).toBe(false);
-    expect(buildPayload("ORDER_FOOD", { service: "lavka", place: PLACE.name, lines: [{ ...MILK, qty: 1 }], delivery_rub: 0 }, ctx).ok).toBe(false);
-    expect(approvalCategories("ORDER_FOOD", { service: "eda", place: PLACE.name, lines: [line], delivery_rub: 0 })).toEqual(["money"]);
+    expect(buildPayload("ORDER_FOOD", { service: "еда", place: " Бургер  Хаус ", lines: [line], delivery_rub: 0, total_rub: 400 }, ctx))
+      .toEqual({ ok: true, payload: { service: "eda", place: PLACE.name, lines: [line], delivery_rub: 0, total_rub: 400 } });
+    expect(buildPayload("ORDER_FOOD", { service: "eda", lines: [line], delivery_rub: 0, total_rub: 400 }, ctx).ok).toBe(false);
+    expect(buildPayload("ORDER_FOOD", { service: "lavka", place: PLACE.name, lines: [{ ...MILK, qty: 1 }], delivery_rub: 0, total_rub: 400 }, ctx).ok).toBe(false);
+    expect(approvalCategories("ORDER_FOOD", { service: "eda", place: PLACE.name, lines: [line], delivery_rub: 0, total_rub: 400 })).toEqual(["money"]);
   });
 });
 
@@ -1313,7 +1421,7 @@ describe("market: server flow", () => {
       { maxRub: 5000, dailyMax: 5, deviationPct: 15 },
     );
     expect(await quoteShop({ service: "market", queries: ["зарядка"] }, h.ctx)).toMatchObject({ ok: true, delivery_rub: null });
-    expect((await handleOrderFood({ service: "market", lines: [{ ...CHARGER, qty: 1 }], delivery_rub: 0, _userId: String(OWNER) }, { agentKey: "orchestrator", chatId: OWNER })).ok).toBe(false);
+    expect((await handleOrderFood({ service: "market", lines: [{ ...CHARGER, qty: 1 }], delivery_rub: 0, total_rub: 2490, _userId: String(OWNER) }, { agentKey: "orchestrator", chatId: OWNER })).ok).toBe(false);
     expect((await buy(1001)).ok).toBe(false);
     expect((await buy(300, [{ ...CHARGER, price_rub: 1990, qty: 1 }])).ok).toBe(false);
     expect(await buy()).toMatchObject({ ok: true, result: { status: "awaiting_signature", amount_rub: 2790 } });

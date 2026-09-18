@@ -5,7 +5,7 @@ import { nativeTurnContext } from "./native-context.ts";
  * Аудит 2026-09-11: здесь было написано «все 12 инструментов идут через единый
  * `gateOrDispatch`». Неверно дважды. Инструментов в `TOOL_NAMES` тридцать семь
  * (число сверяется тестом audit-2026-09-11-tool-counts: в круге 29 оно уже
- * успело протухнуть на два, пока список рос); двадцать три — это
+ * успело протухнуть на два, пока список рос); двадцать четыре — это
  * `INLINE_TOOL_NAMES` из `constants.ts`, то есть ровно тот набор, который через
  * `gateOrDispatch` как раз НЕ идёт: ни CALLER_RESTRICTED, ни строка permissions
  * к ним не применяются (см. разбор инлайновой ветки в `executeTool` ниже).
@@ -27,7 +27,7 @@ import { getErrorMessage } from "./errors.ts";
 import { INLINE_TOOL_NAMES } from "./constants.ts";
 import { listCloudflareDns } from "./dispatch/cloudflare.ts";
 import { quoteTaxi, taxiStatus } from "./dispatch/taxi.ts";
-import { listShopPlaces, quoteShop, setShopAddress, shopStatus } from "./dispatch/shop.ts";
+import { checkoutShop, listShopPlaces, quoteShop, setShopAddress, shopStatus } from "./dispatch/shop.ts";
 import { deliveryStatus, quoteDelivery } from "./dispatch/delivery.ts";
 import Anthropic from "@anthropic-ai/sdk";
 import type { Telegram } from "telegraf";
@@ -792,9 +792,40 @@ export const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "SHOP_CHECKOUT",
+    description:
+      "Узнать настоящий итог заказа в Яндекс Лавке или Еде перед ORDER_FOOD: Mac кладёт выбранные позиции в пустую корзину, читает сумму к оплате со страницы оформления — с доставкой, сервисным сбором и доплатой за маленький заказ, которых нет в SHOP_QUOTE, — и сразу очищает корзину. Ничего не заказывает и не платит. Позиции — ровно те, что пойдут в ORDER_FOOD (id, name, qty, price_rub, options из свежего SHOP_QUOTE). Только когда владелец сам попросил в своём личном чате.",
+    input_schema: {
+      type: "object",
+      properties: {
+        service: { type: "string", enum: ["lavka", "eda"] },
+        place: { type: "string", description: "Только для eda: название ресторана ровно как в SHOP_QUOTE." },
+        lines: {
+          type: "array",
+          description: "Позиции как в ORDER_FOOD: {id, name, qty, price_rub, options?}.",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              name: { type: "string" },
+              qty: { type: "number" },
+              price_rub: { type: "number" },
+              options: {
+                type: "array",
+                items: { type: "object", properties: { group: { type: "string" }, name: { type: "string" } }, required: ["group", "name"] },
+              },
+            },
+            required: ["id", "name", "qty", "price_rub"],
+          },
+        },
+      },
+      required: ["service", "lines"],
+    },
+  },
+  {
     name: "ORDER_FOOD",
     description:
-      "Заказать продукты в Яндекс Лавке или блюда одного ресторана в Яндекс Еде по свежему расчёту SHOP_QUOTE: id и name каждого товара — ровно из расчёта, price_rub — цена из расчёта плюс доплаты выбранных опций, для Еды place — ресторан ровно из расчёта; у блюда с options — выбор владельца в options [{group, name}] (в каждой группе от min до max; обязательный выбор не угадывай — спроси), qty — сколько просил владелец, delivery_rub — доставка из расчёта. Если по запросу несколько вариантов и владелец не назвал конкретный — спроси. Заказ ждёт подтверждения в чате, затем подписи Face ID на телефоне; результат придёт отдельным сообщением. Пока он не пришёл, не говори «заказано». Лимиты: сумма и число заказов в день ограничены сервером, итог на странице не может вырасти больше чем на 15%.",
+      "Заказать продукты в Яндекс Лавке или блюда одного ресторана в Яндекс Еде по свежему расчёту SHOP_QUOTE: id и name каждого товара — ровно из расчёта, price_rub — цена из расчёта плюс доплаты выбранных опций, для Еды place — ресторан ровно из расчёта; у блюда с options — выбор владельца в options [{group, name}] (в каждой группе от min до max; обязательный выбор не угадывай — спроси), qty — сколько просил владелец, delivery_rub — доставка из расчёта, total_rub — итог из SHOP_CHECKOUT ровно с этими позициями (его и подписывают). Если по запросу несколько вариантов и владелец не назвал конкретный — спроси. Заказ ждёт подтверждения в чате, затем подписи Face ID на телефоне; после подписи Mac сам собирает корзину, заполняет контакты и жмёт «Оплатить» — владельцу ничего нажимать не надо; результат придёт отдельным сообщением. Пока он не пришёл, не говори «заказано». Лимиты: сумма и число заказов в день ограничены сервером, итог на странице не может вырасти больше чем на 15%.",
     input_schema: {
       type: "object",
       properties: {
@@ -826,8 +857,9 @@ export const TOOLS: Anthropic.Tool[] = [
           },
         },
         delivery_rub: { type: "number", description: "Доставка из SHOP_QUOTE, целые рубли." },
+        total_rub: { type: "number", description: "Итог к оплате из SHOP_CHECKOUT с этими же позициями, целые рубли." },
       },
-      required: ["service", "lines", "delivery_rub"],
+      required: ["service", "lines", "delivery_rub", "total_rub"],
     },
   },
   {
@@ -1775,6 +1807,9 @@ export async function executeTool(
   }
   if (name === "SHOP_PLACES") {
     return fmt(await listShopPlaces(i, ctx));
+  }
+  if (name === "SHOP_CHECKOUT") {
+    return fmt(await checkoutShop(i, ctx));
   }
   if (name === "SHOP_STATUS") {
     return fmt(await shopStatus(i, ctx));
