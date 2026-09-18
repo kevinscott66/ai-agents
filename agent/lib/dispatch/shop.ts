@@ -104,6 +104,7 @@ export type ShopDeps = {
   notify?: ShopNotifier;
   now: () => number;
   session: () => string;
+  sleep: (ms: number) => Promise<void>;
 };
 
 const defaults: ShopDeps = {
@@ -111,6 +112,7 @@ const defaults: ShopDeps = {
   gate: signedActions,
   now: Date.now,
   session: newYandexSession,
+  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
 };
 let deps: ShopDeps = { ...defaults };
 
@@ -151,7 +153,10 @@ type OrderLines = PayloadByType["ORDER_FOOD"]["lines"];
 const quotes = new Map<string, Quote>();
 /** nonce → заявка, ждущая подписи. */
 const pendingOrders = new Map<string, PendingOrder>();
-/** Исполнитель один: второй заказ ждёт, пока первый не закончится. */
+/**
+ * Браузер покупок на Mac один: все запросы к нему — поиск, статус, предпросмотр,
+ * подписанный заказ — идут отсюда по одному. Иначе второй получает `shop_busy`.
+ */
 const executor = serialQueue();
 
 export function resetShopState() {
@@ -202,9 +207,35 @@ function prepareRequest(session: string, service: ShopService, place: ShopPlace 
   };
 }
 
+/**
+ * Сколько ждать, пока браузер покупок на Mac освободится. Мост бросает запрос
+ * через MAC_SHOP_TIMEOUT_MS, а Mac дорабатывает до своего срока (плюс отмена и
+ * закрытие браузера) — ещё около минуты. Все свои запросы сервер ставит в
+ * очередь, так что `shop_busy` — это хвост брошенного запроса: переждать его
+ * дешевле, чем отдать агенту отказ, после которого он бросает заказ.
+ */
+export const SHOP_BUSY_WAIT_MS = 75_000;
+const SHOP_BUSY_POLL_MS = 5_000;
+
 /** Запрос к Mac → проверенный ответ. Ошибка моста — исключение с её кодом. */
-function askMac(request: ShopRequest, userId: string, chatId: number): Promise<ShopOutcome> {
-  return askYandexMac<ShopRequest, ShopOutcome>(deps.send, parseShopOutcome, "shop_failed", request, userId, chatId);
+async function askMac(request: ShopRequest, userId: string, chatId: number): Promise<ShopOutcome> {
+  const started = deps.now();
+  for (;;) {
+    let out: ShopOutcome;
+    try {
+      out = await askYandexMac<ShopRequest, ShopOutcome>(deps.send, parseShopOutcome, "shop_failed", request, userId, chatId);
+    } catch (e) {
+      log.warn("[shop] mac", { op: request.op, error: errorText(e), ms: deps.now() - started });
+      throw e;
+    }
+    const busy = !out.ok && out.code === "shop_busy";
+    if (!busy || deps.now() - started >= SHOP_BUSY_WAIT_MS) {
+      // Только операция и исход: адреса и товары — личные, в журнал не идут.
+      log.info("[shop] mac", { op: request.op, ok: out.ok, ...(out.ok ? {} : { code: out.code }), ms: deps.now() - started });
+      return out;
+    }
+    await deps.sleep(SHOP_BUSY_POLL_MS);
+  }
 }
 
 const failText = (o: Extract<ShopOutcome, { ok: false }>) =>
@@ -234,7 +265,7 @@ export async function quoteShop(input: Record<string, unknown>, ctx: ShopInlineC
     const request: ShopRequest = {
       op: "quote", service, ...(placeQuery ? { place: placeQuery } : {}), ...(maxEta !== undefined ? { max_eta_min: maxEta } : {}), queries: unique,
     };
-    const out = await askMac(request, userId, ctx.chatId);
+    const out = await executor.run(() => askMac(request, userId, ctx.chatId));
     if (!out.ok) return { ok: false, error: failText(out), code: out.code };
     if (out.op !== "quote") return { ok: false, error: "invalid_shop_result" };
     // Ресторан приходит ровно у тех сервисов, где он нужен.
@@ -286,10 +317,10 @@ export async function listShopPlaces(input: Record<string, unknown>, ctx: ShopIn
   const maxEta = input.max_eta_min;
   if (maxEta !== undefined && !isShopMaxEta(maxEta)) return { ok: false, error: MAX_ETA_ERROR };
   try {
-    const out = await askMac(
+    const out = await executor.run(() => askMac(
       { op: "places", service: "eda", query, ...(maxEta !== undefined ? { max_eta_min: maxEta } : {}) },
       ctx.triggerUserId!, ctx.chatId,
-    );
+    ));
     if (!out.ok) return { ok: false, error: failText(out), code: out.code };
     if (out.op !== "places") return { ok: false, error: "invalid_shop_result" };
     if (maxEta !== undefined && !out.places.every((p) => shopPlaceFits(p, maxEta))) return { ok: false, error: "invalid_shop_result" };
@@ -392,7 +423,7 @@ export async function shopStatus(input: Record<string, unknown>, ctx: ShopInline
   if ("error" in picked) return { ok: false, error: picked.error };
   const { service } = picked;
   try {
-    const out = await askMac({ op: "status", service }, ctx.triggerUserId!, ctx.chatId);
+    const out = await executor.run(() => askMac({ op: "status", service }, ctx.triggerUserId!, ctx.chatId));
     if (!out.ok) return { ok: false, error: failText(out), code: out.code };
     if (out.op !== "status") return { ok: false, error: "invalid_shop_result" };
     return { ok: true, service, state: out.state, state_text: SHOP_STATE_LABEL[out.state], eta_min: out.eta_min };
@@ -420,7 +451,7 @@ export async function setShopAddress(input: Record<string, unknown>, ctx: ShopIn
   if (!address) return { ok: false, error: "address — одна строка, 3..200 символов" };
   const userId = ctx.triggerUserId!;
   try {
-    const out = await askMac({ op: "set_address", service, address }, userId, ctx.chatId);
+    const out = await executor.run(() => askMac({ op: "set_address", service, address }, userId, ctx.chatId));
     if (!out.ok) return { ok: false, error: failText(out), code: out.code };
     if (out.op !== "set_address") return { ok: false, error: "invalid_shop_result" };
     // Адрес сменился — прошлый расчёт больше не про этот адрес.
