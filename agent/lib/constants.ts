@@ -194,6 +194,7 @@ export const INLINE_TOOL_NAMES = new Set<string>([
   "TAXI_QUOTE",
   "TAXI_STATUS",
   "SHOP_QUOTE",
+  "SHOP_PLACES",
   "SHOP_STATUS",
   "SHOP_SET_ADDRESS",
   "DELIVERY_QUOTE",

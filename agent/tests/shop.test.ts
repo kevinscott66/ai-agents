@@ -16,6 +16,7 @@ import {
   handleMarketPurchase,
   handleOrderFood,
   hasPendingShopOrder,
+  listShopPlaces,
   quoteShop,
   resetShopState,
   setShopAddress,
@@ -64,14 +65,20 @@ import {
   edaPlaceUrl,
   optionDelta,
   parseEdaCartRow,
-  pickPlace,
+  edaPlacesFromLinks,
   placeRefFromHref,
   type RawOptionGroup,
 } from "../mac-daemon/eda-playwright.ts";
 import { marketIdFromHref, marketUrlFor } from "../mac-daemon/market-playwright.ts";
 import { MARKET_TESTID, MARKET_TEXT } from "../mac-daemon/market-selectors.ts";
 import { EDA_TESTID, EDA_TEXT } from "../mac-daemon/eda-selectors.ts";
-import type { ShopPlace } from "../lib/shop.ts";
+import {
+  parseShopPlaceEta,
+  pickShopPlace,
+  rankShopPlaces,
+  shopPlaceEtaText,
+  type ShopPlace,
+} from "../lib/shop.ts";
 
 const T0 = Date.UTC(2026, 8, 17, 9, 0, 0);
 const OWNER = 777_000_444;
@@ -163,6 +170,9 @@ function fakePage() {
     clicks: [] as string[],
     shots: 0,
     place: null as ShopPlace | null,
+    /** Список ресторанов; null — только place. */
+    places: null as ShopPlace[] | null,
+    placeQueries: [] as (string | null)[],
     qtyResult: "ok" as QtyResult,
     opened: [] as string[],
     addresses: ["Краснодар, Красная 1", "Краснодар, Ленина 5, кв 12"] as string[],
@@ -170,7 +180,7 @@ function fakePage() {
   const total = () => [...s.cart].reduce((sum, [id, qty]) => sum + qty * (s.products.get(id)?.price_rub ?? 0), 0) + (s.delivery ?? 0);
   const page: ShopPage = {
     openHome: async (t) => { s.current = "home"; s.opened.push(`home:${t.place ?? t.service}`); },
-    findPlace: async () => s.place,
+    places: async (q) => { s.placeQueries.push(q); return (s.places ?? (s.place ? [s.place] : [])).map((p) => ({ ...p })); },
     openSearch: async () => { s.current = "search"; },
     openProduct: async (_t, item) => { s.current = item.id; },
     openCart: async (t) => { s.current = "cart"; s.opened.push(`cart:${t.place ?? t.service}`); },
@@ -668,10 +678,10 @@ describe("eda: parsing and page helpers", () => {
     expect(placeRefFromHref("/r/Burger House?placeSlug=x")).toBeNull();
     expect(edaPlaceUrl(PLACE.ref)).toBe("https://eda.yandex.ru/r/burger-house?placeSlug=krasnaya-1");
     const places = [{ ref: "a:1", name: "Бургер Хаус Экспресс" }, { ref: "b:2", name: "Бургер хаус" }, { ref: "c:3", name: "Суши Мастер" }];
-    expect(pickPlace("бургер хаус", places)).toEqual(places[1]!);
-    expect(pickPlace("экспресс", places)).toEqual(places[0]!);
-    expect(pickPlace("пицца", places)).toBeNull();
-    expect(pickPlace("  ", places)).toBeNull();
+    expect(pickShopPlace("бургер хаус", places)).toEqual({ place: places[1]! });
+    expect(pickShopPlace("экспресс", places)).toEqual({ place: places[0]! });
+    expect(pickShopPlace("пицца", places)).toBeNull();
+    expect(pickShopPlace("  ", places)).toBeNull();
     expect(dishMatches("Чизбургер 250 г", "чизбургер")).toBe(true);
     expect(dishMatches("Двойной чизбургер", "чизбургеры двойные")).toBe(true);
     expect(dishMatches("Картофель фри", "чизбургер")).toBe(false);
@@ -687,7 +697,7 @@ describe("eda: parsing and page helpers", () => {
     const page = routeShopPage({ lavka: lavka.page, eda: eda.page, market: fakePage().page });
     await page.openHome({ service: "lavka" });
     expect(await page.address()).toBe("Краснодар, Красная 1");
-    expect(await page.findPlace("бургер")).toEqual(PLACE);
+    expect(await page.places("бургер")).toEqual([PLACE]);
     await page.openHome({ service: "eda", place: PLACE.ref });
     expect(await page.address()).toBe("Еда-адрес");
     expect(lavka.s.opened).toEqual(["home:lavka"]);
@@ -1455,5 +1465,162 @@ describe("адрес доставки: инструмент", () => {
     const out = await setShopAddress({ service: "eda", address: "Гагарина 3" }, h.ctx);
     expect(out).toMatchObject({ ok: false, saved_count: 2 });
     expect(String(out.note)).toContain("не заводит");
+  });
+});
+
+describe("eda: время доставки", () => {
+  const eta = (from_min: number, to_min: number) => ({ from_min, to_min });
+  const FAST: ShopPlace = { ref: "shaurma:fast-1", name: "Шаурма Душевная", eta: eta(20, 25) };
+  const SLOW: ShopPlace = { ref: "shaurma:slow-2", name: "Шаурма Душевная", eta: eta(35, 45) };
+  const PIZZA: ShopPlace = { ref: "pizza:center", name: "Пицца Центр", eta: eta(30, 40) };
+  const CLOSED: ShopPlace = { ref: "grill:closed", name: "Гриль Бар" };
+
+  test("время с карточки: интервал, одно число, мусор", () => {
+    expect(parseShopPlaceEta("4.8 (1800+) · 20 – 25 мин")).toEqual(eta(20, 25));
+    expect(parseShopPlaceEta("35\u00a0–\u00a045\u00a0мин")).toEqual(eta(35, 45));
+    expect(parseShopPlaceEta("25 мин")).toEqual(eta(25, 25));
+    expect(parseShopPlaceEta("4.9 · 10-15 мин")).toEqual(eta(10, 15));
+    expect(parseShopPlaceEta("45 – 35 мин")).toBeNull();
+    expect(parseShopPlaceEta("0 мин")).toBeNull();
+    expect(parseShopPlaceEta("300 мин")).toBeNull();
+    expect(parseShopPlaceEta("Закрыто до 10:00")).toBeNull();
+    expect(parseShopPlaceEta(null)).toBeNull();
+    expect(shopPlaceEtaText(eta(20, 25))).toBe("20–25 мин");
+    expect(shopPlaceEtaText(eta(25, 25))).toBe("25 мин");
+  });
+
+  test("выбор филиала: с пределом самый быстрый успевающий, иначе too_slow", () => {
+    const places = [SLOW, FAST, PIZZA];
+    expect(pickShopPlace("шаурма душевная", places)).toEqual({ place: SLOW });
+    expect(pickShopPlace("шаурма душевная", places, 45)).toEqual({ place: FAST });
+    expect(pickShopPlace("шаурма душевная", [SLOW], 30)).toEqual({ too_slow: SLOW });
+    expect(pickShopPlace("гриль бар", [CLOSED], 60)).toEqual({ too_slow: CLOSED });
+    expect(pickShopPlace("суши", places, 45)).toBeNull();
+  });
+
+  test("список: без повторов, быстрые первыми, без времени в конце, с пределом — только успевающие", () => {
+    expect(rankShopPlaces([CLOSED, SLOW, FAST, SLOW, PIZZA])).toEqual([FAST, PIZZA, SLOW, CLOSED]);
+    expect(rankShopPlaces([CLOSED, SLOW, FAST, PIZZA], 40)).toEqual([FAST, PIZZA]);
+    const many = Array.from({ length: 15 }, (_, i) => ({ ref: `p:${i}`, name: `Место ${i}`, eta: eta(20, 30) }));
+    expect(rankShopPlaces(many)).toHaveLength(10);
+  });
+
+  test("ссылки со страницы: без названия и чужие отбрасываются, время из подписи", () => {
+    expect(edaPlacesFromLinks([
+      { href: "/r/shaurma?placeSlug=fast-1", name: "Шаурма Душевная", meta: "20 – 25 мин" },
+      { href: "/r/shaurma?placeSlug=fast-1", name: "", meta: "" },
+      { href: "/r/grill?placeSlug=closed", name: "Гриль Бар", meta: "Закрыто" },
+      { href: "https://evil.example.com/r/x?placeSlug=y", name: "Чужой", meta: "10 мин" },
+    ])).toEqual([{ ref: "shaurma:fast-1", name: "Шаурма Душевная", eta: eta(20, 25) }, CLOSED]);
+  });
+
+  test("кадры демона: places только у Еды, max_eta_min строго", () => {
+    expect(parseShopRequest({ op: "places", service: "eda", query: "шаурма" })).toEqual({ op: "places", service: "eda", query: "шаурма" });
+    expect(parseShopRequest({ op: "places", service: "eda", query: "шаурма", max_eta_min: 45 }))
+      .toEqual({ op: "places", service: "eda", query: "шаурма", max_eta_min: 45 });
+    expect(parseShopRequest({ op: "places", service: "lavka", query: "шаурма" })).toBeNull();
+    expect(parseShopRequest({ op: "places", service: "eda", query: "шаурма", max_eta_min: 5 })).toBeNull();
+    expect(parseShopRequest({ op: "places", service: "eda", query: "шаурма", max_eta_min: 45.5 })).toBeNull();
+    expect(parseShopRequest({ op: "quote", service: "eda", place: "шаурма", max_eta_min: 45, queries: ["шаурма"] }))
+      .toEqual({ op: "quote", service: "eda", place: "шаурма", max_eta_min: 45, queries: ["шаурма"] });
+    expect(parseShopRequest({ op: "quote", service: "lavka", max_eta_min: 45, queries: ["молоко"] })).toBeNull();
+  });
+
+  test("ответ демона: ресторан с временем и без, время сверяется строго", () => {
+    const base = { ok: true, op: "quote", address: ADDRESS, delivery_rub: 0, results: [{ query: "шаурма", candidates: [] }] };
+    expect(parseShopOutcome(JSON.stringify({ ...base, place: FAST }), "quote")).toMatchObject({ place: FAST });
+    expect(parseShopOutcome(JSON.stringify({ ...base, place: CLOSED }), "quote")).toMatchObject({ place: CLOSED });
+    expect(() => parseShopOutcome(JSON.stringify({ ...base, place: { ...FAST, eta: eta(45, 35) } }), "quote")).toThrow("invalid_shop_result");
+    expect(() => parseShopOutcome(JSON.stringify({ ...base, place: { ...FAST, eta: { ...eta(20, 25), x: 1 } } }), "quote")).toThrow("invalid_shop_result");
+    const list = { ok: true, op: "places", address: ADDRESS, places: [FAST, CLOSED] };
+    expect(parseShopOutcome(JSON.stringify(list), "places")).toEqual(list as ShopOutcome);
+    expect(() => parseShopOutcome(JSON.stringify({ ...list, places: [FAST, FAST] }), "places")).toThrow("invalid_shop_result");
+  });
+
+  test("исполнитель: places с предела, ничего не открывает и не кликает", async () => {
+    const { s, page } = edaPage();
+    s.places = [SLOW, CLOSED, FAST, { ref: "bad ref", name: "Кривая" }];
+    const r = runner(page);
+    expect(await r.run({ op: "places", service: "eda", query: "шаурма", max_eta_min: 30 })).toEqual({ ok: true, op: "places", address: ADDRESS, places: [FAST] });
+    expect(await r.run({ op: "places", service: "eda", query: "шаурма" })).toEqual({ ok: true, op: "places", address: ADDRESS, places: [FAST, SLOW, CLOSED] });
+    expect(s.opened).toEqual(["home:eda", "home:eda"]);
+    expect(s.clicks).toEqual([]);
+    await r.close();
+  });
+
+  test("исполнитель: quote с пределом берёт быстрый филиал, медленный — place_too_slow", async () => {
+    const { s, page } = edaPage();
+    s.places = [SLOW, FAST];
+    const r = runner(page);
+    expect(await r.run({ op: "quote", service: "eda", place: "шаурма душевная", max_eta_min: 45, queries: ["чизбургер"] })).toMatchObject({ ok: true, place: FAST });
+    expect(s.opened.at(-1)).toBe(`home:${FAST.ref}`);
+    s.places = [SLOW];
+    expect(await r.run({ op: "quote", service: "eda", place: "шаурма душевная", max_eta_min: 30, queries: ["чизбургер"] }))
+      .toEqual({ ok: false, code: "place_too_slow", screenshot: "U0NSRUVO" });
+    expect(s.clicks).toEqual([]);
+    await r.close();
+  });
+
+  test("исполнитель: нет в поиске — ищет на главной", async () => {
+    const { s, page } = edaPage();
+    s.places = [PIZZA];
+    const r = runner(page);
+    expect((await r.run({ op: "quote", service: "eda", place: "бургер хаус", queries: ["чизбургер"] }) as { code: string }).code).toBe("place_not_found");
+    expect(s.placeQueries).toEqual(["бургер хаус", null]);
+    await r.close();
+  });
+
+  describe("сервер", () => {
+    let h: Awaited<ReturnType<typeof harness>> | null = null;
+    beforeEach(() => {
+      resetShopState();
+      process.env.SHOP_ENABLED = "true";
+      process.env.MINIAPP_ADMIN_USER_IDS = `123,${OWNER}`;
+    });
+    afterEach(() => {
+      h?.restore();
+      h = null;
+      resetShopState();
+      for (const k of ENV_KEYS) {
+        if (savedEnv[k] === undefined) delete process.env[k]; else process.env[k] = savedEnv[k];
+      }
+    });
+
+    test("SHOP_PLACES: проверка ввода, запрос к Mac и время текстом", async () => {
+      h = await harness({ places: { ok: true, op: "places", address: ADDRESS, places: [FAST, PIZZA] } });
+      expect((await listShopPlaces({ query: "шаурма", max_eta_min: 5 }, h.ctx)).ok).toBe(false);
+      expect((await listShopPlaces({ query: "шаурма", max_eta_min: "45" }, h.ctx)).ok).toBe(false);
+      expect((await listShopPlaces({ query: "" }, h.ctx)).ok).toBe(false);
+      expect((await listShopPlaces({ query: "шаурма" }, { ...h.ctx, agentKey: "qa" })).ok).toBe(false);
+      expect(h.requests).toEqual([]);
+      expect(await listShopPlaces({ query: "шаурма", max_eta_min: 45 }, h.ctx)).toMatchObject({
+        ok: true,
+        max_eta_min: 45,
+        places: [{ name: FAST.name, eta: "20–25 мин" }, { name: PIZZA.name, eta: "30–40 мин" }],
+      });
+      expect(h.requests).toEqual([{ op: "places", service: "eda", query: "шаурма", max_eta_min: 45 }]);
+    });
+
+    test("SHOP_PLACES: Mac вернул неуспевающий ресторан — отказ", async () => {
+      h = await harness({ places: { ok: true, op: "places", address: ADDRESS, places: [SLOW] } });
+      expect(await listShopPlaces({ query: "шаурма", max_eta_min: 30 }, h.ctx)).toMatchObject({ ok: false, error: "invalid_shop_result" });
+    });
+
+    test("SHOP_QUOTE: предел только у Еды, ответ с временем ресторана, неуспевающий — отказ", async () => {
+      const quote = (place: ShopPlace): ShopOutcome => ({ ok: true, op: "quote", address: ADDRESS, place, delivery_rub: 99, results: [{ query: "шаурма", candidates: [] }] });
+      h = await harness({ quote: quote(FAST) });
+      expect((await quoteShop({ service: "lavka", max_eta_min: 45, queries: ["молоко"] }, h.ctx)).ok).toBe(false);
+      expect((await quoteShop({ service: "eda", place: "шаурма", max_eta_min: 200, queries: ["шаурма"] }, h.ctx)).ok).toBe(false);
+      expect(h.requests).toEqual([]);
+      expect(await quoteShop({ service: "eda", place: "шаурма", max_eta_min: 45, queries: ["шаурма"] }, h.ctx))
+        .toMatchObject({ ok: true, place: FAST.name, place_eta: "20–25 мин" });
+      expect(h.requests.at(-1)).toEqual({ op: "quote", service: "eda", place: "шаурма", max_eta_min: 45, queries: ["шаурма"] });
+      h.restore();
+      h = await harness({ quote: quote(SLOW) });
+      expect(await quoteShop({ service: "eda", place: "шаурма", max_eta_min: 30, queries: ["шаурма"] }, h.ctx)).toMatchObject({ ok: false, error: "invalid_shop_result" });
+      h.restore();
+      h = await harness({ quote: quote(CLOSED) });
+      expect(await quoteShop({ service: "eda", place: "гриль", max_eta_min: 60, queries: ["шаурма"] }, h.ctx)).toMatchObject({ ok: false, error: "invalid_shop_result" });
+    });
   });
 });

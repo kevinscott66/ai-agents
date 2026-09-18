@@ -17,6 +17,7 @@ import {
   edaVariantId,
   normalizeShopName,
   normalizeShopOptionName,
+  parseShopPlaceEta,
   parseShopRubles,
   resolveShopOptions,
   SHOP_CANDIDATES_MAX,
@@ -51,6 +52,23 @@ export const edaPlaceUrl = (ref: string) => {
   return `${EDA_ORIGIN}/r/${encodeURIComponent(brand!)}?placeSlug=${encodeURIComponent(slug!)}`;
 };
 
+/**
+ * Ссылки ресторанов со страницы → рестораны. У карточки в поиске за ссылкой
+ * «Показать ещё» тот же ресторан без названия — он отбрасывается; время — из
+ * строки под названием («4.8 (1800+) · 20 – 25 мин»), нет его — без eta.
+ */
+export function edaPlacesFromLinks(raw: ReadonlyArray<{ href: string | null; name: string; meta: string }>): ShopPlace[] {
+  const out: ShopPlace[] = [];
+  for (const r of raw) {
+    const ref = placeRefFromHref(r.href);
+    const name = normalizeShopName(r.name);
+    if (!ref || !name || out.some((p) => p.ref === ref)) continue;
+    const eta = parseShopPlaceEta(r.meta);
+    out.push({ ref, name, ...(eta ? { eta } : {}) });
+  }
+  return out;
+}
+
 /** `/r/<бренд>?placeSlug=<slug>` → `бренд:slug`, если оба похожи на идентификаторы. */
 export function placeRefFromHref(href: unknown): string | null {
   if (typeof href !== "string") return null;
@@ -69,16 +87,6 @@ export function placeRefFromHref(href: unknown): string | null {
 }
 
 const fold = (s: string) => s.toLowerCase().replace(/ё/g, "е").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
-
-/**
- * Выбор ресторана из найденных: точное совпадение названия, потом название,
- * содержащее запрос. Первый попавшийся не берём: владелец просил конкретный.
- */
-export function pickPlace(query: string, places: ReadonlyArray<ShopPlace>): ShopPlace | null {
-  const q = fold(query);
-  if (!q) return null;
-  return places.find((p) => fold(p.name) === q) ?? places.find((p) => fold(p.name).includes(q)) ?? null;
-}
 
 /** Блюдо подходит к запросу, если каждое слово запроса (по первым пяти буквам) есть в названии. */
 export function dishMatches(name: string, query: string): boolean {
@@ -382,31 +390,19 @@ export function edaShopPage(page: any): ShopPage {
         place = null;
       }
     },
-    async findPlace(q) {
-      const collect = async (): Promise<ShopPlace[]> => {
-        await page.locator(EDA_TESTID.placeTitle).first().waitFor({ state: "visible", timeout: UI_TIMEOUT_MS }).catch(() => {});
-        const raw: Array<{ href: string | null; name: string }> = await page.evaluate((sel: typeof EDA_TESTID) => {
-          const doc = (globalThis as any).document;
-          return [...doc.querySelectorAll(sel.placeLink)].slice(0, 200).map((a: any) => ({
-            href: a.getAttribute("href"),
-            name: String(a.querySelector(sel.placeTitle)?.innerText ?? ""),
-          }));
-        }, EDA_TESTID);
-        const out: ShopPlace[] = [];
-        for (const r of raw) {
-          const ref = placeRefFromHref(r.href);
-          const name = normalizeShopName(r.name);
-          if (ref && name && !out.some((p) => p.ref === ref)) out.push({ ref, name });
-        }
-        return out;
-      };
-      await goto(edaSearchUrl(q));
-      let found = pickPlace(q, await collect());
-      if (!found) {
-        await goto(`${EDA_ORIGIN}/`);
-        found = pickPlace(q, await collect());
-      }
-      return found;
+    async places(q) {
+      await goto(q === null ? `${EDA_ORIGIN}/` : edaSearchUrl(q));
+      place = null;
+      await page.locator(EDA_TESTID.placeTitle).first().waitFor({ state: "visible", timeout: UI_TIMEOUT_MS }).catch(() => {});
+      const raw: Array<{ href: string | null; name: string; meta: string }> = await page.evaluate((sel: typeof EDA_TESTID) => {
+        const doc = (globalThis as any).document;
+        return [...doc.querySelectorAll(sel.placeLink)].slice(0, 200).map((a: any) => ({
+          href: a.getAttribute("href"),
+          name: String(a.querySelector(sel.placeTitle)?.innerText ?? ""),
+          meta: String(a.querySelector(sel.placeMeta)?.innerText ?? ""),
+        }));
+      }, EDA_TESTID);
+      return edaPlacesFromLinks(raw);
     },
     openSearch: async (target, q) => {
       if (target.place) await openPlace(target.place);

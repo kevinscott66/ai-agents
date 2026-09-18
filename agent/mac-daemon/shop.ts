@@ -31,6 +31,7 @@
  *   bun mac-daemon/shop.ts probe [eda|market]  — дерево доступности страницы
  *   bun mac-daemon/shop.ts quote "молоко" "хлеб"
  *   bun mac-daemon/shop.ts eda-quote "ресторан" "блюдо" …
+ *   bun mac-daemon/shop.ts eda-places "шаверма" [45]  — рестораны и время доставки
  *   bun mac-daemon/shop.ts market-quote "зарядка usb-c" …
  */
 import {
@@ -47,6 +48,9 @@ import {
   normalizeShopPlaceName,
   normalizeShopQuery,
   parseShopRequest,
+  isShopMaxEta,
+  pickShopPlace,
+  rankShopPlaces,
   shopAddressHas,
   shopNeedsPlace,
   type ShopCandidate,
@@ -125,8 +129,11 @@ export type QtyResult = "ok" | "options_required" | "options_mismatch" | "blocke
 export interface ShopPage {
   /** Лавка — главная; Еда без place — главная, с place — страница ресторана. */
   openHome(target: ShopTarget): Promise<void>;
-  /** Еда: найти ресторан по названию. Без навигации в него. */
-  findPlace(query: string): Promise<ShopPlace | null>;
+  /**
+   * Еда: рестораны из поиска по запросу (null — с главной) с временем
+   * доставки с карточки. Без навигации в них.
+   */
+  places(query: string | null): Promise<ShopPlace[]>;
   openSearch(target: ShopTarget, query: string): Promise<void>;
   openProduct(target: ShopTarget, item: ShopItemRef): Promise<void>;
   openCart(target: ShopTarget): Promise<void>;
@@ -200,7 +207,7 @@ export function checkShopProfile(dir: string | undefined, uid: number | undefine
 
 /** Отказы, к которым полезен скриншот: владелец видит, на чём встали. */
 const SCREENSHOT_CODES: readonly ShopFailCode[] = [
-  "login_required", "address_required", "captcha", "unexpected_page", "place_not_found", "product_not_found", "product_mismatch",
+  "login_required", "address_required", "captcha", "unexpected_page", "place_not_found", "place_too_slow", "product_not_found", "product_mismatch",
   "out_of_stock", "options_required", "options_mismatch", "cart_not_empty", "cart_mismatch", "price_unreadable", "price_changed", "checkout_unavailable",
   "payment_needs_owner", "pay_button_missing",
 ];
@@ -324,6 +331,19 @@ export class ShopRunner {
     return this.browser.page();
   }
 
+  /** Рестораны со страницы, проверенные: чужие ссылки и пустые названия отбрасываются. */
+  private async readPlaces(page: ShopPage, query: string | null): Promise<ShopPlace[]> {
+    const raw = await page.places(query);
+    await this.guard(page);
+    const out: ShopPlace[] = [];
+    for (const p of raw) {
+      const name = normalizeShopPlaceName(p.name);
+      if (!name || !SHOP_PLACE_REF.test(p.ref)) continue;
+      out.push({ ref: p.ref, name, ...(p.eta ? { eta: { from_min: p.eta.from_min, to_min: p.eta.to_min } } : {}) });
+    }
+    return out;
+  }
+
   private activeSession(): Session | null {
     if (this.session && this.now() > this.session.expires) this.session = null;
     return this.session;
@@ -339,12 +359,15 @@ export class ShopRunner {
         const address = await this.openAt(page, () => page.openHome(target));
         let place: ShopPlace | undefined;
         if (shopNeedsPlace(request.service)) {
-          const found = request.place ? await page.findPlace(request.place) : null;
-          await this.guard(page);
-          const name = found ? normalizeShopPlaceName(found.name) : null;
-          if (!found || !SHOP_PLACE_REF.test(found.ref) || !name) throw new ShopError("place_not_found");
-          place = { ref: found.ref, name };
-          target = { service: request.service, place: found.ref };
+          if (!request.place) throw new ShopError("place_not_found");
+          const query = request.place;
+          // Поиск, а если в нём ресторана с таким названием нет — главная.
+          let pick = pickShopPlace(query, await this.readPlaces(page, query), request.max_eta_min);
+          if (!pick) pick = pickShopPlace(query, await this.readPlaces(page, null), request.max_eta_min);
+          if (!pick) throw new ShopError("place_not_found");
+          if ("too_slow" in pick) throw new ShopError("place_too_slow");
+          place = pick.place;
+          target = { service: request.service, place: place.ref };
           await page.openHome(target);
           await this.guard(page);
         }
@@ -374,6 +397,12 @@ export class ShopRunner {
           results.push({ query, candidates });
         }
         return { ok: true, op: "quote", address, ...(place ? { place } : {}), delivery_rub: delivery, results };
+      }
+      case "places": {
+        if (this.activeSession()) throw new ShopError("shop_busy");
+        const address = await this.openAt(page, () => page.openHome({ service: request.service }));
+        const places = rankShopPlaces(await this.readPlaces(page, request.query), request.max_eta_min);
+        return { ok: true, op: "places", address, places };
       }
       case "prepare": {
         const active = this.activeSession();
@@ -615,6 +644,16 @@ async function cli(args: string[]) {
     await browser.close();
     return;
   }
+  if (command === "eda-places") {
+    const query = normalizeShopQuery(rest[0]);
+    const max = rest[1] === undefined ? undefined : Number(rest[1]);
+    if (!query || (max !== undefined && !isShopMaxEta(max))) throw new Error("usage: bun mac-daemon/shop.ts eda-places \"шаверма\" [45]");
+    const local = new ShopRunner({ ...env, SHOP_ENABLED: "true" }, { launch: async (e, d) => (await import("./shop-playwright.ts")).launchPlaywrightShop(e, d, { headless: false }) });
+    const out = await local.run({ op: "places", service: "eda", query, ...(max !== undefined ? { max_eta_min: max } : {}) });
+    await local.close();
+    printOutcome(out);
+    return;
+  }
   if (command === "quote" || command === "eda-quote" || command === "market-quote") {
     const eda = command === "eda-quote";
     const place = eda ? normalizeShopQuery(rest.shift()) : null;
@@ -630,7 +669,7 @@ async function cli(args: string[]) {
     printOutcome(out);
     return;
   }
-  throw new Error("usage: bun mac-daemon/shop.ts login [eda|market] | probe [eda|market] | quote \"молоко\" | eda-quote \"ресторан\" \"блюдо\" | market-quote \"товар\"");
+  throw new Error("usage: bun mac-daemon/shop.ts login [eda|market] | probe [eda|market] | quote \"молоко\" | eda-quote \"ресторан\" \"блюдо\" | eda-places \"шаверма\" [45] | market-quote \"товар\"");
 }
 
 if (import.meta.main) {

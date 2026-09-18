@@ -73,7 +73,7 @@ export function routeShopPage(pages: Record<ShopService, ShopPage>): ShopPage {
   const on = (service: ShopService) => (current = pages[service]);
   return {
     openHome: (t) => on(t.service).openHome(t),
-    findPlace: (q) => on("eda").findPlace(q),
+    places: (q) => on("eda").places(q),
     openSearch: (t, q) => on(t.service).openSearch(t, q),
     openProduct: (t, item) => on(t.service).openProduct(t, item),
     openCart: (t) => on(t.service).openCart(t),
@@ -174,7 +174,7 @@ export function playwrightShopPage(page: any): ShopPage {
 
   return {
     openHome: () => goto(`${LAVKA_ORIGIN}/`),
-    findPlace: async () => null,
+    places: async () => [],
     openSearch: (_target, query) => goto(lavkaSearchUrl(query)),
     openProduct: (_target, item) => goto(lavkaProductUrl(item.id)),
     // Корзина на десктопе — боковая мини-корзина на любой странице каталога.

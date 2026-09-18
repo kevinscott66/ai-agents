@@ -74,7 +74,7 @@ export function marketShopPage(page: any): ShopPage {
 
   return {
     openHome: () => goto(`${MARKET_ORIGIN}/`),
-    findPlace: async () => null,
+    places: async () => [],
     openSearch: (_target, query) => goto(marketSearchUrl(query)),
     openProduct: (_target, item) => goto(marketUrlFor(item.id)),
     openCart: () => goto(MARKET_CART_URL),

@@ -70,6 +70,7 @@ const RULES: Record<string, { perAgent?: BucketRule; global?: BucketRule }> = {
   ORDER_FOOD: { perAgent: { windowMs: HOUR_MS, max: 10 } },
   MARKET_PURCHASE: { perAgent: { windowMs: HOUR_MS, max: 10 } },
   SHOP_QUOTE: { perAgent: { windowMs: MINUTE_MS, max: 4 } },
+  SHOP_PLACES: { perAgent: { windowMs: MINUTE_MS, max: 4 } },
   SHOP_STATUS: { perAgent: { windowMs: MINUTE_MS, max: 6 } },
   SHOP_SET_ADDRESS: { perAgent: { windowMs: MINUTE_MS, max: 3 } },
   ORDER_DELIVERY: { perAgent: { windowMs: HOUR_MS, max: 10 } },
