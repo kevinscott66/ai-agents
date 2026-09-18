@@ -856,7 +856,7 @@ describe("браузер покупок занят", () => {
     restore = configureShop({ now, sleep, send: async () => ({ ok: false, stdout: "", error: "mac_offline" }) });
     const out = await shopStatus({ service: "eda" }, ctx);
     expect(out).toMatchObject({ ok: false, code: "mac_offline", owner_needed: true });
-    expect(String(out.next)).toContain("не проси перезапускать");
+    expect(String(out.next)).toContain("SCHEDULE_FOLLOWUP");
     expect(c.now - T0).toBeGreaterThanOrEqual(SHOP_OFFLINE_WAIT_MS);
   });
 

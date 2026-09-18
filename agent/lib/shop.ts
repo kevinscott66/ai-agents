@@ -758,7 +758,7 @@ export const SHOP_RECOVERY: Record<ShopFailCode, ShopRecovery> = {
   shop_disabled: { owner: true, next: "покупки на Mac выключены — скажи владельцу одной фразой, повторять бесполезно" },
   profile_missing: { owner: true, next: "профиль браузера не настроен — это настройка Mac, скажи владельцу одной фразой" },
   profile_insecure: { owner: true, next: "профиль браузера открыт другим пользователям — это настройка Mac, скажи владельцу одной фразой" },
-  browser_unavailable: { owner: false, next: `сервер уже запускал Chrome повторно; ${RETRY_ONCE}скажи владельцу, что Chrome на Mac не запускается` },
+  browser_unavailable: { owner: false, next: `сервер уже запускал Chrome повторно; ${RETRY_ONCE}скажи владельцу, что Chrome на Mac не запускается, и поставь SCHEDULE_FOLLOWUP через 10 мин повторить` },
   login_required: { owner: true, next: "вход в Яндекс делает только владелец — попроси его войти и не повторяй до его ответа" },
   address_required: { owner: true, next: "адрес на сайте выбирает только владелец — попроси его и не повторяй до его ответа" },
   captcha: { owner: true, next: "капчу агент не решает — перешли владельцу скриншот и жди его" },
@@ -778,8 +778,8 @@ export const SHOP_RECOVERY: Record<ShopFailCode, ShopRecovery> = {
   payment_needs_owner: { owner: true, next: "карту агент не вводит — попроси владельца сохранить карту в Яндексе" },
   pay_button_missing: { owner: false, next: "заказ не повторяй: проверь SHOP_STATUS и скажи владельцу итог" },
   session_unknown: { owner: false, next: "подготовка устарела — заново SHOP_CHECKOUT и новое подтверждение владельца" },
-  shop_busy: { owner: false, next: "сервер уже ждал и сбрасывал браузер; повтори этот же вызов сам, владельца не проси" },
-  shop_paying: { owner: false, next: "на Mac идёт оплата другого заказа — дождись его результата, потом SHOP_STATUS; ничего не повторяй" },
+  shop_busy: { owner: false, next: "сервер уже ждал и сбрасывал браузер; повтори этот же вызов сам, владельца не проси; если снова занято — SCHEDULE_FOLLOWUP через 5 мин" },
+  shop_paying: { owner: false, next: "на Mac идёт оплата другого заказа — её итог придёт сам; ничего не повторяй, а своё дело отложи через SCHEDULE_FOLLOWUP через 5 мин" },
 };
 
 export const shopLineSum = (lines: ReadonlyArray<{ qty: number; price_rub: number }>) =>
