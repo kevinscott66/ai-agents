@@ -1144,6 +1144,19 @@ describe("market: parsing and page helpers", () => {
     expect(EDA_TEXT.placeClosed.test("Ресторан открыт круглосуточно")).toBe(false);
   });
 
+  test("итог Еды снимается со строки кнопки «Оплатить»", () => {
+    // Живьём на оформлении нет слова «Итого»: разбор подписан «Что в цене»
+    // (товары 87 ₽, тариф доставки 99 ₽, маленький заказ 30 ₽, сервисный сбор
+    // 29 ₽), а сумма 245 ₽ стоит одной строкой с кнопкой «Оплатить». Пока
+    // шаблон ждал «Итого», `checkout()` возвращал null — и заказ падал в
+    // `price_unreadable` прямо перед оплатой.
+    expect(EDA_TEXT.total.test("Оплатить")).toBe(true);
+    expect(EDA_TEXT.total.test("Итого")).toBe(true);
+    expect(EDA_TEXT.total.test("Способ оплаты")).toBe(false);
+    expect(EDA_TEXT.total.test("Товары в заказе")).toBe(false);
+    expect(EDA_TEXT.total.test("Сервисный сбор")).toBe(false);
+  });
+
   test("daemon frame: market lines need a card number id, no place", () => {
     const lines = [{ id: CHARGER.id, name: CHARGER.name, qty: 1 }];
     expect(parseShopRequest({ op: "prepare", session: SESSION, service: "market", lines })).toEqual({ op: "prepare", session: SESSION, service: "market", lines });
