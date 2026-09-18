@@ -168,6 +168,40 @@ function ownerRefusal(agentKey: string, chatId: number, userId: string | undefin
 
 export type ShopToolResult = { ok: boolean } & Record<string, unknown>;
 
+const SERVICE_ERROR = `service must be one of: ${Object.keys(SHOP_SERVICES).join(", ")}`;
+
+/** Пролог инлайновых инструментов: владелец в личном чате и известный сервис. */
+function inlineService(input: Record<string, unknown>, ctx: ShopInlineContext): { service: ShopService } | { error: string } {
+  const refusal = ownerRefusal(ctx.agentKey, ctx.chatId, ctx.triggerUserId, inlineDelegated(ctx));
+  if (refusal) return { error: refusal };
+  const service = normalizeShopService(input.service);
+  return service ? { service } : { error: SERVICE_ERROR };
+}
+
+/** Расчёт этого пользователя в этом магазине, если ещё не истёк. */
+function freshQuote(userId: string, service: ShopService, now: number): Quote | null {
+  const quote = quotes.get(userId);
+  return quote && now - quote.at <= SHOP_QUOTE_TTL_MS && quote.service === service ? quote : null;
+}
+
+/** Ресторан заявки не тот, что в расчёте: текст отказа, иначе null. */
+function placeMismatch(quote: Quote, place: string | null | undefined, where: string): string | null {
+  return (quote.place?.name ?? undefined) === place
+    ? null
+    : `в расчёте ресторан «${quote.place?.name ?? "—"}», а ${where} «${place ?? "—"}»: пересчитай через SHOP_QUOTE`;
+}
+
+/** Запрос на сборку корзины: только то, что Mac нужно знать о позициях. */
+function prepareRequest(session: string, service: ShopService, place: ShopPlace | undefined, lines: OrderLines): ShopRequest {
+  return {
+    op: "prepare",
+    session,
+    service,
+    ...(place ? { place: place.ref } : {}),
+    lines: lines.map(({ id, name, qty, options }) => ({ id, name, qty, ...(options ? { options } : {}) })),
+  };
+}
+
 /** Запрос к Mac → проверенный ответ. Ошибка моста — исключение с её кодом. */
 function askMac(request: ShopRequest, userId: string, chatId: number): Promise<ShopOutcome> {
   return askYandexMac<ShopRequest, ShopOutcome>(deps.send, parseShopOutcome, "shop_failed", request, userId, chatId);
@@ -178,10 +212,9 @@ const failText = (o: Extract<ShopOutcome, { ok: false }>) =>
 
 /** SHOP_QUOTE: что нашлось по запросам. Ничего не кладёт в корзину; расчёт живёт SHOP_QUOTE_TTL_MS. */
 export async function quoteShop(input: Record<string, unknown>, ctx: ShopInlineContext): Promise<ShopToolResult> {
-  const refusal = ownerRefusal(ctx.agentKey, ctx.chatId, ctx.triggerUserId, inlineDelegated(ctx));
-  if (refusal) return { ok: false, error: refusal };
-  const service = normalizeShopService(input.service);
-  if (!service) return { ok: false, error: `service must be one of: ${Object.keys(SHOP_SERVICES).join(", ")}` };
+  const picked = inlineService(input, ctx);
+  if ("error" in picked) return { ok: false, error: picked.error };
+  const { service } = picked;
   const raw = input.queries;
   if (!Array.isArray(raw) || raw.length < 1 || raw.length > SHOP_ITEMS_MAX) {
     return { ok: false, error: `queries — от 1 до ${SHOP_ITEMS_MAX} запросов` };
@@ -287,16 +320,13 @@ export async function listShopPlaces(input: Record<string, unknown>, ctx: ShopIn
  * запоминается при расчёте, ORDER_FOOD подписывает ровно его.
  */
 export async function checkoutShop(input: Record<string, unknown>, ctx: ShopInlineContext): Promise<ShopToolResult> {
-  const refusal = ownerRefusal(ctx.agentKey, ctx.chatId, ctx.triggerUserId, inlineDelegated(ctx));
-  if (refusal) return { ok: false, error: refusal };
-  const service = normalizeShopService(input.service);
-  if (!service) return { ok: false, error: `service must be one of: ${Object.keys(SHOP_SERVICES).join(", ")}` };
+  const picked = inlineService(input, ctx);
+  if ("error" in picked) return { ok: false, error: picked.error };
+  const { service } = picked;
   if (service === "market") return { ok: false, error: "у Маркета доставка видна только на оформлении: сразу MARKET_PURCHASE" };
   const userId = ctx.triggerUserId!;
-  const quote = quotes.get(userId);
-  if (!quote || deps.now() - quote.at > SHOP_QUOTE_TTL_MS || quote.service !== service) {
-    return { ok: false, error: "нет свежего расчёта в этом магазине: сначала SHOP_QUOTE" };
-  }
+  const quote = freshQuote(userId, service, deps.now());
+  if (!quote) return { ok: false, error: "нет свежего расчёта в этом магазине: сначала SHOP_QUOTE" };
   if (!Array.isArray(input.lines) || input.lines.length < 1 || input.lines.length > SHOP_ITEMS_MAX) {
     return { ok: false, error: `lines — от 1 до ${SHOP_ITEMS_MAX} товаров из SHOP_QUOTE` };
   }
@@ -307,9 +337,8 @@ export async function checkoutShop(input: Record<string, unknown>, ctx: ShopInli
     delivery_rub: quote.delivery_rub ?? 0,
   });
   if (!parsed) return { ok: false, error: "каждый товар — {id, name, qty, price_rub, options?} ровно как для ORDER_FOOD" };
-  if ((quote.place?.name ?? undefined) !== parsed.place) {
-    return { ok: false, error: `в расчёте ресторан «${quote.place?.name ?? "—"}», а здесь «${parsed.place ?? "—"}»: пересчитай через SHOP_QUOTE` };
-  }
+  const wrongPlace = placeMismatch(quote, parsed.place, "здесь");
+  if (wrongPlace) return { ok: false, error: wrongPlace };
   const checked = checkLines(quote, parsed.lines);
   if ("error" in checked) return { ok: false, error: checked.error };
   const lines = checked.lines;
@@ -318,30 +347,14 @@ export async function checkoutShop(input: Record<string, unknown>, ctx: ShopInli
     const session = deps.session();
     let out: ShopOutcome;
     try {
-      out = await askMac(
-        {
-          op: "prepare",
-          session,
-          service,
-          ...(quote.place ? { place: quote.place.ref } : {}),
-          lines: lines.map(({ id, name, qty, options }) => ({ id, name, qty, ...(options ? { options } : {}) })),
-        },
-        userId,
-        ctx.chatId,
-      );
+      out = await askMac(prepareRequest(session, service, quote.place, lines), userId, ctx.chatId);
     } catch (e) {
       await deps.send({ op: "abandon", session }, userId, ctx.chatId).catch(() => {});
       return { ok: false, error: `${errorText(e)}; корзину попросил очистить` };
     }
     // Корзина собрана (или собрана наполовину, если Mac отказал) — очищаем сразу,
     // до любых проверок: заказ сделает исполнитель заново.
-    let cleared = true;
-    try {
-      const done = await askMac({ op: "abandon", session }, userId, ctx.chatId);
-      cleared = done.ok;
-    } catch {
-      cleared = false;
-    }
+    const cleared = await askMac({ op: "abandon", session }, userId, ctx.chatId).then((done) => done.ok, () => false);
     if (!out.ok) return { ok: false, error: `${failText(out)}${cleared ? "" : "; корзину очистить не удалось"}`, code: out.code };
     if (!cleared) return { ok: false, error: "итог прочитан, но корзину очистить не удалось — пусть владелец проверит корзину, потом повтори" };
     if (out.op !== "prepare") return { ok: false, error: "invalid_shop_result" };
@@ -349,8 +362,8 @@ export async function checkoutShop(input: Record<string, unknown>, ctx: ShopInli
       return { ok: false, error: "адрес доставки на сайте сменился после расчёта: пересчитай через SHOP_QUOTE" };
     }
     const delivery = quote.delivery_rub ?? 0;
-    const base = shopLineSum(lines) + delivery;
-    if (!shopCheckoutTotalFits(out.total_rub, base)) return { ok: false, error: "invalid_shop_result" };
+    const items = shopLineSum(lines);
+    if (!shopCheckoutTotalFits(out.total_rub, items + delivery)) return { ok: false, error: "invalid_shop_result" };
     quote.checkout = { key: linesKey(lines), total_rub: out.total_rub, at: deps.now() };
     const extra = shopOrderExtra({ lines, delivery_rub: delivery, total_rub: out.total_rub });
     return {
@@ -358,7 +371,7 @@ export async function checkoutShop(input: Record<string, unknown>, ctx: ShopInli
       service,
       store: SHOP_SERVICES[service],
       ...(quote.place ? { place: quote.place.name } : {}),
-      items_rub: shopLineSum(lines),
+      items_rub: items,
       delivery_rub: delivery,
       extra_rub: extra,
       total_rub: out.total_rub,
@@ -375,10 +388,9 @@ export async function checkoutShop(input: Record<string, unknown>, ctx: ShopInli
 
 /** SHOP_STATUS: что сейчас с последним заказом. */
 export async function shopStatus(input: Record<string, unknown>, ctx: ShopInlineContext): Promise<ShopToolResult> {
-  const refusal = ownerRefusal(ctx.agentKey, ctx.chatId, ctx.triggerUserId, inlineDelegated(ctx));
-  if (refusal) return { ok: false, error: refusal };
-  const service = normalizeShopService(input.service);
-  if (!service) return { ok: false, error: `service must be one of: ${Object.keys(SHOP_SERVICES).join(", ")}` };
+  const picked = inlineService(input, ctx);
+  if ("error" in picked) return { ok: false, error: picked.error };
+  const { service } = picked;
   try {
     const out = await askMac({ op: "status", service }, ctx.triggerUserId!, ctx.chatId);
     if (!out.ok) return { ok: false, error: failText(out), code: out.code };
@@ -398,10 +410,9 @@ export async function shopStatus(input: Record<string, unknown>, ctx: ShopInline
  * в ответе только сколько их и что стоит в шапке сейчас.
  */
 export async function setShopAddress(input: Record<string, unknown>, ctx: ShopInlineContext): Promise<ShopToolResult> {
-  const refusal = ownerRefusal(ctx.agentKey, ctx.chatId, ctx.triggerUserId, inlineDelegated(ctx));
-  if (refusal) return { ok: false, error: refusal };
-  const service = normalizeShopService(input.service);
-  if (!service) return { ok: false, error: `service must be one of: ${Object.keys(SHOP_SERVICES).join(", ")}` };
+  const picked = inlineService(input, ctx);
+  if ("error" in picked) return { ok: false, error: picked.error };
+  const { service } = picked;
   if (!shopCanSetAddress(service)) {
     return { ok: false, error: `у ${SHOP_SERVICES[service]} адрес — это пункт выдачи, его выбирает владелец сам` };
   }
@@ -464,14 +475,11 @@ async function issueShopOrder(service: ShopService, payload: OrderInput, ctx: Sh
   if (refusal) return { ok: false, error: refusal };
   const userId = payload._userId!;
   const { lines, delivery_rub: delivery } = payload;
-  const quote = quotes.get(userId);
   const now = deps.now();
-  if (!quote || now - quote.at > SHOP_QUOTE_TTL_MS || quote.service !== service) {
-    return { ok: false, error: "нет свежего расчёта в этом магазине: сначала SHOP_QUOTE и новое подтверждение" };
-  }
-  if ((quote.place?.name ?? undefined) !== (payload.place === undefined ? undefined : normalizeShopPlaceName(payload.place))) {
-    return { ok: false, error: `в расчёте ресторан «${quote.place?.name ?? "—"}», а в заявке «${payload.place ?? "—"}»: пересчитай через SHOP_QUOTE` };
-  }
+  const quote = freshQuote(userId, service, now);
+  if (!quote) return { ok: false, error: "нет свежего расчёта в этом магазине: сначала SHOP_QUOTE и новое подтверждение" };
+  const wrongPlace = placeMismatch(quote, payload.place === undefined ? undefined : normalizeShopPlaceName(payload.place), "в заявке");
+  if (wrongPlace) return { ok: false, error: wrongPlace };
   const checked = checkLines(quote, lines);
   if ("error" in checked) return { ok: false, error: checked.error };
   const signedLines = checked.lines;
@@ -500,7 +508,7 @@ async function issueShopOrder(service: ShopService, payload: OrderInput, ctx: Sh
     amount = checkout.total_rub;
   }
   const params = gateParams(quote, signedLines, delivery);
-  const extra = amount - shopLineSum(signedLines) - delivery;
+  const extra = shopOrderExtra({ lines: signedLines, delivery_rub: delivery, total_rub: amount });
   if (extra > 0) params.fees_rub = extra;
   if (extra < 0) params.discount_rub = -extra;
   if (Object.values(params).some((v) => typeof v === "string" && v.length > SHOP_LINE_TEXT_MAX)) {
@@ -598,17 +606,7 @@ async function runSignedShop(nonce: string): Promise<void> {
   // 1. Подготовка: подписанные товары в пустую корзину, итог со страницы оформления.
   let prepared: ShopOutcome;
   try {
-    prepared = await askMac(
-      {
-        op: "prepare",
-        session,
-        service: order.service,
-        ...(order.place ? { place: order.place.ref } : {}),
-        lines: order.lines.map(({ id, name, qty, options }) => ({ id, name, qty, ...(options ? { options } : {}) })),
-      },
-      userId,
-      chatId,
-    );
+    prepared = await askMac(prepareRequest(session, order.service, order.place, order.lines), userId, chatId);
   } catch (e) {
     // До «Оплатить» prepare не доходит никогда: заказа точно нет. Корзину мог оставить — просим убрать.
     await abandon();
