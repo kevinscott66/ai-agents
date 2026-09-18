@@ -213,13 +213,32 @@ function prepareRequest(session: string, service: ShopService, place: ShopPlace 
  * закрытие браузера) — ещё около минуты. Все свои запросы сервер ставит в
  * очередь, так что `shop_busy` — это хвост брошенного запроса: переждать его
  * дешевле, чем отдать агенту отказ, после которого он бросает заказ.
+ *
+ * Переждать удаётся не всегда: 2026-09-18 после выкатки очереди Mac держал
+ * замок дольше этих 75 с. Поэтому если занятость не прошла за один опрос,
+ * сервер просит Mac сбросить браузер (op reset) — чужой хвост никому не нужен.
+ * Оформление с «Оплатить» Mac не сбрасывает (shop_paying), его сервер ждёт.
  */
 export const SHOP_BUSY_WAIT_MS = 75_000;
 const SHOP_BUSY_POLL_MS = 5_000;
+/** С какого по счёту shop_busy подряд просить сброс: первый может быть мгновенным хвостом. */
+const SHOP_BUSY_RESET_AT = 2;
+
+/** Сброс брошенного запуска. Сбой сброса (старый демон, обрыв) — только в журнал: дальше обычное ожидание. */
+async function resetMac(held: Extract<ShopOutcome, { ok: false }>, userId: string, chatId: number): Promise<void> {
+  const busy = { busy_op: held.busy_op ?? null, busy_ms: held.busy_ms ?? null };
+  try {
+    const out = await askYandexMac<ShopRequest, ShopOutcome>(deps.send, parseShopOutcome, "shop_failed", { op: "reset" }, userId, chatId);
+    log.warn("[shop] mac reset", { ...busy, ok: out.ok, ...(out.ok ? { reset: out.op === "reset" && out.reset } : { code: out.code }) });
+  } catch (e) {
+    log.warn("[shop] mac reset", { ...busy, error: errorText(e) });
+  }
+}
 
 /** Запрос к Mac → проверенный ответ. Ошибка моста — исключение с её кодом. */
 async function askMac(request: ShopRequest, userId: string, chatId: number): Promise<ShopOutcome> {
   const started = deps.now();
+  let busyCount = 0;
   for (;;) {
     let out: ShopOutcome;
     try {
@@ -231,9 +250,12 @@ async function askMac(request: ShopRequest, userId: string, chatId: number): Pro
     const busy = !out.ok && out.code === "shop_busy";
     if (!busy || deps.now() - started >= SHOP_BUSY_WAIT_MS) {
       // Только операция и исход: адреса и товары — личные, в журнал не идут.
-      log.info("[shop] mac", { op: request.op, ok: out.ok, ...(out.ok ? {} : { code: out.code }), ms: deps.now() - started });
+      const held = !out.ok && out.busy_op ? { busy_op: out.busy_op, busy_ms: out.busy_ms } : {};
+      log.info("[shop] mac", { op: request.op, ok: out.ok, ...(out.ok ? {} : { code: out.code }), ...held, ms: deps.now() - started });
       return out;
     }
+    busyCount++;
+    if (busyCount === SHOP_BUSY_RESET_AT && !out.ok) await resetMac(out, userId, chatId);
     await deps.sleep(SHOP_BUSY_POLL_MS);
   }
 }

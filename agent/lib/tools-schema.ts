@@ -554,7 +554,7 @@ export const TOOLS: Anthropic.Tool[] = [
   {
     name: "GET_LOGS",
     description:
-      "Read-only: последние действия агентов из audit-лога (agent/action/status/error). Для диагностики «что реально происходило / какие были ошибки». Фильтры: agentKey, status (напр. 'error'), limit (1..50, дефолт 20). Без payload/переписки.",
+      "Read-only: последние действия агентов из audit-лога (agent/action/status/error), включая каждый вызов инлайновых инструментов (TAXI_*, SHOP_*, DELIVERY_* и др.) с кодом отказа. Для диагностики «что реально происходило / какие были ошибки»: при сбое сначала посмотри сюда сам, а не проси владельца. Фильтры: agentKey, status (напр. 'error'), limit (1..50, дефолт 20). Без payload/переписки.",
     input_schema: {
       type: "object",
       properties: {
@@ -1158,10 +1158,76 @@ export { INLINE_TOOL_NAMES };
 
 const ROLE_KEYS_SET = new Set<string>(ROLE_KEYS);
 
+/** Инлайновые тулзы, которые пишут свою строку аудита сами. */
+const SELF_AUDITED_INLINE_TOOLS = new Set<string>(["QUERY_DB", "CANCEL_SCHEDULED_POST"]);
+
+/** Короткий код отказа попадает в журнал сервиса, свободный текст — нет: в нём бывают адреса. */
+const LOG_CODE = /^[a-z][a-z0-9_]{0,40}$/;
+
+/** Итог инлайновой тулзы из её JSON: ok или код/текст отказа. */
+export function inlineOutcome(text: string): { ok: boolean; error: string | null } {
+  let r: unknown;
+  try {
+    r = JSON.parse(text);
+  } catch {
+    return { ok: true, error: null };
+  }
+  if (!r || typeof r !== "object") return { ok: true, error: null };
+  const o = r as Record<string, unknown>;
+  if (o.ok !== false && o.error === undefined) return { ok: true, error: null };
+  const why = typeof o.code === "string" ? o.code : typeof o.error === "string" ? o.error : "error";
+  return { ok: false, error: why.slice(0, 300) };
+}
+
 /**
  * Диспатчер tool_use. Возвращает короткий JSON-текст для tool_result.
+ *
+ * Каждый вызов инлайновой тулзы — строка в agent_actions (ok/error, код отказа,
+ * длительность) и строка `[inline] tool` в журнале сервиса. Раньше их не было
+ * нигде: инцидент shop_busy 2026-09-18 было не восстановить, а агент не мог
+ * через GET_LOGS посмотреть собственные сбои. Вход не пишется — в нём адреса
+ * и запросы владельца.
  */
 export async function executeTool(
+  name: string,
+  input: unknown,
+  ctx: ExecCtx,
+): Promise<string> {
+  if (!INLINE_TOOL_NAMES.has(name)) return dispatchTool(name, input, ctx);
+  const started = Date.now();
+  let text: string;
+  try {
+    text = await dispatchTool(name, input, ctx);
+  } catch (e) {
+    auditInline(name, ctx, { ok: false, error: getErrorMessage(e).slice(0, 300) }, Date.now() - started);
+    throw e;
+  }
+  const outcome = inlineOutcome(text);
+  // Отказ лимитера уже записан в своей ветке.
+  if (!outcome.error?.startsWith("rate_limited")) auditInline(name, ctx, outcome, Date.now() - started);
+  return text;
+}
+
+function auditInline(name: string, ctx: ExecCtx, outcome: { ok: boolean; error: string | null }, ms: number): void {
+  const code = outcome.error === null ? undefined : LOG_CODE.test(outcome.error) ? outcome.error : "text";
+  log.info("[inline] tool", { tool: name, agentKey: ctx.agentKey, ok: outcome.ok, ...(code ? { code } : {}), ms });
+  if (SELF_AUDITED_INLINE_TOOLS.has(name)) return;
+  try {
+    logToolCall(name, {
+      agentKey: ctx.agentKey,
+      chatId: ctx.chatId ?? null,
+      payload: {},
+      status: outcome.ok ? "ok" : "error",
+      result: { ms },
+      error: outcome.error,
+      requestId: ctx.requestId ?? null,
+    });
+  } catch (e) {
+    log.warn("[inline] не удалось записать аудит", { tool: name, error: getErrorMessage(e) });
+  }
+}
+
+async function dispatchTool(
   name: string,
   input: unknown,
   ctx: ExecCtx,

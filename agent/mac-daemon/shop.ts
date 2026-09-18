@@ -242,6 +242,8 @@ export interface ShopRunnerOptions {
 export class ShopRunner {
   private browser: ShopBrowser | null = null;
   private busy = false;
+  /** Что держит замок и с какого момента — для ответа shop_busy и для reset. */
+  private current: { op: ShopRequest["op"]; since: number } | null = null;
   private session: Session | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly launch: ShopLauncher;
@@ -266,8 +268,13 @@ export class ShopRunner {
 
   async run(request: ShopRequest, signal?: AbortSignal): Promise<ShopOutcome> {
     if (this.env.SHOP_ENABLED !== "true") return { ok: false, code: "shop_disabled" };
-    if (this.busy) return { ok: false, code: "shop_busy" };
+    if (request.op === "reset") return this.reset();
+    if (this.busy) {
+      const held = this.current;
+      return { ok: false, code: "shop_busy", ...(held ? { busy_op: held.op, busy_ms: Math.max(0, this.now() - held.since) } : {}) };
+    }
     this.busy = true;
+    this.current = { op: request.op, since: this.now() };
     if (this.idleTimer) clearTimeout(this.idleTimer);
     // Присваивается внутри work — без приведения TS сузил бы до null.
     let page = null as ShopPage | null;
@@ -289,8 +296,24 @@ export class ShopRunner {
       return out;
     } finally {
       this.busy = false;
+      this.current = null;
       this.scheduleIdleClose();
     }
+  }
+
+  /**
+   * Брошенный запуск держит замок до своего дедлайна (до ~4 минут), и всё это
+   * время любой запрос получает shop_busy. Сервер шлёт запросы по одному, так что
+   * занятость, которую он видит, — чужой хвост: браузер закрывается, запуск падает
+   * на закрытой странице и отпускает замок. Оформление с «Оплатить» не рвётся —
+   * деньги могли уже уйти, и его итог нужен.
+   */
+  private async reset(): Promise<ShopOutcome> {
+    const held = this.current;
+    if (!this.busy || !held) return { ok: true, op: "reset", reset: false };
+    if (held.op === "confirm") return { ok: false, code: "shop_paying", busy_op: held.op, busy_ms: Math.max(0, this.now() - held.since) };
+    await this.close();
+    return { ok: true, op: "reset", reset: true };
   }
 
   async close(): Promise<void> {
@@ -445,6 +468,9 @@ export class ShopRunner {
         // С этого места деньги могли уйти: отказов «до заказа» больше нет.
         return { ok: true, op: "confirm", state: await this.pollState(page) };
       }
+      case "reset":
+        // run() обслуживает reset до замка; сюда он не доходит.
+        return { ok: true, op: "reset", reset: false };
       case "abandon": {
         const session = this.activeSession();
         if (session?.id === request.session) {
@@ -614,7 +640,20 @@ export async function runShopRequest(raw: unknown, signal?: AbortSignal): Promis
   const request = parseShopRequest(raw);
   if (!request) throw new Error("invalid_shop_request");
   runner ??= new ShopRunner(process.env);
-  return JSON.stringify(await runner.run(request, signal));
+  // Журнал демона без времени, а покупки без записей вовсе: shop_busy 2026-09-18
+  // было не с чем сверить. Здесь только операция и код — без адресов и товаров.
+  const started = Date.now();
+  const stamp = () => new Date().toISOString();
+  console.log(`[shop] ${stamp()} ${request.op} start`);
+  try {
+    const out = await runner.run(request, signal);
+    const busy = !out.ok && out.busy_op ? ` busy_op=${out.busy_op} busy_ms=${out.busy_ms ?? "?"}` : "";
+    console.log(`[shop] ${stamp()} ${request.op} ${out.ok ? "ok" : out.code}${busy} ${Date.now() - started}ms`);
+    return JSON.stringify(out);
+  } catch (e) {
+    console.log(`[shop] ${stamp()} ${request.op} error=${shopErrorCode(e)} ${Date.now() - started}ms`);
+    throw e;
+  }
 }
 
 export async function closeShopRunner(): Promise<void> {

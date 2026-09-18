@@ -149,8 +149,12 @@ export const SHOP_PRE_ORDER_CODES = [
   "session_unknown",
   "shop_busy",
 ] as const;
-export type ShopFailCode = (typeof SHOP_PRE_ORDER_CODES)[number];
-const FAIL_CODES: readonly string[] = SHOP_PRE_ORDER_CODES;
+export type ShopFailCode = (typeof SHOP_PRE_ORDER_CODES)[number] | "shop_paying";
+/**
+ * shop_paying — ответ на reset: браузер занят оформлением с «Оплатить», его не
+ * рвут. Не входит в SHOP_PRE_ORDER_CODES: кнопка там, возможно, уже нажата.
+ */
+const FAIL_CODES: readonly string[] = [...SHOP_PRE_ORDER_CODES, "shop_paying"];
 
 /** Потолок обещанного времени: дальше это уже не доставка, а ошибка разбора. */
 export const SHOP_ETA_MAX = 600;
@@ -267,7 +271,12 @@ export type ShopRequest =
   | { op: "confirm"; session: string; maxRub: number }
   | { op: "abandon"; session: string }
   | { op: "status"; service: ShopService }
-  | { op: "set_address"; service: ShopService; address: string };
+  | { op: "set_address"; service: ShopService; address: string }
+  /**
+   * Сбросить браузер, занятый брошенным запуском. Сервер шлёт запросы по одному,
+   * поэтому занятость, которую он видит, держит запрос, которого он уже не ждёт.
+   */
+  | { op: "reset" };
 
 /** Сколько сохранённых адресов читаем из окна выбора. */
 export const SHOP_ADDRESSES_MAX = 20;
@@ -341,7 +350,10 @@ export type ShopOutcome =
   | { ok: true; op: "status"; state: ShopOrderState; eta_min: number | null }
   /** Адрес после попытки: matched — нашёлся ровно один сохранённый и он выбран. */
   | { ok: true; op: "set_address"; matched: boolean; address: string | null; saved_count: number }
-  | { ok: false; code: ShopFailCode; price_rub?: number; screenshot?: string };
+  /** reset: true — браузер был занят и закрыт; false — занят не был. */
+  | { ok: true; op: "reset"; reset: boolean }
+  /** busy_op/busy_ms — у shop_busy: чем занят браузер и сколько уже. */
+  | { ok: false; code: ShopFailCode; price_rub?: number; screenshot?: string; busy_op?: ShopRequest["op"]; busy_ms?: number };
 
 const isService = (v: unknown): v is ShopService => typeof v === "string" && Object.hasOwn(SHOP_SERVICES, v);
 const keysOf = (m: Record<string, unknown>) => Object.keys(m).sort().join(",");
@@ -490,6 +502,8 @@ function parseLines(raw: unknown, service: ShopService): ShopLine[] | null {
   return new Set(lines.map(lineKey)).size === lines.length ? lines : null;
 }
 
+const SHOP_OPS = ["quote", "places", "prepare", "confirm", "abandon", "status", "set_address", "reset"] as const satisfies readonly ShopRequest["op"][];
+
 /** Строгий разбор кадра: лишние поля и ненормализованные строки — отказ. */
 export function parseShopRequest(raw: unknown): ShopRequest | null {
   if (!isObject(raw)) return null;
@@ -537,6 +551,8 @@ export function parseShopRequest(raw: unknown): ShopRequest | null {
       const address = normalizeShopAddress(m.address);
       return address && address === m.address && address.length >= 3 ? { op: "set_address", service: m.service, address } : null;
     }
+    case "reset":
+      return keys === "op" ? { op: "reset" } : null;
     default:
       return null;
   }
@@ -612,10 +628,14 @@ export function parseShopOutcome(raw: string, expected: ShopRequest["op"]): Shop
     if (typeof d.code !== "string" || !FAIL_CODES.includes(d.code)) return bad();
     if (d.price_rub !== undefined && !isRub(d.price_rub)) return bad();
     if (d.screenshot !== undefined && !b64(d.screenshot)) return bad();
+    if (d.busy_op !== undefined && !(SHOP_OPS as readonly unknown[]).includes(d.busy_op)) return bad();
+    if (d.busy_ms !== undefined && !(Number.isSafeInteger(d.busy_ms) && (d.busy_ms as number) >= 0)) return bad();
     return {
       ok: false, code: d.code as ShopFailCode,
       ...(d.price_rub !== undefined ? { price_rub: d.price_rub as number } : {}),
       ...(d.screenshot !== undefined ? { screenshot: d.screenshot as string } : {}),
+      ...(d.busy_op !== undefined ? { busy_op: d.busy_op as ShopRequest["op"] } : {}),
+      ...(d.busy_ms !== undefined ? { busy_ms: d.busy_ms as number } : {}),
     };
   }
   if (d.ok !== true || d.op !== expected) return bad();
@@ -670,6 +690,8 @@ export function parseShopOutcome(raw: string, expected: ShopRequest["op"]): Shop
     }
     case "abandon":
       return { ok: true, op: "abandon" };
+    case "reset":
+      return typeof d.reset === "boolean" ? { ok: true, op: "reset", reset: d.reset } : bad();
     case "set_address": {
       const address = d.address === null ? null : normalizeShopAddress(d.address);
       if (d.address !== null && (!address || address !== d.address)) return bad();
@@ -718,6 +740,7 @@ export const SHOP_FAIL_LABEL: Record<ShopFailCode, string> = {
   pay_button_missing: "кнопка оплаты не найдена",
   session_unknown: "подготовленный заказ не найден или устарел",
   shop_busy: "браузер покупок занят другим запросом",
+  shop_paying: "браузер покупок оформляет оплату — его не сбрасывают",
 };
 
 export const shopLineSum = (lines: ReadonlyArray<{ qty: number; price_rub: number }>) =>

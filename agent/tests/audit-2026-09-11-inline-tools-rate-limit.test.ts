@@ -109,12 +109,14 @@ describe("инлайновые инструменты тратят общий м
     ).toBe(true);
   });
 
-  test("успешный вызов строки не заводит — журнал считает отказы", async () => {
+  // С 2026-09-18 каждый инлайновый вызов пишет свою строку ok/error
+  // (tests/inline-tool-audit.test.ts), но шторм по ней не поднимается.
+  test("вызов в пределах ведра — не rate_limited, шторм не считает", async () => {
     await executeTool("READ_WIKI", { scope: "_team", slug: "нет-такой" }, CTX);
     const rows = db
-      .prepare(`SELECT COUNT(*) AS n FROM agent_actions WHERE agent_key = ?`)
-      .get(CTX.agentKey) as { n: number };
-    expect(rows.n).toBe(0);
+      .prepare(`SELECT status FROM agent_actions WHERE agent_key = ?`)
+      .all(CTX.agentKey) as { status: string }[];
+    expect(rows.map((r) => r.status)).toEqual(["error"]);
   });
 
   test("проверка стоит в общем блоке — значит накрывает весь список", () => {
