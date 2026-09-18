@@ -292,6 +292,8 @@ export interface OrderFoodPayload {
   /** price_rub — за штуку с доплатами за опции; options — только у блюд Еды, как в SHOP_QUOTE. */
   lines: Array<{ id: string; name: string; qty: number; price_rub: number; options?: ShopOptionPick[] }>;
   delivery_rub: number;
+  /** Итог к оплате из SHOP_CHECKOUT: доставка и сборы уже внутри. Он и подписывается. */
+  total_rub: number;
   _userId?: string;
   _delegated?: boolean;
 }

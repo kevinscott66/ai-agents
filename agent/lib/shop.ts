@@ -742,7 +742,20 @@ export interface OrderFoodView {
   place?: string;
   lines: Array<{ id: string; name: string; qty: number; price_rub: number; options?: ShopOptionPick[] }>;
   delivery_rub: number;
+  /**
+   * Итог со страницы оформления из SHOP_CHECKOUT — с доставкой, сервисным
+   * сбором и доплатой за маленький заказ. Есть у Лавки и Еды, у Маркета нет.
+   */
+  total_rub?: number;
 }
+
+/**
+ * Итог SHOP_CHECKOUT против товаров и доставки: сборы сверху не больше
+ * тысячи, скидка — не ниже половины суммы. Остальное — чужая вёрстка.
+ */
+export const SHOP_CHECKOUT_EXTRA_MAX = 1_000;
+export const shopCheckoutTotalFits = (total: number, base: number) =>
+  isRub(total) && total <= base + SHOP_CHECKOUT_EXTRA_MAX && total * 2 >= base;
 
 /**
  * Разбор payload ORDER_FOOD и MARKET_PURCHASE (build-payload его уже
@@ -766,15 +779,46 @@ export function parseOrderFood(p: Record<string, unknown>): OrderFoodView | null
     lines.push(line);
   }
   if (new Set(lines.map(lineKey)).size !== lines.length) return null;
-  return { service: p.service, ...(p.place !== undefined ? { place: p.place as string } : {}), lines, delivery_rub: p.delivery_rub };
+  if (p.total_rub !== undefined && (p.service === "market" || !shopCheckoutTotalFits(p.total_rub as number, shopLineSum(lines) + p.delivery_rub))) return null;
+  return {
+    service: p.service,
+    ...(p.place !== undefined ? { place: p.place as string } : {}),
+    lines,
+    delivery_rub: p.delivery_rub,
+    ...(p.total_rub !== undefined ? { total_rub: p.total_rub as number } : {}),
+  };
 }
+
+/**
+ * Сырые позиции из вызова инструмента → вид для parseOrderFood: название
+ * нормализовано, пустой список опций — то же, что без опций. Проверки — там.
+ */
+export function shopOrderLinesInput(raw: unknown[]): Array<Record<string, unknown>> {
+  return raw.map((l) => {
+    const o = (l && typeof l === "object" ? l : {}) as Record<string, unknown>;
+    const options = Array.isArray(o.options) && o.options.length === 0 ? undefined : o.options === undefined ? undefined : parseShopOptionPicks(o.options, true) ?? o.options;
+    return { id: o.id, name: normalizeShopName(o.name), qty: o.qty, price_rub: o.price_rub, ...(options !== undefined ? { options } : {}) };
+  });
+}
+
+/** Сколько к товарам и доставке добавило оформление: сборы (плюс) или скидка (минус). */
+export const shopOrderExtra = (o: Pick<OrderFoodView, "lines" | "delivery_rub" | "total_rub">) =>
+  o.total_rub === undefined ? 0 : o.total_rub - shopLineSum(o.lines) - o.delivery_rub;
+
+/** Сумма к подписи: итог оформления, если он есть, иначе товары плюс доставка. */
+export const shopOrderAmount = (o: Pick<OrderFoodView, "lines" | "delivery_rub" | "total_rub">) =>
+  o.total_rub ?? shopLineSum(o.lines) + o.delivery_rub;
+
+/** «сборы 79 ₽» / «скидка 30 ₽» / "" — как карточка и подпись называют разницу. */
+export const shopExtraText = (extra: number) => (extra > 0 ? `сборы ${extra} ₽` : extra < 0 ? `скидка ${-extra} ₽` : "");
 
 /** Карточка ORDER_FOOD и MARKET_PURCHASE в чате: то же, что потом подпишет телефон. */
 export function describeOrderFood(p: Record<string, unknown>, deviationPct: number): string {
   const o = parseOrderFood(p);
   if (!o) return "некорректный заказ";
-  const amount = shopLineSum(o.lines) + o.delivery_rub;
+  const amount = shopOrderAmount(o);
   const delivery = o.service === "market" ? `доставка до ${o.delivery_rub} ₽` : `доставка ${o.delivery_rub} ₽`;
-  return `${shopStoreLabel(o.service, o.place)}: ${o.lines.map(shopLineText).join("; ")}; ${delivery}. ` +
+  const extra = shopExtraText(shopOrderExtra(o));
+  return `${shopStoreLabel(o.service, o.place)}: ${o.lines.map(shopLineText).join("; ")}; ${delivery}${extra ? `; ${extra}` : ""}. ` +
     `Всего ${amount} ₽ (итог на странице — не больше ${shopMaxFinal(amount, deviationPct)} ₽), дальше — подпись на телефоне`;
 }

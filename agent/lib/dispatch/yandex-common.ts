@@ -107,9 +107,9 @@ export function gateIssueError(e: unknown, overrides: Partial<Record<string, str
 export function serialQueue() {
   let queue: Promise<void> = Promise.resolve();
   return {
-    run(task: () => Promise<void>): Promise<void> {
+    run<T>(task: () => Promise<T>): Promise<T> {
       const run = queue.then(task);
-      queue = run.catch(() => {});
+      queue = run.then(() => {}, () => {});
       return run;
     },
     reset() {

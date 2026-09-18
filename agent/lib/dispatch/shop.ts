@@ -6,9 +6,15 @@
  *   SHOP_QUOTE  {service?, place?, max_eta_min?, queries} — инлайново: адрес, доставка,
  *                                                         ресторан (Еда) и до трёх
  *                                                         товаров на запрос;
- *   ORDER_FOOD  {service, place?, lines[{id,name,qty,price_rub,options?}], delivery_rub}
+ *   SHOP_CHECKOUT {service, place?, lines[…]}           — инлайново: выбранное в пустую
+ *                                                         корзину, итог со страницы
+ *                                                         оформления (сервисный сбор,
+ *                                                         маленький заказ), корзину —
+ *                                                         обратно пустой;
+ *   ORDER_FOOD  {service, place?, lines[{id,name,qty,price_rub,options?}], delivery_rub, total_rub}
  *                                                       — карточка в чате (money), затем
- *                                                         заявка в подписанный гейт;
+ *                                                         заявка в подписанный гейт на
+ *                                                         итог из SHOP_CHECKOUT;
  *   MARKET_PURCHASE {lines[…], delivery_rub}            — то же для Маркета; доставка
  *                                                         там видна только на оформлении,
  *                                                         поэтому delivery_rub — сколько
@@ -41,6 +47,11 @@ import {
   normalizeShopAddress,
   normalizeShopPlaceName,
   normalizeShopQuery,
+  parseOrderFood,
+  shopCheckoutTotalFits,
+  shopExtraText,
+  shopOrderExtra,
+  shopOrderLinesInput,
   normalizeShopService,
   parseShopOutcome,
   resolveShopOptions,
@@ -119,6 +130,8 @@ interface Quote {
   delivery_rub: number | null;
   items: Map<string, ShopCandidate>;
   at: number;
+  /** Последний SHOP_CHECKOUT по этому расчёту: какие позиции и какой итог. */
+  checkout?: { key: string; total_rub: number; at: number };
 }
 interface PendingOrder {
   payload: string;
@@ -266,6 +279,100 @@ export async function listShopPlaces(input: Record<string, unknown>, ctx: ShopIn
   }
 }
 
+/**
+ * SHOP_CHECKOUT: выбранные позиции в пустую корзину, итог со страницы
+ * оформления — туда Еда и Лавка добавляют сервисный сбор и доплату за
+ * маленький заказ, которых нет в меню, — и корзину обратно пустой. Денег не
+ * трогает: «Оплатить» жмёт только исполнитель после подписи. Итог
+ * запоминается при расчёте, ORDER_FOOD подписывает ровно его.
+ */
+export async function checkoutShop(input: Record<string, unknown>, ctx: ShopInlineContext): Promise<ShopToolResult> {
+  const refusal = ownerRefusal(ctx.agentKey, ctx.chatId, ctx.triggerUserId, inlineDelegated(ctx));
+  if (refusal) return { ok: false, error: refusal };
+  const service = normalizeShopService(input.service);
+  if (!service) return { ok: false, error: `service must be one of: ${Object.keys(SHOP_SERVICES).join(", ")}` };
+  if (service === "market") return { ok: false, error: "у Маркета доставка видна только на оформлении: сразу MARKET_PURCHASE" };
+  const userId = ctx.triggerUserId!;
+  const quote = quotes.get(userId);
+  if (!quote || deps.now() - quote.at > SHOP_QUOTE_TTL_MS || quote.service !== service) {
+    return { ok: false, error: "нет свежего расчёта в этом магазине: сначала SHOP_QUOTE" };
+  }
+  if (!Array.isArray(input.lines) || input.lines.length < 1 || input.lines.length > SHOP_ITEMS_MAX) {
+    return { ok: false, error: `lines — от 1 до ${SHOP_ITEMS_MAX} товаров из SHOP_QUOTE` };
+  }
+  const parsed = parseOrderFood({
+    service,
+    ...(input.place !== undefined ? { place: normalizeShopPlaceName(input.place) } : {}),
+    lines: shopOrderLinesInput(input.lines),
+    delivery_rub: quote.delivery_rub ?? 0,
+  });
+  if (!parsed) return { ok: false, error: "каждый товар — {id, name, qty, price_rub, options?} ровно как для ORDER_FOOD" };
+  if ((quote.place?.name ?? undefined) !== parsed.place) {
+    return { ok: false, error: `в расчёте ресторан «${quote.place?.name ?? "—"}», а здесь «${parsed.place ?? "—"}»: пересчитай через SHOP_QUOTE` };
+  }
+  const checked = checkLines(quote, parsed.lines);
+  if ("error" in checked) return { ok: false, error: checked.error };
+  const lines = checked.lines;
+  // Тот же исполнитель, что у подписанных заказов: браузер один, пусть ждёт, а не отбивается «занят».
+  return executor.run(async () => {
+    const session = deps.session();
+    let out: ShopOutcome;
+    try {
+      out = await askMac(
+        {
+          op: "prepare",
+          session,
+          service,
+          ...(quote.place ? { place: quote.place.ref } : {}),
+          lines: lines.map(({ id, name, qty, options }) => ({ id, name, qty, ...(options ? { options } : {}) })),
+        },
+        userId,
+        ctx.chatId,
+      );
+    } catch (e) {
+      await deps.send({ op: "abandon", session }, userId, ctx.chatId).catch(() => {});
+      return { ok: false, error: `${errorText(e)}; корзину попросил очистить` };
+    }
+    // Корзина собрана (или собрана наполовину, если Mac отказал) — очищаем сразу,
+    // до любых проверок: заказ сделает исполнитель заново.
+    let cleared = true;
+    try {
+      const done = await askMac({ op: "abandon", session }, userId, ctx.chatId);
+      cleared = done.ok;
+    } catch {
+      cleared = false;
+    }
+    if (!out.ok) return { ok: false, error: `${failText(out)}${cleared ? "" : "; корзину очистить не удалось"}`, code: out.code };
+    if (!cleared) return { ok: false, error: "итог прочитан, но корзину очистить не удалось — пусть владелец проверит корзину, потом повтори" };
+    if (out.op !== "prepare") return { ok: false, error: "invalid_shop_result" };
+    if (out.address !== quote.address) {
+      return { ok: false, error: "адрес доставки на сайте сменился после расчёта: пересчитай через SHOP_QUOTE" };
+    }
+    const delivery = quote.delivery_rub ?? 0;
+    const base = shopLineSum(lines) + delivery;
+    if (!shopCheckoutTotalFits(out.total_rub, base)) return { ok: false, error: "invalid_shop_result" };
+    quote.checkout = { key: linesKey(lines), total_rub: out.total_rub, at: deps.now() };
+    const extra = shopOrderExtra({ lines, delivery_rub: delivery, total_rub: out.total_rub });
+    return {
+      ok: true,
+      service,
+      store: SHOP_SERVICES[service],
+      ...(quote.place ? { place: quote.place.name } : {}),
+      items_rub: shopLineSum(lines),
+      delivery_rub: delivery,
+      extra_rub: extra,
+      total_rub: out.total_rub,
+      note:
+        "Корзина снова пуста, ничего не заказано. total_rub — сколько спишут на самом деле: " +
+        (extra > 0
+          ? `сверху товаров и доставки ${shopExtraText(extra)} (сервисный сбор, доплата за маленький заказ). Назови владельцу итог и из чего он сложился; ` +
+            "если часть — доплата за маленький заказ, предложи добавить позицию (новый SHOP_QUOTE и SHOP_CHECKOUT) — решает владелец. "
+          : extra < 0 ? `это на ${-extra} ₽ меньше товаров с доставкой — скидка или промокод. ` : "сборов сверху нет. ") +
+        "Согласие владельца на эту сумму — только его слова в чате, за него не решай. Дальше — ORDER_FOOD с этими же позициями и total_rub ровно отсюда.",
+    };
+  });
+}
+
 /** SHOP_STATUS: что сейчас с последним заказом. */
 export async function shopStatus(input: Record<string, unknown>, ctx: ShopInlineContext): Promise<ShopToolResult> {
   const refusal = ownerRefusal(ctx.agentKey, ctx.chatId, ctx.triggerUserId, inlineDelegated(ctx));
@@ -350,7 +457,7 @@ export async function handleMarketPurchase(payload: PayloadByType["MARKET_PURCHA
   return issueShopOrder("market", payload, ctx);
 }
 
-type OrderInput = { place?: string; lines: OrderLines; delivery_rub: number; _userId?: string; _delegated?: boolean };
+type OrderInput = { place?: string; lines: OrderLines; delivery_rub: number; total_rub?: number; _userId?: string; _delegated?: boolean };
 
 async function issueShopOrder(service: ShopService, payload: OrderInput, ctx: ShopHandlerContext): Promise<HandlerResult> {
   const refusal = ownerRefusal(ctx.agentKey, ctx.chatId, payload._userId, payload._delegated === true);
@@ -365,25 +472,9 @@ async function issueShopOrder(service: ShopService, payload: OrderInput, ctx: Sh
   if ((quote.place?.name ?? undefined) !== (payload.place === undefined ? undefined : normalizeShopPlaceName(payload.place))) {
     return { ok: false, error: `в расчёте ресторан «${quote.place?.name ?? "—"}», а в заявке «${payload.place ?? "—"}»: пересчитай через SHOP_QUOTE` };
   }
-  const signedLines: OrderLines = [];
-  for (const line of lines) {
-    const item = quote.items.get(line.id);
-    if (!item) return { ok: false, error: `товара ${line.id} не было в расчёте` };
-    // Опции сверяются с группами расчёта: обязательные выбраны, лимиты соблюдены, доплаты посчитаны.
-    const options = resolveShopOptions(item.options, line.options);
-    if (!options.ok) return { ok: false, error: `«${item.name}»: ${options.error}` };
-    const unit = item.price_rub + options.extra_rub;
-    if (item.name !== line.name || unit !== line.price_rub) {
-      return {
-        ok: false,
-        error: `в расчёте «${item.name}»${options.extra_rub ? ` с выбранными опциями` : ""} за ${unit} ₽, а в заявке «${line.name}» за ${line.price_rub} ₽: исправь заявку или пересчитай через SHOP_QUOTE`,
-      };
-    }
-    signedLines.push({ id: line.id, name: line.name, qty: line.qty, price_rub: unit, ...(options.picks.length ? { options: options.picks } : {}) });
-  }
-  if (new Set(signedLines.map((l) => `${l.id}\n${(l.options ?? []).map((o) => o.name).sort().join("\n")}`)).size !== signedLines.length) {
-    return { ok: false, error: "одинаковое блюдо с одинаковыми опциями — одной строкой с qty" };
-  }
+  const checked = checkLines(quote, lines);
+  if ("error" in checked) return { ok: false, error: checked.error };
+  const signedLines = checked.lines;
   // Маркет не показывает доставку до оформления: владелец называет, сколько готов за неё отдать.
   const deliveryCap = service === "market" && quote.delivery_rub === null;
   if (deliveryCap ? !(Number.isSafeInteger(delivery) && delivery >= 0 && delivery <= MARKET_DELIVERY_MAX) : delivery !== (quote.delivery_rub ?? 0)) {
@@ -394,8 +485,24 @@ async function issueShopOrder(service: ShopService, payload: OrderInput, ctx: Sh
         : `доставка в расчёте ${quote.delivery_rub ?? 0} ₽, а в заявке ${delivery} ₽`,
     };
   }
-  const amount = shopLineSum(signedLines) + delivery;
+  // Лавка и Еда подписывают итог со страницы оформления: только он знает
+  // сервисный сбор и доплату за маленький заказ. Без него подписанная сумма
+  // ниже настоящей, и исполнитель честно откажет на сверке.
+  let amount = shopLineSum(signedLines) + delivery;
+  if (service !== "market") {
+    const checkout = quote.checkout;
+    if (!checkout || checkout.key !== linesKey(signedLines) || now - checkout.at > SHOP_QUOTE_TTL_MS) {
+      return { ok: false, error: "нет свежего SHOP_CHECKOUT ровно с этими позициями: сначала SHOP_CHECKOUT и новое подтверждение" };
+    }
+    if (payload.total_rub !== checkout.total_rub) {
+      return { ok: false, error: `итог в SHOP_CHECKOUT ${checkout.total_rub} ₽, а в заявке ${payload.total_rub ?? "—"} ₽: исправь заявку` };
+    }
+    amount = checkout.total_rub;
+  }
   const params = gateParams(quote, signedLines, delivery);
+  const extra = amount - shopLineSum(signedLines) - delivery;
+  if (extra > 0) params.fees_rub = extra;
+  if (extra < 0) params.discount_rub = -extra;
   if (Object.values(params).some((v) => typeof v === "string" && v.length > SHOP_LINE_TEXT_MAX)) {
     return { ok: false, error: `строка позиции длиннее ${SHOP_LINE_TEXT_MAX} символов — раздели заказ или выбери меньше опций` };
   }
@@ -412,13 +519,43 @@ async function issueShopOrder(service: ShopService, payload: OrderInput, ctx: Sh
         status: "awaiting_signature",
         amount_rub: amount,
         max_final_rub: shopMaxFinal(amount, deps.gate().limits.deviationPct),
-        note: "Заказ ещё НЕ сделан. Владелец подтверждает его Face ID в приложении в течение 2 минут; результат придёт отдельным сообщением.",
+        note:
+          "Заказ ещё НЕ сделан. Владелец подписывает его Face ID в приложении в течение 2 минут; после подписи Mac сам соберёт корзину, " +
+          "заполнит контакты и нажмёт «Оплатить» — владельцу на сайте или в приложении Еды ничего нажимать и заполнять не надо. Результат придёт отдельным сообщением.",
       },
     };
   } catch (e) {
     return { ok: false, error: gateIssueError(e) };
   }
 }
+
+/** Позиции заявки против расчёта: те же товары, названия, опции и цены. */
+function checkLines(quote: Quote, lines: OrderLines): { lines: OrderLines } | { error: string } {
+  const signedLines: OrderLines = [];
+  for (const line of lines) {
+    const item = quote.items.get(line.id);
+    if (!item) return { error: `товара ${line.id} не было в расчёте` };
+    // Опции сверяются с группами расчёта: обязательные выбраны, лимиты соблюдены, доплаты посчитаны.
+    const options = resolveShopOptions(item.options, line.options);
+    if (!options.ok) return { error: `«${item.name}»: ${options.error}` };
+    const unit = item.price_rub + options.extra_rub;
+    if (item.name !== line.name || unit !== line.price_rub) {
+      return {
+        error: `в расчёте «${item.name}»${options.extra_rub ? ` с выбранными опциями` : ""} за ${unit} ₽, а в заявке «${line.name}» за ${line.price_rub} ₽: исправь заявку или пересчитай через SHOP_QUOTE`,
+      };
+    }
+    signedLines.push({ id: line.id, name: line.name, qty: line.qty, price_rub: unit, ...(options.picks.length ? { options: options.picks } : {}) });
+  }
+  if (new Set(signedLines.map(lineIdentity)).size !== signedLines.length) {
+    return { error: "одинаковое блюдо с одинаковыми опциями — одной строкой с qty" };
+  }
+  return { lines: signedLines };
+}
+
+const lineIdentity = (l: OrderLines[number]) => `${l.id}\n${(l.options ?? []).map((o) => o.name).sort().join("\n")}`;
+
+/** Позиции с количеством — ключ, по которому заявка находит свой SHOP_CHECKOUT. */
+const linesKey = (lines: OrderLines) => lines.map((l) => `${lineIdentity(l)}\n${l.qty}\n${l.price_rub}`).sort().join("\n\n");
 
 const tell = yandexTeller("shop", () => deps.notify);
 
