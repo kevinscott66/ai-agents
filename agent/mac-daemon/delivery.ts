@@ -34,7 +34,7 @@ import {
   type DeliveryTariff,
 } from "../lib/delivery.ts";
 import { DELIVERY_STATE_POLL } from "./delivery-selectors.ts";
-import { ensureLoginProfileDir, printOutcome, profileDirProblem, runCli, runnerErrorCode, waitForEnter } from "./runner-kit.ts";
+import { ensureLoginProfileDir, printOutcome, profileDirProblem, runCli, runnerErrorCode, waitForEnter, settleOrRelease } from "./runner-kit.ts";
 
 export interface DeliveryEnv {
   DELIVERY_ENABLED?: string;
@@ -119,12 +119,23 @@ interface Session {
   expires: number;
 }
 
+/**
+ * Жёсткий срок одного запроса к исполнителю. Мост ждёт MAC_DELIVERY_TIMEOUT_MS (90 с) и
+ * по таймауту шлёт отмену; срок нужен на случай, когда отмена не дошла
+ * (сокет порвался). Больше мостового — чтобы сервер никогда не получил от демона
+ * отказ раньше собственного таймаута.
+ */
+export const DELIVERY_RUN_DEADLINE_MS = 120_000;
+
 export interface DeliveryRunnerOptions {
   launch?: DeliveryLauncher;
   checkProfile?: (env: DeliveryEnv) => string;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   idleMs?: number;
+  deadlineMs?: number;
+  /** Только для тестов: сколько ждать, что зависший шаг закончится сам. */
+  selfSettleMs?: number;
 }
 
 export class DeliveryRunner {
@@ -137,6 +148,10 @@ export class DeliveryRunner {
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly idleMs: number;
+  private readonly deadlineMs: number;
+  private readonly selfSettleMs: number | undefined;
+  /** Растёт на каждом close(): запуск, закончившийся после закрытия, — сирота. */
+  private generation = 0;
 
   constructor(private readonly env: DeliveryEnv, opts: DeliveryRunnerOptions = {}) {
     this.launch = opts.launch ?? (async (e, dir) => (await import("./delivery-playwright.ts")).launchPlaywrightDelivery(e, dir));
@@ -144,6 +159,8 @@ export class DeliveryRunner {
     this.now = opts.now ?? Date.now;
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.idleMs = opts.idleMs ?? 5 * 60_000;
+    this.deadlineMs = opts.deadlineMs ?? DELIVERY_RUN_DEADLINE_MS;
+    this.selfSettleMs = opts.selfSettleMs;
   }
 
   async run(request: DeliveryRequest, signal?: AbortSignal): Promise<DeliveryOutcome> {
@@ -151,10 +168,15 @@ export class DeliveryRunner {
     if (this.busy) return { ok: false, code: "delivery_busy" };
     this.busy = true;
     if (this.idleTimer) clearTimeout(this.idleTimer);
-    let page: DeliveryPage | null = null;
-    try {
+    // Присваивается внутри work — без приведения TS сузил бы до null.
+    let page = null as DeliveryPage | null;
+    const work = (async () => {
       page = await this.page();
-      return await this.dispatch(page, request, signal);
+      return this.dispatch(page, request, signal);
+    })();
+    try {
+      // Зависший шаг не держит замок вечно: см. settleOrRelease.
+      return await settleOrRelease(work, { signal, deadlineMs: this.deadlineMs, selfSettleMs: this.selfSettleMs, release: () => this.close() });
     } catch (e) {
       if (!(e instanceof DeliveryError)) throw e;
       if (e.code === "session_unknown" || e.code === "delivery_busy") return { ok: false, code: e.code };
@@ -174,6 +196,7 @@ export class DeliveryRunner {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = null;
     this.session = null;
+    this.generation++;
     const browser = this.browser;
     this.browser = null;
     await browser?.close().catch(() => {});
@@ -188,12 +211,21 @@ export class DeliveryRunner {
   private async page(): Promise<DeliveryPage> {
     if (!this.browser) {
       const dir = this.checkProfile(this.env);
+      const generation = this.generation;
+      let browser: DeliveryBrowser;
       try {
-        this.browser = await this.launch(this.env, dir);
+        browser = await this.launch(this.env, dir);
       } catch (e) {
         if (e instanceof DeliveryError) throw e;
         throw new DeliveryError("browser_unavailable");
       }
+      // Запуск завис, исполнитель тем временем закрыли и отпустили замок —
+      // поздний браузер никому не нужен, а профиль он держал бы.
+      if (generation !== this.generation) {
+        await browser.close().catch(() => {});
+        throw new DeliveryError("browser_unavailable");
+      }
+      this.browser = browser;
     }
     return this.browser.page();
   }

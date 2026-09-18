@@ -58,3 +58,58 @@ export function runCli(main: () => Promise<void>, knownCode: (e: unknown) => str
     process.exit(1);
   });
 }
+
+/** Сколько ждать, пока зависший шаг сам упадёт после закрытия браузера. */
+export const STUCK_GRACE_MS = 5_000;
+/** Сколько после отмены/срока ждать, что шаг закончится сам, — до закрытия браузера. */
+export const SELF_SETTLE_MS = 20_000;
+
+/**
+ * Не дать одному зависшему шагу навсегда занять исполнитель.
+ *
+ * Замок исполнителя (`busy`) снимается в `finally` у `run()`, а до него
+ * доходит только завершённый шаг. Отмену мост присылает по своему таймауту,
+ * но исполнитель видит её лишь между шагами: зависший `page.evaluate` или
+ * навигация без таймаута не вернутся никогда. Так и было 2026-09-18 — браузера
+ * уже нет, а на каждый запрос `shop_busy`, пока демон не перезапустили руками.
+ *
+ * Здесь работа гонится с отменой и жёстким сроком. Проиграла — сначала даём
+ * ей `selfSettleMs` закончиться самой: живой, просто медленный шаг на отмене
+ * сам уберёт за собой корзину, а закрытый браузер эту уборку оборвал бы. Не
+ * закончилась — вызываем `release` (закрыть браузер: висящие вызовы Playwright
+ * на закрытой странице падают сразу), даём до `graceMs` доупасть, чтобы
+ * следующий запрос не наложился на хвост прошлого, и отдаём ошибку. `run()`
+ * дальше снимет замок своим обычным `finally`.
+ */
+export async function settleOrRelease<T>(
+  work: Promise<T>,
+  o: { signal?: AbortSignal; deadlineMs: number; release: () => Promise<void>; graceMs?: number; selfSettleMs?: number },
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  const stuck = new Promise<Error>((resolve) => {
+    timer = setTimeout(() => resolve(new Error("runner_stuck")), o.deadlineMs);
+    if (!o.signal) return;
+    onAbort = () => resolve(new Error("assistant_cancelled"));
+    if (o.signal.aborted) onAbort();
+    else o.signal.addEventListener("abort", onAbort, { once: true });
+  });
+  // Исход работы запоминаем сразу: иначе её отказ после проигрыша гонки стал бы
+  // необработанным отклонением промиса.
+  const outcome = work.then((value) => ({ value }), (error: unknown) => ({ error }));
+  try {
+    const first = await Promise.race([outcome, stuck.then((cause) => ({ cause }))]);
+    if ("value" in first) return first.value;
+    if ("error" in first) throw first.error;
+    const wait = (ms: number) => new Promise<null>((r) => setTimeout(() => r(null), ms));
+    const own = await Promise.race([outcome, wait(o.selfSettleMs ?? SELF_SETTLE_MS)]);
+    if (own && "value" in own) return own.value;
+    if (own) throw own.error;
+    await o.release().catch(() => {});
+    await Promise.race([outcome, wait(o.graceMs ?? STUCK_GRACE_MS)]);
+    throw first.cause;
+  } finally {
+    clearTimeout(timer);
+    if (onAbort) o.signal?.removeEventListener("abort", onAbort);
+  }
+}
