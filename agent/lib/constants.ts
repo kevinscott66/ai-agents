@@ -202,4 +202,5 @@ export const INLINE_TOOL_NAMES = new Set<string>([
   "DELIVERY_STATUS",
   "SCHEDULE_FOLLOWUP",
   "CANCEL_FOLLOWUP",
+  "SHOP_REPAIR",
 ]);

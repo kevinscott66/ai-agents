@@ -1738,6 +1738,33 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    // Починка селекторов покупок (SHOP_REPAIR, lib/shop-repair.ts): журнал
+    // запусков для потолков — одна одновременно, сервис раз в 12 часов, три
+    // за сутки. Итог владельцу приходит отложенной проверкой (followups).
+    // Застрявший 'running' (рестарт посреди починки) становится 'failed'.
+    name: "067_selector_repairs",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS selector_repairs (
+          id TEXT PRIMARY KEY,
+          service TEXT NOT NULL,
+          code TEXT NOT NULL,
+          chat_id INTEGER NOT NULL,
+          user_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'running'
+            CHECK (status IN ('running','done','failed','no_change')),
+          pr_url TEXT,
+          error TEXT,
+          created_at INTEGER NOT NULL,
+          finished_at INTEGER
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_selector_repairs_created
+          ON selector_repairs(created_at);
+      `);
+    },
+  },
 ];
 
 /**

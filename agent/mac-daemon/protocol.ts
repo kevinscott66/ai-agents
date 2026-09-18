@@ -23,6 +23,7 @@ import { parseMacControl, type MacControl } from "../lib/mac-control.ts";
 import { parseTaxiRequest, type TaxiRequest } from "../lib/taxi.ts";
 import { parseShopRequest, type ShopRequest } from "../lib/shop.ts";
 import { parseDeliveryRequest, type DeliveryRequest } from "../lib/delivery.ts";
+import { parseRepairRequest, type RepairRequest } from "../lib/selector-repair.ts";
 
 /** Режимы разрешений, которые понимает демон (их пять, у CLI — четыре). */
 export const RUN_MODES = [
@@ -118,8 +119,19 @@ export interface DeliveryMsg {
   request: DeliveryRequest;
 }
 
+/**
+ * Починка селекторов (mac-daemon/selector-repair.ts). Только {service, code}:
+ * задание починщику демон собирает сам, свободного текста в кадре нет.
+ */
+export interface RepairMsg {
+  type: "repair";
+  id: string;
+  request: RepairRequest;
+}
+
 export type BridgeMsg =
   | AssistantMsg
+  | RepairMsg
   | ControlMsg
   | TaxiMsg
   | ShopMsg
@@ -184,6 +196,11 @@ export function parseBridgeMsg(raw: unknown): ParsedMsg {
       if (!isNonEmptyString(m.id) || m.id.length > 100) return null;
       const request = parseDeliveryRequest(m.request);
       return request ? { type: "delivery", id: m.id, request } : null;
+    }
+    case "repair": {
+      if (!isNonEmptyString(m.id) || m.id.length > 100) return null;
+      const request = parseRepairRequest(m.request);
+      return request ? { type: "repair", id: m.id, request } : null;
     }
     case "ping":
       return { type: "ping" };

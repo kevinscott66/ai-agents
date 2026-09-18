@@ -202,6 +202,8 @@ export const CALLER_RESTRICTED: Record<string, string> = {
   // Отложенные проверки: в срок сервер запускает ход от имени владельца.
   SCHEDULE_FOLLOWUP: "orchestrator",
   CANCEL_FOLLOWUP: "orchestrator",
+  // Починка селекторов: PR от имени владельца, итог — ход в его личке.
+  SHOP_REPAIR: "orchestrator",
   // Создание канала от имени владельца + назначение админов — действие реального
   // аккаунта; только лид (orchestrator) как контролёр процесса.
   CREATE_TEAM_CHANNEL: "orchestrator",
