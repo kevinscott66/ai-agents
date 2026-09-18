@@ -4,7 +4,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { approvalCategories } from "../lib/approval-policy.ts";
@@ -70,7 +70,7 @@ import {
 } from "../mac-daemon/eda-playwright.ts";
 import { marketIdFromHref, marketUrlFor } from "../mac-daemon/market-playwright.ts";
 import { MARKET_TESTID, MARKET_TEXT } from "../mac-daemon/market-selectors.ts";
-import { EDA_TEXT } from "../mac-daemon/eda-selectors.ts";
+import { EDA_TESTID, EDA_TEXT } from "../mac-daemon/eda-selectors.ts";
 import type { ShopPlace } from "../lib/shop.ts";
 
 const T0 = Date.UTC(2026, 8, 17, 9, 0, 0);
@@ -290,6 +290,27 @@ describe("mac runner", () => {
       expect(s.cart.size).toBe(0);
       await r.close();
     }
+  });
+
+  test("оформление подписывается именем и почтой из окружения", async () => {
+    // Еда просит имя и почту «для уточнения по заказу». Значения живут в
+    // пускаче, а не в репозитории: исполнитель только передаёт их странице,
+    // и та заполняет пустое поле. Нет значений — нечего и передавать.
+    const { page } = fakePage();
+    const seen: Array<{ name?: string; email?: string }> = [];
+    page.fillContacts = async (c) => { seen.push(c); };
+    const withEnv = runner(page, { SHOP_ENABLED: "true", SHOP_PROFILE_DIR: "/profile", SHOP_CONTACT_NAME: "Имя Фамилия", SHOP_CONTACT_EMAIL: "kto@example.com" });
+    expect((await withEnv.run(prepare) as { ok: boolean }).ok).toBe(true);
+    expect(seen).toEqual([{ name: "Имя Фамилия", email: "kto@example.com" }]);
+    await withEnv.close();
+
+    const { page: bare } = fakePage();
+    const blank: Array<{ name?: string; email?: string }> = [];
+    bare.fillContacts = async (c) => { blank.push(c); };
+    const noEnv = runner(bare);
+    expect((await noEnv.run(prepare) as { ok: boolean }).ok).toBe(true);
+    expect(blank).toEqual([{ name: undefined, email: undefined }]);
+    await noEnv.close();
   });
 
   test("prepare fills the cart; confirm pays once when the total holds", async () => {
@@ -1107,6 +1128,62 @@ describe("market: parsing and page helpers", () => {
     expect(EDA_TEXT.checkoutBlocked.test("Доступен только предзаказ")).toBe(true);
     expect(EDA_TEXT.checkoutBlocked.test("Минимальная сумма заказа 500 ₽")).toBe(true);
     expect(EDA_TEXT.checkoutBlocked.test("Доставим за 30 минут")).toBe(false);
+  });
+
+  test("меню Еды читается без блока «Выбор пользователей»", () => {
+    // Живьём на «Топ пончик» 75 карточек и 8 названий по два раза: блок
+    // «Выбор пользователей» лежит в `div#popular_3158171` и повторяет блюда из
+    // настоящих категорий (`div#5005180366_3158171`). Из-за повтора
+    // `cardIndex()` находит две карточки с одним названием, отказывается
+    // угадывать — и блюдо, которое сам же предложил поиск, не кладётся в корзину.
+    expect(EDA_TESTID.menuCard).toBe(`${EDA_TESTID.dishCard}:not(${EDA_TESTID.popularBlock} *)`);
+    expect(EDA_TESTID.popularBlock).toBe('[id^="popular_"]');
+    // Префикс из селектора отличает блок повторов от контейнера категории.
+    const prefix = EDA_TESTID.popularBlock.slice('[id^="'.length, -'"]'.length);
+    expect("popular_3158171".startsWith(prefix)).toBe(true);
+    expect("5005180366_3158171".startsWith(prefix)).toBe(false);
+  });
+
+  test("карточки меню везде берутся одним селектором", () => {
+    // `readMenu()` возвращает массив, а клики идут через `.nth(i)` по тому же
+    // селектору: стоит где-то одному остаться `dishCard`, и индексы разъедутся —
+    // в корзину поедет соседнее блюдо.
+    const src = readFileSync(new URL("../mac-daemon/eda-playwright.ts", import.meta.url), "utf8");
+    expect(src.includes("EDA_TESTID.dishCard")).toBe(false);
+    expect(src.includes("sel.dishCard")).toBe(false);
+    expect(src.includes("EDA_TESTID.menuCard")).toBe(true);
+  });
+
+  test("«Ресторан ещё закрыт» — тоже закрытый ресторан", () => {
+    // Живьём на Бургер Кинге страница пишет «Ресторан ещё закрыт», а прошлый
+    // шаблон ждал «Ресторан закрыт» — закрытое заведение проходило проверку.
+    expect(EDA_TEXT.placeClosed.test("Ресторан ещё закрыт")).toBe(true);
+    expect(EDA_TEXT.placeClosed.test("Ресторан еще закрыт")).toBe(true);
+    expect(EDA_TEXT.placeClosed.test("Ресторан закрыт")).toBe(true);
+    expect(EDA_TEXT.placeClosed.test("Сейчас закрыт")).toBe(true);
+    expect(EDA_TEXT.placeClosed.test("Откроется в 10:00")).toBe(true);
+    expect(EDA_TEXT.placeClosed.test("Ресторан открыт круглосуточно")).toBe(false);
+  });
+
+  test("итог Еды снимается со строки кнопки «Оплатить»", () => {
+    // Живьём на оформлении нет слова «Итого»: разбор подписан «Что в цене»
+    // (товары 87 ₽, тариф доставки 99 ₽, маленький заказ 30 ₽, сервисный сбор
+    // 29 ₽), а сумма 245 ₽ стоит одной строкой с кнопкой «Оплатить». Пока
+    // шаблон ждал «Итого», `checkout()` возвращал null — и заказ падал в
+    // `price_unreadable` прямо перед оплатой.
+    expect(EDA_TEXT.total.test("Оплатить")).toBe(true);
+    expect(EDA_TEXT.total.test("Итого")).toBe(true);
+    expect(EDA_TEXT.total.test("Способ оплаты")).toBe(false);
+    expect(EDA_TEXT.total.test("Товары в заказе")).toBe(false);
+    expect(EDA_TEXT.total.test("Сервисный сбор")).toBe(false);
+  });
+
+  test("поля «Личные данные» на оформлении Еды — по именам формы", () => {
+    // Сверено живьём: у полей нет testid, зато есть name. Имя приходит
+    // заполненным, почта пустая и не обязательная — кнопка оплаты активна и
+    // без неё, поэтому пустая почта не повод отказываться от заказа.
+    expect(EDA_TESTID.contactName).toBe('input[name="name"]');
+    expect(EDA_TESTID.contactEmail).toBe('input[name="email"]');
   });
 
   test("daemon frame: market lines need a card number id, no place", () => {

@@ -6,6 +6,10 @@
  * поиске, поиск `/search?query=`, адрес в шапке, «Доставка N ₽» на странице
  * ресторана и карточки меню `product-card-v2-*` (название, цена, вес, «В корзину»).
  *
+ * Сверено на живом ресторане: блок «Выбор пользователей» (`div#popular_<id>`)
+ * повторяет блюда из категорий ниже — карточки меню берём мимо него, иначе одно
+ * название находится дважды и блюдо не положить в корзину.
+ *
  * Сверено на живой корзине (положили и убрали): счётчик и «минус» на карточке,
  * окно блюда с опциями (`product-full-card-*`, группы `h4` + `label` с
  * radio/checkbox и доплатой «+ N ₽»), строки корзины `product-card-row-root`
@@ -26,12 +30,24 @@ export const EDA_ORDERS_URL = `${EDA_ORIGIN}/orders`;
 export const EDA_HOSTS = [/^eda\.yandex\.ru$/];
 export const EDA_LOGIN_HOSTS = [/^passport\.yandex\.ru$/, /^sso\.passport\.yandex\.ru$/];
 
+/** Карточка блюда в меню и в блоке «Выбор пользователей». */
+const DISH_CARD = '[data-testid="product-card-v2-root"]';
+/** Контейнер блока «Выбор пользователей» — `popular_<id ресторана>`. */
+const POPULAR_BLOCK = '[id^="popular_"]';
+
 export const EDA_TESTID = {
   // сверено
   placeLink: 'a[href^="/r/"]',
   // сниппет на главной и заголовок карточки в поиске
   placeTitle: '[data-testid="place-snippet-title"], [data-testid="place-header-title"]',
-  dishCard: '[data-testid="product-card-v2-root"]',
+  dishCard: DISH_CARD,
+  popularBlock: POPULAR_BLOCK,
+  /**
+   * Меню без блока «Выбор пользователей»: он повторяет блюда из категорий ниже,
+   * и по названию тогда находится две карточки вместо одной — блюдо становится
+   * неположимым в корзину.
+   */
+  menuCard: `${DISH_CARD}:not(${POPULAR_BLOCK} *)`,
   dishTitle: '[data-testid="product-card-v2-title"]',
   dishPrice: '[data-testid="product-card-v2-price"]',
   dishMeta: '[data-testid="product-card-v2-hard-meta"]',
@@ -53,6 +69,13 @@ export const EDA_TESTID = {
   // «Заказ на этот адрес?» — тоже role=dialog, поэтому окно адресов узнаём по списку внутри
   addressDialog: '[role="dialog"]:has([role="radiogroup"])',
   addressRadio: 'button[role="radio"]',
+  /**
+   * Оформление, блок «Личные данные». Сверено живьём: у полей нет testid, зато
+   * есть имена формы; имя приходит заполненным («Пользователь»), почта пустая и
+   * не обязательная — кнопка оплаты активна и без неё.
+   */
+  contactName: 'input[name="name"]',
+  contactEmail: 'input[name="email"]',
   // корзина — боковая панель на странице ресторана
   cartRow: '[data-testid="product-card-row-root"]',
   cartRowName: '[data-testid="cart-item-name"]',
@@ -71,7 +94,7 @@ export const EDA_TEXT = {
   deliveryFee: /Доставка\s+(\d{1,5})\s?₽/i,
   // НЕ сверено
   outOfStock: /Нет в наличии|Закончил(?:ся|ась|ось|ись)|Недоступно|Стоп-лист/i,
-  placeClosed: /Ресторан закрыт|Сейчас закрыт|Не принимает заказы|Откроется в/i,
+  placeClosed: /Ресторан\s+(?:ещё\s+|еще\s+)?закрыт|Сейчас закрыт|Не принимает заказы|Откроется в/i,
   freeDelivery: /Бесплатная доставка|Доставка 0 ₽/i,
   // сверено
   cartEmpty: /Пусто,\s+как\s+ночью\s+в\s+холодильнике/i,
@@ -86,7 +109,12 @@ export const EDA_TEXT = {
   // НЕ сверено
   pay: /^(?:Оплатить|Заказать и оплатить|Оформить и оплатить)/,
   savedCard: /(?:•{2,}|\*{2,}|··)\s?\d{4}|Сбер ?Пэй|SberPay|Яндекс Пэй|Yandex Pay/i,
-  total: /^Итого/i,
+  /**
+   * Сверено живьём: слова «Итого» на странице оформления нет. Разбор подписан
+   * «Что в цене» (товары, тариф доставки, маленький заказ, сервисный сбор), а
+   * сумма к оплате стоит одной строкой с кнопкой «Оплатить» — её и берём.
+   */
+  total: /^(?:Итого|Оплатить)/i,
   /**
    * Сверено: ресторан вне часов работы отвечает модалкой «Доступен только
    * предзаказ» — заказ на сейчас оформить нельзя.

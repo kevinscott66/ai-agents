@@ -70,6 +70,9 @@ export interface ShopEnv {
   SHOP_PROFILE_DIR?: string;
   SHOP_HEADLESS?: string;
   SHOP_BROWSER_CHANNEL?: string;
+  /** Как подписывать заказ, если страница спрашивает. Значения живут в пускаче, не в репозитории. */
+  SHOP_CONTACT_NAME?: string;
+  SHOP_CONTACT_EMAIL?: string;
   [key: string]: string | undefined;
 }
 
@@ -149,6 +152,11 @@ export interface ShopPage {
   cart(): Promise<CartRow[]>;
   /** Открыть оформление из корзины; false — кнопки нет. */
   openCheckout(): Promise<boolean>;
+  /**
+   * На оформлении: подписать заказ, если поле пустое. Заполненное не трогаем —
+   * своё владелец вводил руками. Значения приходят из окружения и никуда не пишутся.
+   */
+  fillContacts?(contacts: { name?: string; email?: string }): Promise<void>;
   checkout(): Promise<CheckoutInfo>;
   clickPay(): Promise<void>;
   orderState(): Promise<ShopOrderState>;
@@ -472,6 +480,9 @@ export class ShopRunner {
     if (!same) throw new ShopError("cart_mismatch");
     if (!(await page.openCheckout())) throw new ShopError("checkout_unavailable");
     await this.guard(page);
+    // Еда спрашивает имя и почту «для уточнения по заказу». Пустые поля
+    // заполняем из окружения; ошибка здесь не повод ронять заказ.
+    await page.fillContacts?.({ name: this.env.SHOP_CONTACT_NAME, email: this.env.SHOP_CONTACT_EMAIL }).catch(() => {});
     const info = await page.checkout();
     if (info.blocked) throw new ShopError("checkout_unavailable");
     if (info.total_rub === null) throw new ShopError("price_unreadable");
