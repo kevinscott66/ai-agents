@@ -56,6 +56,8 @@ import {
   parseShopOutcome,
   resolveShopOptions,
   SHOP_FAIL_LABEL,
+  SHOP_RECOVERY,
+  type ShopRecovery,
   SHOP_GATE_SERVICE,
   SHOP_ITEMS_MAX,
   SHOP_LINE_TEXT_MAX,
@@ -235,17 +237,58 @@ async function resetMac(held: Extract<ShopOutcome, { ok: false }>, userId: strin
   }
 }
 
-/** Запрос к Mac → проверенный ответ. Ошибка моста — исключение с её кодом. */
+/**
+ * Сколько ждать переподключения Mac. `mac_offline` мост отдаёт до отправки —
+ * запрос не ушёл, так что повтор безопасен для любой операции, даже оплаты.
+ * Частый случай — демон перезапускается или ноутбук просыпается.
+ */
+export const SHOP_OFFLINE_WAIT_MS = 60_000;
+/**
+ * Операции, которые можно повторить после обрыва связи (`mac_disconnected`):
+ * запрос мог дойти, но они только читают. prepare и confirm трогают корзину и
+ * деньги — их после обрыва не повторяем.
+ */
+const SHOP_REDIAL_OPS: readonly ShopRequest["op"][] = ["quote", "places", "status"];
+
+/**
+ * Запрос к Mac → проверенный ответ. Ошибка моста — исключение с её кодом.
+ * Известные временные сбои сервер лечит сам, не отдавая их агенту (этап 2
+ * автономии): занятость (ожидание и сброс), Mac не на связи (ожидание
+ * переподключения), Chrome не запустился (ещё один запуск), обрыв на чтении
+ * (один повтор).
+ */
 async function askMac(request: ShopRequest, userId: string, chatId: number): Promise<ShopOutcome> {
   const started = deps.now();
   let busyCount = 0;
+  let relaunched = false;
+  let redialed = false;
   for (;;) {
     let out: ShopOutcome;
     try {
       out = await askYandexMac<ShopRequest, ShopOutcome>(deps.send, parseShopOutcome, "shop_failed", request, userId, chatId);
     } catch (e) {
-      log.warn("[shop] mac", { op: request.op, error: errorText(e), ms: deps.now() - started });
+      const code = errorText(e);
+      const ms = deps.now() - started;
+      if (code === "mac_offline" && ms < SHOP_OFFLINE_WAIT_MS) {
+        await deps.sleep(SHOP_BUSY_POLL_MS);
+        continue;
+      }
+      if (code === "mac_disconnected" && !redialed && SHOP_REDIAL_OPS.includes(request.op)) {
+        redialed = true;
+        log.warn("[shop] mac redial", { op: request.op, ms });
+        await deps.sleep(SHOP_BUSY_POLL_MS);
+        continue;
+      }
+      log.warn("[shop] mac", { op: request.op, error: code, ms });
       throw e;
+    }
+    // Chrome не поднялся (профиль ещё держит прошлый процесс, Mac только проснулся):
+    // второй запуск через паузу. Для confirm смысла нет — без браузера нет и сессии.
+    if (!out.ok && out.code === "browser_unavailable" && !relaunched && request.op !== "confirm") {
+      relaunched = true;
+      log.warn("[shop] mac relaunch", { op: request.op, ms: deps.now() - started });
+      await deps.sleep(SHOP_BUSY_POLL_MS);
+      continue;
     }
     const busy = !out.ok && out.code === "shop_busy";
     if (!busy || deps.now() - started >= SHOP_BUSY_WAIT_MS) {
@@ -262,6 +305,27 @@ async function askMac(request: ShopRequest, userId: string, chatId: number): Pro
 
 const failText = (o: Extract<ShopOutcome, { ok: false }>) =>
   `${SHOP_FAIL_LABEL[o.code]}${o.price_rub ? ` (на странице ${o.price_rub} ₽)` : ""}`;
+
+const recoveryFields = (r: ShopRecovery) => ({ next: r.next, owner_needed: r.owner });
+
+/** Отказ Mac для агента: текст, код и что делать дальше (SHOP_RECOVERY). */
+const shopFail = (o: Extract<ShopOutcome, { ok: false }>): ShopToolResult => ({
+  ok: false, error: failText(o), code: o.code, ...recoveryFields(SHOP_RECOVERY[o.code]),
+});
+
+/** Сбои моста — те же поля, что у отказов Mac. Повторы, безопасные без агента, askMac уже сделал. */
+const MAC_ERROR_RECOVERY: Record<string, ShopRecovery> = {
+  mac_offline: { owner: true, next: "Mac не на связи больше минуты (крышка закрыта или нет сети) — скажи владельцу одной фразой; не проси перезапускать демон" },
+  mac_disconnected: { owner: false, next: "связь с Mac оборвалась посреди запроса — повтори вызов сам один раз; заказ (ORDER_FOOD) не повторяй, сначала SHOP_STATUS" },
+  mac_timeout: { owner: false, next: "Mac не успел ответить — повтори вызов сам один раз; заказ (ORDER_FOOD) не повторяй, сначала SHOP_STATUS" },
+};
+
+function macFail(e: unknown, suffix = ""): ShopToolResult {
+  const message = errorText(e);
+  const code = /^[a-z_]+/.exec(message)?.[0] ?? "shop_failed";
+  const recovery = MAC_ERROR_RECOVERY[code];
+  return { ok: false, error: `${message}${suffix}`, code, ...(recovery ? recoveryFields(recovery) : {}) };
+}
 
 /** SHOP_QUOTE: что нашлось по запросам. Ничего не кладёт в корзину; расчёт живёт SHOP_QUOTE_TTL_MS. */
 export async function quoteShop(input: Record<string, unknown>, ctx: ShopInlineContext): Promise<ShopToolResult> {
@@ -288,7 +352,7 @@ export async function quoteShop(input: Record<string, unknown>, ctx: ShopInlineC
       op: "quote", service, ...(placeQuery ? { place: placeQuery } : {}), ...(maxEta !== undefined ? { max_eta_min: maxEta } : {}), queries: unique,
     };
     const out = await executor.run(() => askMac(request, userId, ctx.chatId));
-    if (!out.ok) return { ok: false, error: failText(out), code: out.code };
+    if (!out.ok) return shopFail(out);
     if (out.op !== "quote") return { ok: false, error: "invalid_shop_result" };
     // Ресторан приходит ровно у тех сервисов, где он нужен.
     if (needsPlace !== (out.place !== undefined)) return { ok: false, error: "invalid_shop_result" };
@@ -320,7 +384,7 @@ export async function quoteShop(input: Record<string, unknown>, ctx: ShopInlineC
         "Если товар неочевиден, спроси владельца, какой из вариантов.",
     };
   } catch (e) {
-    return { ok: false, error: errorText(e) };
+    return macFail(e);
   }
 }
 
@@ -343,7 +407,7 @@ export async function listShopPlaces(input: Record<string, unknown>, ctx: ShopIn
       { op: "places", service: "eda", query, ...(maxEta !== undefined ? { max_eta_min: maxEta } : {}) },
       ctx.triggerUserId!, ctx.chatId,
     ));
-    if (!out.ok) return { ok: false, error: failText(out), code: out.code };
+    if (!out.ok) return shopFail(out);
     if (out.op !== "places") return { ok: false, error: "invalid_shop_result" };
     if (maxEta !== undefined && !out.places.every((p) => shopPlaceFits(p, maxEta))) return { ok: false, error: "invalid_shop_result" };
     return {
@@ -361,7 +425,7 @@ export async function listShopPlaces(input: Record<string, unknown>, ctx: ShopIn
         ", queries}. У сети бывает несколько точек с одним названием: с max_eta_min расчёт возьмёт самую быструю из успевающих.",
     };
   } catch (e) {
-    return { ok: false, error: errorText(e) };
+    return macFail(e);
   }
 }
 
@@ -403,12 +467,15 @@ export async function checkoutShop(input: Record<string, unknown>, ctx: ShopInli
       out = await askMac(prepareRequest(session, service, quote.place, lines), userId, ctx.chatId);
     } catch (e) {
       await deps.send({ op: "abandon", session }, userId, ctx.chatId).catch(() => {});
-      return { ok: false, error: `${errorText(e)}; корзину попросил очистить` };
+      return macFail(e, "; корзину попросил очистить");
     }
     // Корзина собрана (или собрана наполовину, если Mac отказал) — очищаем сразу,
     // до любых проверок: заказ сделает исполнитель заново.
     const cleared = await askMac({ op: "abandon", session }, userId, ctx.chatId).then((done) => done.ok, () => false);
-    if (!out.ok) return { ok: false, error: `${failText(out)}${cleared ? "" : "; корзину очистить не удалось"}`, code: out.code };
+    if (!out.ok) {
+      const fail = shopFail(out);
+      return cleared ? fail : { ...fail, error: `${fail.error}; корзину очистить не удалось` };
+    }
     if (!cleared) return { ok: false, error: "итог прочитан, но корзину очистить не удалось — пусть владелец проверит корзину, потом повтори" };
     if (out.op !== "prepare") return { ok: false, error: "invalid_shop_result" };
     if (out.address !== quote.address) {
@@ -446,11 +513,11 @@ export async function shopStatus(input: Record<string, unknown>, ctx: ShopInline
   const { service } = picked;
   try {
     const out = await executor.run(() => askMac({ op: "status", service }, ctx.triggerUserId!, ctx.chatId));
-    if (!out.ok) return { ok: false, error: failText(out), code: out.code };
+    if (!out.ok) return shopFail(out);
     if (out.op !== "status") return { ok: false, error: "invalid_shop_result" };
     return { ok: true, service, state: out.state, state_text: SHOP_STATE_LABEL[out.state], eta_min: out.eta_min };
   } catch (e) {
-    return { ok: false, error: errorText(e) };
+    return macFail(e);
   }
 }
 
@@ -474,7 +541,7 @@ export async function setShopAddress(input: Record<string, unknown>, ctx: ShopIn
   const userId = ctx.triggerUserId!;
   try {
     const out = await executor.run(() => askMac({ op: "set_address", service, address }, userId, ctx.chatId));
-    if (!out.ok) return { ok: false, error: failText(out), code: out.code };
+    if (!out.ok) return shopFail(out);
     if (out.op !== "set_address") return { ok: false, error: "invalid_shop_result" };
     // Адрес сменился — прошлый расчёт больше не про этот адрес.
     if (out.matched) quotes.delete(userId);
@@ -492,7 +559,7 @@ export async function setShopAddress(input: Record<string, unknown>, ctx: ShopIn
         note: "Новый адрес агент не заводит: попроси владельца добавить или выбрать адрес самому. Адрес доставки не менялся.",
       };
   } catch (e) {
-    return { ok: false, error: errorText(e) };
+    return macFail(e);
   }
 }
 
@@ -682,7 +749,7 @@ async function runSignedShop(nonce: string): Promise<void> {
     await abandon();
     const code = refusalCode(e);
     await tell(userId, code === "price_deviation"
-      ? `${store}: заказ не сделан — итог вырос до ${prepared.total_rub} ₽, подписано не больше ${maxFinal} ₽. Пересчитай и подпиши заново.`
+      ? `${store}: заказ не сделан — итог вырос до ${prepared.total_rub} ₽, подписано не больше ${maxFinal} ₽. Напиши «оформи» — пересчитаю и пришлю новый итог на подпись.`
       : `${store}: заказ не сделан — сверка итога не прошла (${code}).`);
     return;
   }
