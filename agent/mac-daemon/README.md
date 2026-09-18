@@ -154,13 +154,24 @@ Verification: local installed Claude accepted the readiness command and produced
 
 - `MAC_CONTROL_ENABLED=true` — сам выключатель;
 - `MAC_APPS=alias=bundle.id,...` — единственный способ назвать приложение для `open_app`;
-- `MAC_CALENDAR_ENABLED=true` — напоминания и события (помощник EventKit).
+- `MAC_CALENDAR_ENABLED=true` — напоминания и события (помощник EventKit);
+- `MAC_CALENDAR_BIN_DIR=/абсолютный/путь` — постоянная папка помощника вне папки
+  релиза. Разрешение macOS привязано к пути бинаря, поэтому из релиза оно теряется
+  на каждой выкатке; без переменной остаётся путь внутри релиза.
 
 Разрешения macOS выдаёт только владелец, руками:
 
-1. `sh build-calendar.sh`, затем `bin/agent-calendar authorize` и
-   `bin/agent-calendar authorize-reminders` — диалоги «Календари» и «Напоминания».
-2. Громкость, выключение и перезагрузка через `osascript` попросят
+1. `sh build-calendar.sh` собирает два бинаря: помощника `bin/agent-calendar` и
+   прокладку `bin/agent-calendar-run`, через которую его и зовут. Прокладка нужна
+   не для удобства: разрешение TCC спрашивается у «ответственного» процесса, а им
+   для всего поддерева демона становится bun — у него нет строки о том, зачем ему
+   календарь, поэтому диалог не показывается и доступ отказывается молча.
+   Подробности — в `calendar-spawn.c`.
+2. Диалоги «Календари» и «Напоминания» приходят только когда помощник отвечает сам
+   за себя, то есть под launchd или под прокладкой:
+   `bin/agent-calendar-run authorize` и `bin/agent-calendar-run authorize-reminders`.
+   Из оболочки агента диалога не будет — ответственным окажется терминал.
+3. Громкость, выключение и перезагрузка через `osascript` попросят
    «Автоматизация → System Events» при первом вызове; без него демон вернёт
    `automation_access_required`.
 
