@@ -34,6 +34,19 @@ import SwiftUI
     static var autoSpeak: Bool { UserDefaults.standard.bool(forKey: automaticPreference) }
     private static let identifierPreference = "voiceOutputIdentifier"
     private static let ratePreference = "voiceOutputRate"
+    static let sourcePreference = "voiceOutputSource"
+    static let serverVoicePreference = "voiceServerVoice"
+    static let defaultServerVoice = "marin"
+    /// Живой голос сервера — основной; голос устройства выбирают вручную или он подхватывает без связи.
+    static var usesServerVoice: Bool { UserDefaults.standard.string(forKey: sourcePreference) != "device" }
+    static var serverVoiceID: String { UserDefaults.standard.string(forKey: serverVoicePreference) ?? defaultServerVoice }
+    /// Темп из настроек и для серверного голоса: обычный темп устройства = 1×.
+    static func applyRate(_ player: AVAudioPlayer) {
+        let saved = UserDefaults.standard.object(forKey: ratePreference) as? NSNumber
+        let rate = clampedRate(saved?.floatValue ?? AVSpeechUtteranceDefaultSpeechRate)
+        player.enableRate = true
+        player.rate = rate / AVSpeechUtteranceDefaultSpeechRate
+    }
     static let rateRange: ClosedRange<Float> = 0.35...0.65
 
     @Published private(set) var isSpeaking = false
@@ -41,6 +54,13 @@ import SwiftUI
     @Published private(set) var error: String?
     @Published private(set) var availableVoices: [AVSpeechSynthesisVoice] = []
     @Published private(set) var rate: Float
+    @Published private(set) var serverVoices = [ServerVoice(id: VoiceOutput.defaultServerVoice, label: "Марин", note: "живой, тёплый — по умолчанию")]
+    @Published var serverVoice: String {
+        didSet { UserDefaults.standard.set(serverVoice, forKey: Self.serverVoicePreference) }
+    }
+    @Published var useServerVoice: Bool {
+        didSet { UserDefaults.standard.set(useServerVoice ? "server" : "device", forKey: Self.sourcePreference) }
+    }
     @Published var voiceIdentifier: String {
         didSet { UserDefaults.standard.set(voiceIdentifier, forKey: Self.identifierPreference) }
     }
@@ -57,6 +77,8 @@ import SwiftUI
 
     private override init() {
         voiceIdentifier = UserDefaults.standard.string(forKey: Self.identifierPreference) ?? ""
+        serverVoice = Self.serverVoiceID
+        useServerVoice = Self.usesServerVoice
         let saved = UserDefaults.standard.object(forKey: Self.ratePreference) as? NSNumber
         rate = Self.clampedRate(saved?.floatValue ?? AVSpeechUtteranceDefaultSpeechRate)
         super.init()
@@ -87,6 +109,13 @@ import SwiftUI
             if $0.quality.rawValue != $1.quality.rawValue { return $0.quality.rawValue > $1.quality.rawValue }
             return $0.name.localizedStandardCompare($1.name) == .orderedAscending
         }
+    }
+    /// Список голосов сервера; без связи остаётся прошлый.
+    func loadServerVoices() async {
+        guard let server, let token = Credentials.read(server: server),
+              let voices = try? await AgentAPI(server: server).speechVoices(expectedToken: token), !voices.isEmpty else { return }
+        serverVoices = voices
+        if !voices.contains(where: { $0.id == serverVoice }) { serverVoice = Self.defaultServerVoice }
     }
     var selectedVoice: AVSpeechSynthesisVoice? {
         availableVoices.first(where: { $0.identifier == voiceIdentifier }) ?? availableVoices.first
@@ -135,7 +164,7 @@ import SwiftUI
             return
         }
         isSpeaking = true
-        if let server, let token = Credentials.read(server: server) {
+        if useServerVoice, let server, let token = Credentials.read(server: server) {
             playFromServer(text, server: server, token: token)
         } else {
             speakOnDevice(text)
@@ -161,9 +190,10 @@ import SwiftUI
             var played = false
             do {
                 for chunk in VoiceConversationPolicy.chunks(text) {
-                    let audio = try await api.speechAudio(chunk, expectedToken: token)
+                    let audio = try await api.speechAudio(chunk, voice: self.serverVoice, expectedToken: token)
                     guard self.playback == id else { return }
                     let output = try AVAudioPlayer(data: audio)
+                    Self.applyRate(output)
                     guard output.prepareToPlay(), output.play() else { throw AgentError.message("Не удалось воспроизвести ответ") }
                     self.player = output
                     played = true
@@ -255,12 +285,40 @@ import SwiftUI
     @Environment(\.scenePhase) private var scenePhase
     var body: some View {
         Form {
-            Section("Озвучивание ответов") {
-                Toggle("Озвучивать новые ответы автоматически", isOn: $automaticallySpeak)
-                Text("История при открытии диалога не озвучивается. Голос тот же, что в голосовом разговоре; без связи с сервером используется голос устройства.").font(.footnote).foregroundStyle(.secondary)
+            Section {
+                Picker("Голос", selection: $voice.useServerVoice) {
+                    Text("Живой").tag(true)
+                    Text("Устройства").tag(false)
+                }
+                .pickerStyle(.segmented)
+                Toggle("Озвучивать новые ответы", isOn: $automaticallySpeak)
+            } footer: {
+                Text(voice.useServerVoice
+                     ? "Нейросетевой голос сервера — тот же, что в голосовом разговоре. Без связи с сервером ответ прочитает голос устройства."
+                     : "Ответы читает голос iPhone, например Milena. Голосовой разговор всё равно идёт живым голосом.")
             }
-            Section("Голос устройства (запасной)") {
-                Picker("Русский голос", selection: $voice.voiceIdentifier) {
+            if voice.useServerVoice {
+                Section("Живой голос") {
+                    if voice.server == nil {
+                        Text("Подключите сервер, чтобы выбрать голос.").foregroundStyle(.secondary)
+                    }
+                    ForEach(voice.serverVoices) { item in
+                        Button { voice.serverVoice = item.id; preview() } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(item.label).foregroundStyle(.primary)
+                                    Text(item.note).font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if item.id == voice.serverVoice { Image(systemName: "checkmark").foregroundStyle(.tint) }
+                            }
+                        }
+                        .accessibilityAddTraits(item.id == voice.serverVoice ? .isSelected : [])
+                    }
+                }
+            }
+            Section {
+                Picker("Голос устройства", selection: $voice.voiceIdentifier) {
                     Text("Автоматически").tag("")
                     ForEach(voice.availableVoices, id: \.identifier) { item in
                         Text(VoiceOutput.voiceLabel(item)).tag(item.identifier)
@@ -269,27 +327,35 @@ import SwiftUI
                         Text("Выбранный голос недоступен · используется автоматический").tag(voice.voiceIdentifier)
                     }
                 }
-                Text(voice.voiceDescription).font(.footnote).foregroundStyle(.secondary)
-                Text("Улучшенные и премиум-голоса появятся здесь, если они установлены в iOS.").font(.footnote).foregroundStyle(.secondary)
+            } header: {
+                Text(voice.useServerVoice ? "Запасной голос" : "Голос устройства")
+            } footer: {
+                Text("\(voice.voiceDescription) Улучшенные и премиум-голоса появятся здесь, если они установлены в iOS.")
             }
             Section("Темп") {
                 Slider(value: Binding(get: { voice.rate }, set: { voice.setRate($0) }), in: VoiceOutput.rateRange, step: 0.01)
                     .accessibilityLabel("Темп речи")
-                HStack { Text("Медленнее"); Spacer(); Text("Быстрее") }.font(.caption).foregroundStyle(.secondary)
-                Button("Обычный темп") { voice.setRate(AVSpeechUtteranceDefaultSpeechRate) }
+                HStack { Text("Медленнее"); Spacer(); Button("Обычный") { voice.setRate(AVSpeechUtteranceDefaultSpeechRate) }.buttonStyle(.borderless); Spacer(); Text("Быстрее") }
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section {
-                Button("Послушать голос") { voice.speak("Здравствуйте. Я Агент. Помогу разобраться в задаче и расскажу о результате.") }
                 if voice.isSpeaking {
                     Button(voice.isPaused ? "Продолжить" : "Пауза") { voice.togglePause() }
                     Button("Остановить") { voice.stop() }
+                } else {
+                    Button("Послушать голос") { preview() }
                 }
                 if let error = voice.error { Text(error).foregroundStyle(.red) }
             }
         }
         .navigationTitle("Голос Агента")
         .onAppear { voice.reloadVoices() }
+        .task { await voice.loadServerVoices() }
+        .onChange(of: voice.useServerVoice) { _, _ in voice.stop() }
         .onChange(of: scenePhase) { _, phase in if phase == .active { voice.reloadVoices() } }
         .onDisappear { voice.stop() }
+    }
+    private func preview() {
+        voice.speak("Здравствуйте. Я Агент. Помогу разобраться в задаче и расскажу о результате.")
     }
 }

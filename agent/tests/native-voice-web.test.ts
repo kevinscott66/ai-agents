@@ -57,3 +57,17 @@ test('transcription falls back to the second model on provider or network failur
  expect(await (await transcribe()).json()).toEqual({text:'С первой попытки.'});expect(seen).toEqual(['gpt-4o-transcribe']);
  }finally{globalThis.fetch=realFetch;for(const key of names){if(saved[key]===undefined)delete process.env[key];else process.env[key]=saved[key];}}
 });
+test('speech voice is chosen from the allowed list; marin by default',async()=>{
+ const names=['NATIVE_APP_ENABLED','MAC_USER_IDS','TELEGRAM_ALLOWED_GROUP_IDS','OPENAI_API_KEY'];const saved=Object.fromEntries(names.map(k=>[k,process.env[k]]));const realFetch=globalThis.fetch;
+ Object.assign(process.env,{NATIVE_APP_ENABLED:'true',MAC_USER_IDS:'999323911',TELEGRAM_ALLOWED_GROUP_IDS:'999323911',OPENAI_API_KEY:'test-key'});
+ const store=new NativeAccess(':memory:'),pair=store.redeem(store.pair('999323911'))!;
+ const req=(path:string,body?:unknown)=>new Request(`https://agent.test/api/${path}`,{method:body?'POST':'GET',headers:{authorization:`Bearer ${pair.token}`,...(body?{'content-type':'application/json'}:{})},body:body?JSON.stringify(body):undefined});
+ let calls=0;
+ try{
+  let voiceSeen='';globalThis.fetch=(async(_url:any,options:any)=>{calls++;voiceSeen=JSON.parse(options.body).voice;return new Response(new Uint8Array([73,68,51,1]),{headers:{'content-type':'audio/mpeg'}});}) as unknown as typeof fetch;
+ expect((await nativeApi(req('native/voice/speech',{text:'Привет',voice:'cedar'}),store)).status).toBe(200);expect(voiceSeen).toBe('cedar');
+ const before=calls;expect((await nativeApi(req('native/voice/speech',{text:'Привет',voice:'milena'}),store)).status).toBe(400);expect(calls).toBe(before);
+ const status=await (await nativeApi(req('native/voice/status'),store)).json();expect(status.defaultVoice).toBe('marin');expect(status.voices[0].id).toBe('marin');expect(status.voices.map((v:{id:string})=>v.id)).toContain('cedar');
+ expect((await nativeApi(req('native/voice/speech',{text:'Привет'}),store)).status).toBe(200);expect(voiceSeen).toBe('marin');
+ }finally{globalThis.fetch=realFetch;for(const key of names){if(saved[key]===undefined)delete process.env[key];else process.env[key]=saved[key];}}
+});

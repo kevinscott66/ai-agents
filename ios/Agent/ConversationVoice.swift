@@ -65,10 +65,11 @@ import AVFoundation
                     if !replies.isEmpty {
                         status = "Готовлю голос…"
                         let text = replies.removeFirst()
-                        let audio = try await api.speechAudio(text, expectedToken: token)
+                        let audio = try await api.speechAudio(text, voice: VoiceOutput.serverVoiceID, expectedToken: token)
                         try check(id, server: server, token: token)
                         let output = try AVAudioPlayer(data: audio)
                         output.isMeteringEnabled = true
+                        VoiceOutput.applyRate(output)
                         guard output.prepareToPlay(), output.play() else { throw AgentError.message("Не удалось воспроизвести ответ") }
                         player = output; speaking = true; status = "Агент говорит"
                         while output.isPlaying {
