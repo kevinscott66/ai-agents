@@ -168,8 +168,8 @@ enum PanelTransport {
               target.path.isEmpty || target.path == "/", let route = URLComponents(string: path),
               route.scheme == nil, route.host == nil, route.fragment == nil, route.path.hasPrefix("/api/"),
               !route.path.contains(".."), !route.path.contains("\\"), !route.path.contains("%") else { throw AgentError.message("Недопустимый адрес панели") }
-        let allowed = ["/api/health", "/api/dashboard", "/api/agents", "/api/budgets", "/api/budget-settings", "/api/tasks", "/api/wiki/list", "/api/wiki/page", "/api/approvals", "/api/actions", "/api/permissions", "/api/autonomy", "/api/mac/stop"]
-        let dynamic = route.path.range(of: #"^/api/(native/conversations/[a-zA-Z0-9-]{16,64}/approvals|agents/[a-zA-Z0-9_-]+/(pause|resume)|tasks/[a-zA-Z0-9_-]+(/status)?|approvals/[a-zA-Z0-9_-]+/decide)$"#, options: .regularExpression) != nil
+        let allowed = ["/api/health", "/api/dashboard", "/api/agents", "/api/budgets", "/api/budget-settings", "/api/tasks", "/api/wiki/list", "/api/wiki/page", "/api/approvals", "/api/actions", "/api/permissions", "/api/autonomy", "/api/mac/stop", "/api/native/signing/key", "/api/native/signing/keys", "/api/native/signing/actions"]
+        let dynamic = route.path.range(of: #"^/api/(native/conversations/[a-zA-Z0-9-]{16,64}/approvals|agents/[a-zA-Z0-9_-]+/(pause|resume)|tasks/[a-zA-Z0-9_-]+(/status)?|approvals/[a-zA-Z0-9_-]+/decide|native/signing/keys/[0-9a-f-]{36}/activate|native/signing/actions/[A-Za-z0-9_-]{43}/(approve|reject))$"#, options: .regularExpression) != nil
         guard allowed.contains(route.path) || dynamic else { throw AgentError.message("Раздел панели недоступен") }
         target.path = route.path; target.percentEncodedQuery = route.percentEncodedQuery
         guard let url = target.url else { throw AgentError.message("Недопустимый адрес панели") }; return url
