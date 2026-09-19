@@ -206,6 +206,26 @@ describe("mac runner", () => {
     await r.close();
   });
 
+  test("order button that is late or silently inactive is re-read before refusing", async () => {
+    const { s, page } = fakePage({ button: 450, blocked: "disabled" });
+    const read = page.orderButton;
+    let calls = 0;
+    page.orderButton = async () => {
+      calls++;
+      if (calls === 1) return null;
+      if (calls === 3) s.blocked = "payment";
+      return read();
+    };
+    const r = runner(page);
+    expect(await r.run(prepare)).toEqual({ ok: false, code: "payment_needs_owner" });
+    expect(calls).toBe(3);
+    calls = 10;
+    s.blocked = "disabled";
+    expect((await r.run(prepare) as { code: string }).code).toBe("order_button_missing");
+    expect(s.clicks).not.toContain("order");
+    await r.close();
+  });
+
   test("comment is typed only when signed; a missing field refuses", async () => {
     const { s, page } = fakePage({ button: 450, commentField: false });
     const r = runner(page);

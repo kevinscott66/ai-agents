@@ -36,7 +36,7 @@ import {
   type DeliveryRequest,
   type DeliveryTariff,
 } from "../lib/delivery.ts";
-import { DELIVERY_STATE_POLL } from "./delivery-selectors.ts";
+import { DELIVERY_BUTTON_POLL, DELIVERY_STATE_POLL } from "./delivery-selectors.ts";
 import { ensureLoginProfileDir, printOutcome, profileDirProblem, runCli, runnerErrorCode, waitForEnter, settleOrRelease } from "./runner-kit.ts";
 
 export interface DeliveryEnv {
@@ -333,13 +333,23 @@ export class DeliveryRunner {
   private async currentPrice(page: DeliveryPage, tariff: DeliveryTariff): Promise<number> {
     const row = (await page.tariffs()).find((r) => r.tariff === tariff);
     if (!row?.selected) throw new DeliveryError("tariff_unavailable");
-    const button = await page.orderButton();
+    const button = await this.settledOrderButton(page);
     if (!button) throw new DeliveryError("order_button_missing");
     if (button.blocked === "payment") throw new DeliveryError("payment_needs_owner");
     if (button.blocked) throw new DeliveryError("order_button_missing");
     const prices = [row.price_rub, button.price_rub].filter((p): p is number => p !== null);
     if (!prices.length) throw new DeliveryError("price_unreadable");
     return Math.max(...prices);
+  }
+
+  /** Кнопка без причины отказа (нет её или неактивна молча) — перечитать: страница ещё дорисовывается. */
+  private async settledOrderButton(page: DeliveryPage): ReturnType<DeliveryPage["orderButton"]> {
+    let button = await page.orderButton();
+    for (let i = 1; i < DELIVERY_BUTTON_POLL.attempts && (!button || button.blocked === "disabled"); i++) {
+      await this.sleep(DELIVERY_BUTTON_POLL.intervalMs);
+      button = await page.orderButton();
+    }
+    return button;
   }
 
   private async pollState(page: DeliveryPage, done: (s: DeliveryOrderState) => boolean): Promise<DeliveryOrderState> {
