@@ -346,8 +346,14 @@ struct SigningKeySection: View {
             if !SigningKeyStore.available {
                 Text("На этом устройстве нет Secure Enclave, подписывать платные действия нельзя.").foregroundStyle(.secondary)
             } else if let local = model.local, local.active {
-                Label("Ключ этого iPhone активен", systemImage: "checkmark.seal")
-                Button("Удалить ключ с iPhone", role: .destructive) { model.forget(server: server) }.disabled(model.working)
+                HStack {
+                    Label("Face ID-ключ активен", systemImage: "checkmark.seal.fill").foregroundStyle(.green)
+                    Spacer()
+                    Menu {
+                        Button("Удалить ключ с iPhone", role: .destructive) { model.forget(server: server) }
+                    } label: { Image(systemName: "ellipsis.circle").foregroundStyle(.secondary) }
+                    .disabled(model.working).accessibilityLabel("Действия с ключом")
+                }
             } else if let local = model.local {
                 Text("Ключ «\(local.device)» ждёт кода из Telegram.")
                 TextField("Код из 6 цифр", text: $model.code).keyboardType(.numberPad).textContentType(.oneTimeCode)
@@ -361,7 +367,7 @@ struct SigningKeySection: View {
             }
             if !model.status.isEmpty { Text(model.status).font(.footnote) }
         } header: { Text("Ключ подписи") } footer: {
-            Text("Платные действия, например заказ такси, выполняются только после подписи Face ID на этом iPhone. Код привязки придёт в личные сообщения бота.")
+            if model.local?.active != true { Text("Платные действия, например заказ такси, выполняются только после подписи Face ID на этом iPhone. Код привязки придёт в личные сообщения бота.") }
         }
         .task(id: server) { await model.load(server: server) }
     }

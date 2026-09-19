@@ -296,6 +296,7 @@ struct AgentGlass: ViewModifier {
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--generation-preview") { GenerationPreview() }
         else if ProcessInfo.processInfo.arguments.contains("--media-selftest") { MediaSelfTestView() }
+        else if ProcessInfo.processInfo.arguments.contains("--connection-preview") { NavigationStack { SettingsView(server: .constant("https://agent.example.com")) }.tint(.primary) }
         else if ProcessInfo.processInfo.arguments.contains("--voice-settings-preview") { NavigationStack { VoiceSettingsView() }.tint(.primary) }
         else if ProcessInfo.processInfo.arguments.contains("--openflux-probe") { OpenFluxProbeView() }
         else if ProcessInfo.processInfo.arguments.contains("--approval-preview") { ChatApprovalPreview() }
@@ -749,39 +750,71 @@ struct SettingsView: View {
     @State private var code = ""
     @State private var status = ""
     @State private var pairing = false
+    @State private var paired = false
+    @State private var repairing = false
+    /// Уже подключённый iPhone видит короткую сводку; форма кода — по «Подключить заново».
+    private var connected: Bool { paired && !server.isEmpty }
     var body: some View {
         Form {
-            Section("Подключиться к лиду") {
-                TextField("HTTPS-адрес, например https://agent.example.com", text: $serverDraft).disabled(pairing || connectionLocked).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
-                SecureField("Одноразовый код", text: $code).disabled(pairing || connectionLocked).textInputAutocapitalization(.never).autocorrectionDisabled()
-                Button(pairing ? "Подключаем…" : "Подключить iPhone") {
-                    pairing = true
-                    let pairingCode = code
-                    let target = serverDraft.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-                    Task {
-                        do { try await AgentAPI(server: target).pair(code: pairingCode); server = target; code = ""; status = "Устройство подключено" }
-                        catch { status = error.localizedDescription }
-                        pairing = false
+            if connected {
+                Section {
+                    LabeledContent {
+                        Text(URL(string: server)?.host() ?? server).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                    } label: {
+                        Label("Подключено", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
                     }
-                }.disabled(pairing || connectionLocked || code.isEmpty)
-                Text(status).font(.footnote)
+                    DisclosureGroup("Подключить заново", isExpanded: $repairing) { pairingFields }
+                    if !status.isEmpty { Text(status).font(.footnote) }
+                } header: { Text("Сервер") }
+            } else {
+                Section {
+                    pairingFields
+                    if !status.isEmpty { Text(status).font(.footnote) }
+                } header: { Text("Подключиться к лиду") } footer: {
+                    Text("В личном чате с лидом отправьте /pair_native и вставьте код в течение 5 минут.")
+                }
             }
             SigningKeySection(server: server)
-            Section("Голос") { NavigationLink("Голос помощника") { VoiceSettingsView() } }
-            Section("Сеть") {
-                NavigationLink("OpenFlux · работа при белых списках") { OpenFluxSettingsView(server: server) }
+            Section {
+                NavigationLink { VoiceSettingsView() } label: { Label("Голос Агента", systemImage: "waveform") }
+                NavigationLink { OpenFluxSettingsView(server: server) } label: { Label("OpenFlux · белые списки", systemImage: "network") }
             }
-            Section("Как получить код") {
-                Text("В личном чате с лидом отправьте /pair_native. Вставьте полученный код сюда в течение 5 минут.")
-                Text("Доступ к GitHub, серверам и другим сервисам выполняется лидом через настроенные инструменты сервера и Mac.").foregroundStyle(.secondary)
+            if connected {
+                Section {
+                    Button("Отключить этот iPhone", role: .destructive) {
+                        Credentials.delete(server: server); status = "Локальный ключ удалён"; refresh()
+                    }.disabled(pairing || connectionLocked)
+                } footer: {
+                    Text("Отозвать все ключи сразу — /revoke_native в чате с лидом.")
+                }
             }
-            Section("Управление доступом") {
-                Button("Удалить ключ с этого iPhone", role: .destructive) { Credentials.delete(server: server); status = "Локальный ключ удалён" }.disabled(pairing || connectionLocked)
-                Text("Для отзыва всех ключей отправьте лиду /revoke_native. Подтверждения действий доступны прямо в чате приложения.").font(.footnote)
+        }
+        .onAppear(perform: refresh)
+        .onChange(of: server) { _, _ in refresh() }
+        .navigationTitle("Подключение")
+        .interactiveDismissDisabled(pairing)
+    }
+    @ViewBuilder private var pairingFields: some View {
+        TextField("HTTPS-адрес, например https://agent.example.com", text: $serverDraft).disabled(pairing || connectionLocked).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+        SecureField("Одноразовый код", text: $code).disabled(pairing || connectionLocked).textInputAutocapitalization(.never).autocorrectionDisabled()
+        Button(pairing ? "Подключаем…" : "Подключить iPhone") {
+            pairing = true
+            let pairingCode = code
+            let target = serverDraft.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            Task {
+                do { try await AgentAPI(server: target).pair(code: pairingCode); server = target; code = ""; status = "Устройство подключено"; repairing = false }
+                catch { status = error.localizedDescription }
+                pairing = false
+                refresh()
             }
-        }.navigationTitle("Подключение")
-            .onAppear { serverDraft = server }
-            .interactiveDismissDisabled(pairing)
+        }.disabled(pairing || connectionLocked || code.isEmpty)
+    }
+    private func refresh() {
+        paired = !server.isEmpty && Credentials.read(server: server) != nil
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--connection-preview") { paired = !server.isEmpty }
+        #endif
+        if serverDraft.isEmpty { serverDraft = server }
     }
 }
 
