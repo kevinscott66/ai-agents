@@ -22,6 +22,7 @@
  */
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from "bun:test";
 import { readFileSync } from "node:fs";
+import { TASK_LIST_MAX_LIMIT } from "../lib/task-list-window.ts";
 import { buildInitData } from "../lib/miniapp-auth.ts";
 import {
   startMiniappServer,
@@ -104,8 +105,9 @@ describe("предпосылки", () => {
     expect(r.status).toBe(200);
     // Потолок 200: значение из запроса до СУБД не доезжает, и клиент не может
     // гарантировать себе полную выдачу, сколько бы ни просил.
+    expect(TASK_LIST_MAX_LIMIT).toBe(200);
     const src = readFileSync(new URL("../lib/miniapp-server.ts", import.meta.url), "utf-8");
-    expect(src).toContain('parseIntOr(url.searchParams.get("limit"), 50, 200)');
+    expect(src).toContain('parseIntOr(url.searchParams.get("limit"), TASK_LIST_DEFAULT_LIMIT, TASK_LIST_MAX_LIMIT)');
   });
 
   test("соседняя ручка того же файла обрезку подписывает", async () => {
@@ -197,16 +199,19 @@ describe("применение", () => {
     SRC.indexOf('if (path === "/api/tasks" && method === "GET")'),
     SRC.indexOf('if (path === "/api/wiki/list"'),
   );
+  // AUD-030: выборка окна вынесена из ручки в lib/task-list-window.ts.
+  const WINDOW = readFileSync(new URL("../lib/task-list-window.ts", import.meta.url), "utf-8");
 
   test("срез окна берётся из выборки на строку шире лимита", () => {
-    expect(ROUTE).toContain("const probe = limit + 1;");
+    expect(WINDOW).toContain("const probe = limit + 1;");
     // Все три ветки спрашивают у СУБД именно probe: любая, оставшаяся на
     // `limit`, вернула бы truncated=false на ровно полной странице.
-    expect(ROUTE.split("probe").length - 1).toBeGreaterThanOrEqual(4);
+    expect(WINDOW.split("probe").length - 1).toBeGreaterThanOrEqual(4);
   });
 
   test("флаг уезжает клиенту рядом со списком", () => {
-    expect(ROUTE).toContain("truncated,");
+    expect(ROUTE).toContain("listTaskWindow(");
+    expect(ROUTE).toContain("truncated: w.truncated,");
   });
 
   test("клиентский тип обещает флаг, а не забывает про него", () => {

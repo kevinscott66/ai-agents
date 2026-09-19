@@ -2,7 +2,7 @@
  * Аудит 2026-08-29: вкладка Tasks в Mini App без фильтра сканировала таблицу
  * целиком.
  *
- * `GET /api/tasks` (lib/miniapp-server.ts:1563) строит
+ * `GET /api/tasks` (lib/task-list-window.ts:79) строит
  * `SELECT id FROM tasks${where} ORDER BY created_at DESC LIMIT ?`, где `where`
  * пустой, если клиент не передал `status`. Единственный индекс, который
  * покрывал этот сорт, — idx_tasks_status_created(status, created_at DESC), и
