@@ -2,6 +2,7 @@ import { NativeKnowledge } from "./native-knowledge.ts";
 /** Separate device credentials/job state; never stores Telegram or service credentials. */
 import { NativeMedia, parseUpload, type NativeLocation } from './native-media.ts';
 import { DAY_MS } from './time-constants.ts';
+import { cutToCodeUnits } from './text-cut.ts';
 import { Database } from 'bun:sqlite';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { mkdirSync, chmodSync } from 'node:fs';
@@ -13,9 +14,7 @@ export const NATIVE_REPLY_MAX = 32_000;
 export const NATIVE_TURN_REPLIES_BYTES = 3 * 1024 * 1024;
 /** Режет по UTF-16 (как считает iOS), не разрывая суррогатную пару эмодзи. */
 export function clipReply(text: string, max = NATIVE_REPLY_MAX): string {
-  if (text.length <= max) return text;
-  const code = text.charCodeAt(max - 1);
-  return text.slice(0, code >= 0xd800 && code <= 0xdbff ? max - 1 : max);
+  return cutToCodeUnits(text, max);
 }
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
 export class NativeAccess {
