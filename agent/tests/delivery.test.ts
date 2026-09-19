@@ -99,7 +99,7 @@ describe("parsing", () => {
 });
 
 /** Страница-заглушка: журнал нажатий и ввода, цена и состояние меняются по ходу. */
-function fakePage(init: Partial<{ guard: DeliveryGuard; rows: DeliveryTariffRow[]; button: number | null; blocked: "payment" | "disabled" | null; contact: boolean; commentField: boolean }> = {}) {
+function fakePage(init: Partial<{ guard: DeliveryGuard; rows: DeliveryTariffRow[]; button: number | null; blocked: "payment" | "confirm_data" | "disabled" | null; contact: boolean; commentField: boolean }> = {}) {
   const s = {
     guard: init.guard ?? ("ok" as DeliveryGuard),
     rows: init.rows ?? [
@@ -202,6 +202,14 @@ describe("mac runner", () => {
     expect(await r.run(prepare)).toEqual({ ok: false, code: "payment_needs_owner" });
     s.blocked = "disabled";
     expect((await r.run(prepare) as { code: string }).code).toBe("order_button_missing");
+    expect(s.clicks).not.toContain("order");
+    await r.close();
+  });
+
+  test("«Подтвердите данные» instead of the order button is the owner's, with no click", async () => {
+    const { s, page } = fakePage({ button: 450, blocked: "confirm_data" });
+    const r = runner(page);
+    expect(await r.run(prepare)).toMatchObject({ ok: false, code: "data_confirm_needs_owner", screenshot: expect.any(String) });
     expect(s.clicks).not.toContain("order");
     await r.close();
   });
