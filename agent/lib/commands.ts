@@ -1,5 +1,5 @@
 import { nativeTurnContext, nativeApprovalLinks, nativeExecutionMarker, recordNativeExecutionOutcome } from "./native-context.ts";
-import { knowledgePrompt, scopedKnowledgeReader } from "./native-knowledge-runtime.ts";
+import { knowledgePrompt, scopedKnowledgeReader, scopedKnowledgeWriter } from "./native-knowledge-runtime.ts";
 import { isAssistantOwner } from "./assistant-auth.ts";
 import { nativeReplyTransport } from "./handoff.ts";
 import { nativeAccess } from "./native-access.ts";
@@ -225,7 +225,7 @@ export async function executeApproved(approval: Approval, deps: ApprovalExecDeps
         handoffDeps: deps.handoffDeps ? {...deps.handoffDeps,nativeHistory,nativeReply:reply} : undefined,
       };
       result = await nativeTurnContext.run({userId,turnId:linked.turn_id,conversationId:linked.conversation_id,
-        knowledge:knowledgePrompt(store,userId,linked.conversation_id),readKnowledge:scopedKnowledgeReader(store,userId,linked.conversation_id),reply,
+        knowledge:knowledgePrompt(store,userId,linked.conversation_id),readKnowledge:scopedKnowledgeReader(store,userId,linked.conversation_id),writeKnowledge:scopedKnowledgeWriter(store,userId,linked.conversation_id),reply,
         linkApproval:id=>store.linkApproval(id,linked.turn_id,userId)},()=>executeApprovedAction(approval,nativeDeps));
     } else result = await executeApprovedAction(approval,deps);
   }
