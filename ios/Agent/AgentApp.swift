@@ -503,7 +503,7 @@ struct RootView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 if model.remoteBusy && !model.busy { Text("Агент выполняет запрос с другого устройства. Ответ появится в соответствующем диалоге.").font(.footnote).foregroundStyle(.secondary).padding() }
-                if model.lines.isEmpty && approvals.visibleItems.isEmpty && signing.items.isEmpty {
+                if model.lines.isEmpty && approvals.visibleItems.isEmpty && signing.items.isEmpty && signing.refreshError == nil {
                     VStack(spacing: 14) {
                         Spacer(minLength: 140)
                         Text("Чем помочь?").font(.system(size: 30, weight: .semibold)).tracking(-0.7)
@@ -558,6 +558,7 @@ struct RootView: View {
                         ForEach(approvals.visibleItems.filter { item in !model.lines.contains(where: { $0.id == "approval:" + item.id + ":result" }) }) { item in
                             approvalCard(item)
                         }
+                        if let error = signing.refreshError { signingRefreshNotice(error) }
                         ForEach(signing.items) { item in
                             SignedActionCard(item: item, outcome: signing.outcomes[item.nonce], working: signing.working.contains(item.nonce),
                                              approve: { Task { await signing.approve(item, server: server) } },
@@ -613,6 +614,18 @@ struct RootView: View {
         .navigationTitle("Архив")
         .task { await model.loadArchived(server: server) }
         .refreshable { await model.loadArchived(server: server) }
+    }
+    private func signingRefreshNotice(_ error: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(error, systemImage: "exclamationmark.triangle").font(.footnote)
+            Text(signing.lastRefreshed.map { "Последнее обновление в " + $0.formatted(date: .omitted, time: .shortened) + ". Карточки ниже могли устареть." }
+                 ?? "Очередь ещё ни разу не загрузилась — ожидаемого действия может не быть на экране.")
+                .font(.caption).foregroundStyle(.secondary)
+            Button("Повторить") { Task { await signing.refresh(server: server) } }.font(.footnote)
+        }
+        .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 14).fill(Color.orange.opacity(0.08)))
+        .accessibilityElement(children: .combine)
     }
     private func approvalCard(_ item: ChatApproval) -> some View {
         ChatApprovalCard(item: item, outcome: approvals.outcomes[item.id], working: approvals.working.contains(item.id)) { approve in
