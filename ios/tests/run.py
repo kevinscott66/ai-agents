@@ -9,18 +9,24 @@ import subprocess
 import tempfile
 
 root = Path(__file__).resolve().parents[1]
+# API.swift без туннеля OpenFlux: он живёт в OpenFlux.swift вместе с C-рантаймом.
+api_sources = [str(root / 'Agent/API.swift'), str(root / 'tests/FluxNetworkStub.swift')]
 with tempfile.TemporaryDirectory(prefix='agent-ios-tests-') as scratch:
     temp = Path(scratch)
     compiler = ['xcrun', 'swiftc', '-module-cache-path', str(temp / 'cache')]
     api = temp / 'api-check'
-    subprocess.run(compiler + [str(root / 'Agent/API.swift'), str(root / 'tests/APIValidation.swift'), '-o', str(api)], check=True, timeout=90)
+    subprocess.run(compiler + api_sources + [str(root / 'tests/APIValidation.swift'), '-o', str(api)], check=True, timeout=90)
     subprocess.run([str(api)], check=True, timeout=60)
     source = (root / 'Agent/AgentApp.swift').read_text()
     model = source[source.index('struct ChatLine:'):source.index('struct AgentGlass:')]
     model = model[:model.index('    func speak(')] + '}\n'
     model = model.replace(': ObservableObject', '').replace('@Published ', '')
     model = model.replace('    private let speaker = AVSpeechSynthesizer()\n', '')
+    api_source = (root / 'Agent/API.swift').read_text()
+    api_models = api_source[:api_source.index('import Foundation')]
+    api_title = api_source[api_source.index('    static func conversationTitle('):api_source.index('    func createConversation(')]
     fixture = (root / 'tests/ChatStateFixture.swift').read_text().replace('// MODEL_UNDER_TEST', model)
+    fixture = fixture.replace('// API_MODELS', api_models, 1).replace(' // API_TITLE', api_title, 1)
     fixture = fixture.replace('import Foundation', 'import Foundation\nlet testDomain = "agent-tests-" + UUID().uuidString\nlet testDefaults = UserDefaults(suiteName: testDomain)!', 1)
     fixture = fixture.replace('UserDefaults.standard', 'testDefaults').replace('@MainActor static func main() async {', '@MainActor static func main() async {\n  defer { testDefaults.removePersistentDomain(forName: testDomain) }')
     generated = temp / 'ChatState.swift'
@@ -35,7 +41,7 @@ with tempfile.TemporaryDirectory(prefix='agent-panel-tests-') as scratch:
     panel = (root / 'Agent/PanelView.swift').read_text()
     panel = panel[panel.index('enum PanelTransport {'):]
     (temp / 'PanelTransport.swift').write_text('import Foundation\n' + panel)
-    subprocess.run(['xcrun', 'swiftc', '-module-cache-path', str(temp / 'cache'), str(root / 'Agent/API.swift'), str(temp / 'PanelTransport.swift'), str(root / 'tests/PanelTransportFixture.swift'), '-o', str(temp / 'panel')], check=True, timeout=90)
+    subprocess.run(['xcrun', 'swiftc', '-module-cache-path', str(temp / 'cache'), *api_sources, str(temp / 'PanelTransport.swift'), str(root / 'tests/PanelTransportFixture.swift'), '-o', str(temp / 'panel')], check=True, timeout=90)
     subprocess.run([str(temp / 'panel')], check=True, timeout=15)
 
 with tempfile.TemporaryDirectory(prefix='agent-approvals-tests-') as scratch:
@@ -52,7 +58,7 @@ with tempfile.TemporaryDirectory(prefix='agent-signing-tests-') as scratch:
     temp = Path(scratch)
     source = (root / 'Agent/Signing.swift').read_text().split('// MARK: - Secure Enclave')[0].replace('import SwiftUI', 'import Foundation').replace('import LocalAuthentication', '')
     (temp / 'Signing.swift').write_text(source)
-    subprocess.run(['xcrun', 'swiftc', '-module-cache-path', str(temp/'cache'), str(root/'Agent/API.swift'), str(temp/'Signing.swift'), str(root/'tests/SignedPayloadValidation.swift'), '-o', str(temp/'test')], check=True, timeout=90)
+    subprocess.run(['xcrun', 'swiftc', '-module-cache-path', str(temp/'cache'), *api_sources, str(temp/'Signing.swift'), str(root/'tests/SignedPayloadValidation.swift'), '-o', str(temp/'test')], check=True, timeout=90)
     sample = subprocess.run([str(temp/'test')], check=True, timeout=15, capture_output=True, text=True).stdout
     if shutil.which('bun'):
         verify = (root / 'tests/signed-verify.ts').read_text().replace('SIGNED_ACTIONS', str(root.parent / 'agent/lib/signed-actions.ts'))
@@ -77,7 +83,7 @@ with tempfile.TemporaryDirectory(prefix='agent-openflux-tests-') as scratch:
     temp = Path(scratch)
     source = (root / 'Agent/OpenFlux.swift').read_text().split('/// All C runtime')[0].replace('import SwiftUI', '')
     (temp / 'Settings.swift').write_text(source)
-    subprocess.run(['xcrun', 'swiftc', '-module-cache-path', str(temp/'cache'), str(root/'Agent/API.swift'), str(temp/'Settings.swift'), str(root/'tests/OpenFluxValidation.swift'), '-o', str(temp/'test')], check=True, timeout=90)
+    subprocess.run(['xcrun', 'swiftc', '-module-cache-path', str(temp/'cache'), *api_sources, str(temp/'Settings.swift'), str(root/'tests/OpenFluxValidation.swift'), '-o', str(temp/'test')], check=True, timeout=90)
     subprocess.run([str(temp/'test')], check=True, timeout=15)
 
 with tempfile.TemporaryDirectory(prefix='agent-speech-tests-') as scratch:
@@ -91,7 +97,8 @@ with tempfile.TemporaryDirectory(prefix='agent-knowledge-tests-') as scratch:
     temp = Path(scratch)
     source = (root / 'Agent/Knowledge.swift').read_text().split('struct KnowledgeView: View')[0]
     source = source.replace('import SwiftUI', '').replace(': ObservableObject', '').replace('@Published ', '')
-    fixture = (root / 'tests/KnowledgeStateFixture.swift').read_text().replace('// MODEL', source)
+    api_source = (root / 'Agent/API.swift').read_text()
+    fixture = (root / 'tests/KnowledgeStateFixture.swift').read_text().replace('// MODEL', source).replace('// API_MODELS', api_source[:api_source.index('import Foundation')], 1)
     (temp / 'Knowledge.swift').write_text(fixture)
     subprocess.run(['xcrun', 'swiftc', '-parse-as-library', '-module-cache-path', str(temp/'cache'), str(temp/'Knowledge.swift'), '-o', str(temp/'test')], check=True, timeout=90)
     subprocess.run([str(temp/'test')], check=True, timeout=15)
