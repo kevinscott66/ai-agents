@@ -6,10 +6,28 @@ const TRANSCRIBE_PROMPT='Русская речь. Расставляй знак�
 // На тишине модель иногда повторяет подсказку вместо речи — такой ответ считаем пустым.
 export const promptEcho=(text:string)=>['Расставляй знаки препинания','Термины пиши так'].some(part=>text.includes(part));
 export const transcribeModels=(env:Record<string,string|undefined>=process.env)=>[...new Set([env.VOICE_TRANSCRIBE_MODEL?.trim()||'gpt-4o-transcribe',env.VOICE_TRANSCRIBE_FALLBACK_MODEL?.trim()||'gpt-4o-mini-transcribe'])];
+// Голоса gpt-4o-mini-tts. marin — по умолчанию: живее остальных по-русски.
+export const SPEECH_VOICES=[
+ {id:'marin',label:'Марин',note:'живой, тёплый — по умолчанию'},
+ {id:'cedar',label:'Кедр',note:'спокойный, низкий'},
+ {id:'coral',label:'Корал',note:'яркий, приветливый'},
+ {id:'sage',label:'Сейдж',note:'мягкий, ровный'},
+ {id:'shimmer',label:'Шиммер',note:'лёгкий, светлый'},
+ {id:'nova',label:'Нова',note:'бодрый'},
+ {id:'alloy',label:'Эллой',note:'нейтральный'},
+ {id:'ash',label:'Эш',note:'собранный, деловой'},
+ {id:'ballad',label:'Баллад',note:'выразительный'},
+ {id:'echo',label:'Эхо',note:'сдержанный'},
+ {id:'fable',label:'Фейбл',note:'повествовательный'},
+ {id:'onyx',label:'Оникс',note:'глубокий'},
+ {id:'verse',label:'Верс',note:'гибкий, разговорный'},
+] as const;
+export const DEFAULT_SPEECH_VOICE='marin';
+const speechVoice=(value:unknown)=>value===undefined?DEFAULT_SPEECH_VOICE:SPEECH_VOICES.some(v=>v.id===value)?value as string:null;
 const json=(v:unknown,status=200)=>Response.json(v,{status,headers:{'Cache-Control':'no-store'}});
 export async function voiceApi(req:Request,owner:string,authorized:()=>boolean):Promise<Response>{
  const path=new URL(req.url).pathname, available=!!process.env.OPENAI_API_KEY?.trim();
- if(path.endsWith('/status')&&req.method==='GET')return json({available,speech:available,transcription:available,maxTextLength:4000,maxAudioBytes:MAX});
+ if(path.endsWith('/status')&&req.method==='GET')return json({available,speech:available,transcription:available,maxTextLength:4000,maxAudioBytes:MAX,voices:SPEECH_VOICES,defaultVoice:DEFAULT_SPEECH_VOICE});
  if(req.method!=='POST'||!['/api/native/voice/speech','/api/native/voice/transcribe'].includes(path))return json({error:'not_found'},404);
  if(!available)return json({error:'voice_unavailable'},503);
  const now=Date.now();for(const [k,v]of windows)if(now-v.at>=60000)windows.delete(k);
@@ -29,7 +47,8 @@ export async function voiceApi(req:Request,owner:string,authorized:()=>boolean):
  makeInput=model=>{const form=new FormData();form.set('file',new Blob([bytes],{type:mime}),`speech.${ext[mime]}`);form.set('model',model);form.set('language','ru');form.set('response_format','json');form.set('prompt',TRANSCRIBE_PROMPT);return form;};
  }else{
  if(typeof body.text!=='string'||!body.text.trim()||body.text.length>4000)return json({error:'invalid_text'},400);
- headers['Content-Type']='application/json';const input=JSON.stringify({model:'gpt-4o-mini-tts',voice:'marin',input:body.text,response_format:'mp3',instructions:'Говори по-русски естественно и дружелюбно, как внимательный собеседник. Живая спокойная интонация, умеренный темп и короткие смысловые паузы.'});makeInput=()=>input;
+ const voice=speechVoice(body.voice);if(!voice)return json({error:'invalid_voice'},400);
+ headers['Content-Type']='application/json';const input=JSON.stringify({model:'gpt-4o-mini-tts',voice,input:body.text,response_format:'mp3',instructions:'Говори по-русски естественно и дружелюбно, как внимательный собеседник. Живая спокойная интонация, умеренный темп и короткие смысловые паузы.'});makeInput=()=>input;
  }
  const models=transcription?transcribeModels():['gpt-4o-mini-tts'];let response:Response|undefined;
  for(const [i,model] of models.entries()){

@@ -246,8 +246,15 @@ struct AgentAPI {
         let result: Transcript = try await request("/api/native/voice/transcribe", body: ["base64audio": data.base64EncodedString(), "mime": "audio/mp4"], expectedToken: expectedToken)
         return result.text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
-    func speechAudio(_ text: String, expectedToken: String) async throws -> Data {
-        try await request("/api/native/voice/speech", body: ["text": text], expectedToken: expectedToken)
+    func speechAudio(_ text: String, voice: String? = nil, expectedToken: String) async throws -> Data {
+        var body = ["text": text]
+        if let voice { body["voice"] = voice }
+        return try await request("/api/native/voice/speech", body: body, expectedToken: expectedToken)
+    }
+    func speechVoices(expectedToken: String) async throws -> [ServerVoice] {
+        struct Status: Decodable { let voices: [ServerVoice]? }
+        let status: Status = try await request("/api/native/voice/status", expectedToken: expectedToken)
+        return status.voices ?? []
     }
     static func knowledgeRoute(_ conversationID: String, resource: String = "knowledge") throws -> String {
         guard conversationID.range(of: #"^[a-zA-Z0-9-]{16,64}$"#, options: .regularExpression) != nil else { throw AgentError.message("Некорректный диалог") }
@@ -391,4 +398,11 @@ private enum PanelTransportURL {
         guard let url = parts.url else { throw AgentError.message("Некорректный адрес сервера") }
         return url
     }
+}
+
+/// Нейросетевой голос сервера (gpt-4o-mini-tts).
+struct ServerVoice: Decodable, Identifiable, Hashable {
+    let id: String
+    let label: String
+    let note: String
 }
