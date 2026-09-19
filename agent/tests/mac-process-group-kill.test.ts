@@ -1,5 +1,6 @@
 import {test,expect} from 'bun:test';
-import {killChild} from '../mac-daemon/kill.ts';
+import {killChild, stopChild, cancelRun, killAll, type KillableChild} from '../mac-daemon/kill.ts';
+import {readdirSync, readFileSync} from 'node:fs';
 
 test('cancel kills a SIGINT-resistant grandchild even after its CLI parent exits', async () => {
   const grandchild = `process.on('SIGINT',()=>{});console.log('ready');setInterval(()=>{},1000);`;
@@ -50,5 +51,41 @@ test('EPERM from a zombie-only process group counts as exited, not a crash', asy
     expect(await killChild(child, 50)).toBe('gone');
   } finally {
     (process as any).kill = real;
+  }
+});
+
+// Любой отказ killChild в фоне — unhandled rejection, а это падение демона.
+test('stopChild turns a failing stop into "failed" and logs, never rejects', async () => {
+  const errors: unknown[] = [];
+  const bad: KillableChild = {kill() {}, exited: Promise.resolve(), processGroupId: 1};
+  expect(await stopChild(bad, 10, (e) => errors.push(e))).toBe('failed');
+  expect(errors.length).toBe(1);
+  expect(await stopChild(bad, 10, () => { throw new Error('logger down'); })).toBe('failed');
+});
+
+test('cancelRun and killAll survive a child whose stop throws', async () => {
+  let unhandled = 0;
+  const on = () => { unhandled++; };
+  process.on('unhandledRejection', on);
+  const origError = console.error;
+  console.error = () => {};
+  try {
+    const bad = (): KillableChild => ({kill() {}, exited: Promise.resolve(), processGroupId: 1});
+    const map = new Map<string, KillableChild>([['a', bad()], ['b', bad()]]);
+    expect(cancelRun(map, 'a', 10)).toBe(true);
+    expect(killAll(map, 10)).toBe(1);
+    await Bun.sleep(30);
+  } finally {
+    console.error = origError;
+    process.off('unhandledRejection', on);
+  }
+  expect(unhandled).toBe(0);
+});
+
+test('daemon sources never fire killChild without handling rejection', () => {
+  const dir = new URL('../mac-daemon/', import.meta.url).pathname;
+  for (const f of readdirSync(dir).filter((f) => f.endsWith('.ts'))) {
+    const code = readFileSync(dir + f, 'utf8').split('\n').filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n');
+    expect({file: f, hit: /void\s+killChild\(/.test(code)}).toEqual({file: f, hit: false});
   }
 });
