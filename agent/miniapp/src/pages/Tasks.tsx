@@ -10,6 +10,7 @@ import { useCoalescer } from "../lib/coalesce";
 import { SkeletonList } from "../components/Skeleton";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorBox } from "../components/ErrorBox";
+import { Dialog } from "../components/Dialog";
 import { TASK_STATUS_LABELS, label } from "../lib/labels";
 import { ellipsize } from "../lib/text";
 import { adminFromAutonomy } from "../lib/admin";
@@ -381,8 +382,11 @@ export default function Tasks() {
           const possible = nextStatuses(t);
           return (
             <div className="list-item" key={t.id}>
-              <div
-                style={{ minWidth: 0, flex: 1 }}
+              {/* Настоящая кнопка, а не div с onClick (AUD-013): доходит Tab,
+                  открывается Enter/пробелом, скринридер называет её кнопкой. */}
+              <button
+                type="button"
+                className="task-open"
                 onClick={() => openTask(t)}
               >
                 <div className="title">{t.title}</div>
@@ -390,7 +394,7 @@ export default function Tasks() {
                   {t.assigned_to ?? "—"} ·{" "}
                   {new Date(t.created_at).toLocaleString()}
                 </div>
-              </div>
+              </button>
               <span className={`badge ${t.status}`}>{label(TASK_STATUS_LABELS, t.status)}</span>
               <div className="task-actions">
                 {QUICK_ACTIONS.filter((qa) =>
@@ -430,9 +434,7 @@ export default function Tasks() {
       )}
 
       {selected && (
-        <div className="modal-overlay" onClick={closeTask}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h2>{selected.title}</h2>
+        <Dialog title={selected.title} onClose={closeTask}>
             <ErrorBox message={err} onRetry={() => load()} />
             <div className="meta" style={{ marginBottom: 10 }}>
               <span className={`badge ${selected.status}`}>
@@ -485,17 +487,15 @@ export default function Tasks() {
                 Закрыть
               </button>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
 
       {showNew && (
-        <div className="modal-overlay" onClick={() => setShowNew(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h2>Новая задача</h2>
+        <Dialog title="Новая задача" onClose={() => setShowNew(false)} closeDisabled={nSubmitting}>
             <p className="meta">Создание добавляет задачу в план. Чтобы агент начал исполнение, поручите её лиду в чате.</p>
-            <div className="section-title">Название</div>
+            <label className="section-title" htmlFor="new-task-title">Название</label>
             <input
+              id="new-task-title"
               type="text"
               value={nTitle}
               onChange={(e) => setNTitle(e.currentTarget.value)}
@@ -510,8 +510,9 @@ export default function Tasks() {
                 marginBottom: 8,
               }}
             />
-            <div className="section-title">Исполнитель</div>
+            <label className="section-title" htmlFor="new-task-assignee">Исполнитель</label>
             <select
+              id="new-task-assignee"
               value={nAssignee}
               onChange={(e) => setNAssignee(e.currentTarget.value)}
               style={{ width: "100%", padding: 8, marginBottom: 8 }}
@@ -528,8 +529,9 @@ export default function Tasks() {
                 </option>
               ))}
             </select>
-            <div className="section-title">Chat ID</div>
+            <label className="section-title" htmlFor="new-task-chat">Chat ID</label>
             <input
+              id="new-task-chat"
               type="text"
               value={nChat}
               onChange={(e) => setNChat(e.currentTarget.value)}
@@ -544,8 +546,9 @@ export default function Tasks() {
                 marginBottom: 8,
               }}
             />
-            <div className="section-title">Ввод (JSON или текст)</div>
+            <label className="section-title" htmlFor="new-task-input">Ввод (JSON или текст)</label>
             <textarea
+              id="new-task-input"
               value={nInput}
               onChange={(e) => setNInput(e.currentTarget.value)}
               placeholder='{"goal": "..."}'
@@ -566,8 +569,7 @@ export default function Tasks() {
                 Отмена
               </button>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
     </div>
   );
