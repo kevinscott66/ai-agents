@@ -213,6 +213,14 @@ export class NativeAccess {
       this.db.query('DELETE FROM conversation_messages WHERE conversation_id=?').run(id);
       this.db.query('DELETE FROM conversation_approvals WHERE turn_id IN (SELECT turn_id FROM conversation_turns WHERE conversation_id=?)').run(id);
       this.db.query('DELETE FROM native_generations WHERE turn_id IN (SELECT turn_id FROM conversation_turns WHERE conversation_id=?)').run(id);
+      // Ход хранит копию ответов, вложения (входящие и созданные агентом) и
+      // координаты отдельно от сообщений — удаляем и их, иначе «удалённый»
+      // диалог продолжает отдаваться по старым ссылкам и занимать квоту.
+      const turnsOf = 'SELECT turn_id FROM conversation_turns WHERE conversation_id=?';
+      this.db.query(`DELETE FROM native_output_media WHERE turn_id IN (${turnsOf})`).run(id);
+      this.db.query(`DELETE FROM native_attachments WHERE user_id=? AND turn_id IN (${turnsOf})`).run(userId,id);
+      this.db.query(`DELETE FROM native_turn_media WHERE turn_id IN (${turnsOf})`).run(id);
+      this.db.query(`DELETE FROM turns WHERE user_id=? AND id IN (${turnsOf})`).run(userId,id);
       this.db.query('DELETE FROM conversation_turns WHERE conversation_id=?').run(id);
       this.knowledge.forgetConversation(id);
       this.db.query('DELETE FROM native_knowledge_state WHERE conversation_id=?').run(id);
