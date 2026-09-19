@@ -47,6 +47,15 @@ import { hostMatches, NAV_TIMEOUT_MS, pageKit, QTY_CLICKS_MAX, UI_TIMEOUT_MS, vi
 import { waitFor } from "./playwright-kit.ts";
 import type { CartRow, QtyResult, SearchCard, ShopPage } from "./shop.ts";
 
+/**
+ * Поле контакта свободно: пустое или с подписью Яндекса по умолчанию
+ * («Пользователь» — так Еда подставляет имя, если своё не задано).
+ */
+export const isBlankContact = (v: string) => !v.trim() || /^Пользователь$/i.test(v.trim());
+
+/** Сколько ждать, прежде чем поверить пустой корзине. */
+export const EMPTY_CART_RECHECK_MS = 2_500;
+
 export const edaPlaceUrl = (ref: string) => {
   const [brand, slug] = ref.split(":");
   return `${EDA_ORIGIN}/r/${encodeURIComponent(brand!)}?placeSlug=${encodeURIComponent(slug!)}`;
@@ -95,8 +104,15 @@ export function dishMatches(name: string, query: string): boolean {
   return tokens.length > 0 && tokens.every((t) => words.some((w) => w.startsWith(t.slice(0, 5))));
 }
 
-/** Название блюда как в расчёте: заголовок и вес через пробел. */
-export const dishName = (title: string, meta: string) => normalizeShopName([title, meta].filter((s) => s.trim()).join(" "));
+/**
+ * Название блюда как в расчёте: заголовок и вес через пробел. На карточке меню
+ * под названием «950 г · 2548 ккал», в окне блюда — только «950 г»: калории
+ * отбрасываем, иначе карточка и окно называют блюдо по-разному.
+ */
+export const dishName = (title: string, meta: string) => {
+  const weight = meta.split("·").map((s) => s.trim()).filter((s) => s && !/ккал|kcal/i.test(s)).join(" · ");
+  return normalizeShopName([title, weight].filter((s) => s.trim()).join(" "));
+};
 
 /** Вариант опции, как его видно в окне блюда. */
 export interface RawOptionChoice {
@@ -351,12 +367,21 @@ export function edaShopPage(page: any): ShopPage {
 
   /** Панель корзины дорисовалась: есть строки, текст пустой корзины или заголовок «Корзина». */
   const cartReady = async (): Promise<"rows" | "empty" | "unknown"> => {
-    let state: "rows" | "empty" | "unknown" = "unknown";
-    await waitFor(async () => {
-      if ((await page.locator(EDA_TESTID.cartRow).count().catch(() => 0)) > 0) state = "rows";
-      else if (await visible(page.getByText(EDA_TEXT.cartEmpty).first(), 200)) state = "empty";
-      return state !== "unknown";
-    }, 20, 500);
+    const look = async (): Promise<"rows" | "empty" | "unknown"> => {
+      if ((await page.locator(EDA_TESTID.cartRow).count().catch(() => 0)) > 0) return "rows";
+      return (await visible(page.getByText(EDA_TEXT.cartEmpty).first(), 200)) ? "empty" : "unknown";
+    };
+    let state = await look();
+    for (let i = 0; i < 20 && state === "unknown"; i++) {
+      await wait(500);
+      state = await look();
+    }
+    // «Пусто, как ночью в холодильнике» рисуется раньше, чем корзина приходит
+    // с сервера: живая строка появлялась через секунду. Пустоту подтверждаем повторно.
+    if (state === "empty") {
+      await wait(EMPTY_CART_RECHECK_MS);
+      if ((await page.locator(EDA_TESTID.cartRow).count().catch(() => 0)) > 0) return "rows";
+    }
     return state;
   };
 
@@ -641,6 +666,9 @@ export function edaShopPage(page: any): ShopPage {
       if (!(await visible(button.first(), UI_TIMEOUT_MS))) return false;
       await button.first().click();
       await page.waitForLoadState("load", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
+      // Экран оплаты дорисовывается после load: без ожидания контакты и итог
+      // читались ещё со страницы ресторана.
+      await payLocator().waitFor({ state: "visible", timeout: NAV_TIMEOUT_MS }).catch(() => {});
       await wait(1_000);
       return true;
     },
@@ -657,7 +685,7 @@ export function edaShopPage(page: any): ShopPage {
         if (!value) continue;
         const input = page.locator(sel).first();
         if (!(await visible(input, UI_TIMEOUT_MS))) continue;
-        if (String(await input.inputValue().catch(() => "x")).trim()) continue;
+        if (!isBlankContact(String(await input.inputValue().catch(() => "x")))) continue;
         await input.fill(value, { timeout: UI_TIMEOUT_MS }).catch(() => {});
         await wait(300);
       }

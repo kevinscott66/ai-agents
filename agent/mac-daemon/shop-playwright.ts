@@ -92,12 +92,51 @@ export function routeShopPage(pages: Record<ShopService, ShopPage>): ShopPage {
     closeAddresses: async () => { await current.closeAddresses?.(); },
     cart: () => current.cart(),
     openCheckout: () => current.openCheckout(),
+    // Без этой строки контакты не доходили до Еды: необязательный метод роутер молча терял.
+    fillContacts: async (contacts) => { await current.fillContacts?.(contacts); },
     checkout: () => current.checkout(),
     clickPay: () => current.clickPay(),
     orderState: () => current.orderState(),
     screenshot: () => current.screenshot(),
     probe: () => current.probe(),
   };
+}
+
+/**
+ * Название товара из карточки выдачи — в той же форме, что на странице товара
+ * (заголовок и фасовка через пробел). Ссылка в выдаче подписана коротко
+ * («Хлеб тостовый Аютинский хлеб 570 г»), полное имя («Хлеб тостовый
+ * «Аютинский хлеб» в нарезке») лежит в alt картинки, а фасовка — только в
+ * конце подписи ссылки. Нет alt или фасовки — берём подпись как есть.
+ */
+export function lavkaCardName(linkText: string, alt: string): string {
+  const link = linkText.replace(/\u00ad/g, "").replace(/\s+/g, " ").trim();
+  const full = alt.replace(/\s+/g, " ").trim();
+  if (!full) return link;
+  const amount = link.match(/\s((?:\d+\s?[×x]\s?)?\d[\d.,]*\s?(?:г|кг|мл|л|шт|уп)\.?)$/i)?.[1];
+  return amount ? `${full} ${amount}` : link;
+}
+
+/**
+ * Внутренний id товара Лавки из разметки schema.org на странице товара.
+ * Мини-корзина ссылается на `/good/<hex-id>`, а выдача и подпись — на
+ * `/good/<slug>`: связку даёт только JSON-LD, где у Product есть и `@id`, и
+ * название. Берём Product ровно с заголовком страницы — рядом лежат похожие.
+ */
+export function lavkaLdProductId(blocks: readonly unknown[], title: string): string | null {
+  const want = title.replace(/\s+/g, " ").trim();
+  const found: string[] = [];
+  const walk = (v: unknown, depth: number) => {
+    if (depth > 8 || v === null || typeof v !== "object") return;
+    if (Array.isArray(v)) return v.forEach((x) => walk(x, depth + 1));
+    const o = v as Record<string, unknown>;
+    if (o["@type"] === "Product" && typeof o["@id"] === "string" && typeof o.name === "string"
+      && o.name.replace(/\s+/g, " ").trim() === want && /^[0-9a-f]{20,64}$/.test(o["@id"])) found.push(o["@id"]);
+    for (const x of Object.values(o)) walk(x, depth + 1);
+  };
+  for (const b of blocks) walk(b, 0);
+  const unique = [...new Set(found)];
+  return unique.length === 1 ? unique[0]! : null;
 }
 
 /** `/good/<slug>?…` → slug, если он похож на идентификатор товара. */
@@ -113,6 +152,12 @@ export function productIdFromHref(href: unknown): string | null {
   }
   return SHOP_PRODUCT_ID.test(id) ? id : null;
 }
+
+/**
+ * Сумма в рублях внутри текста. Разряды Еда отбивает тонкими пробелами
+ * (U+2009, U+2006), а не только неразрывными: без них «1 317 ₽» читалось как 317.
+ */
+export const RUB_AMOUNT = /\d[\d \u00a0\u2000-\u200a\u202f]*(?:[,.]\d{1,2})?\s?₽/;
 
 /** Общие приёмы работы со страницей для адаптеров Лавки, Еды и Маркета. */
 export function pageKit(page: any) {
@@ -130,16 +175,16 @@ export function pageKit(page: any) {
     }
   };
   /** Последняя сумма в строке рядом с видимой подписью `label` («Итого»). */
-  const totalNear = (label: RegExp): Promise<string | null> => page.evaluate((re: string) => {
+  const totalNear = (label: RegExp): Promise<string | null> => page.evaluate(([re, amount]: [string, string]) => {
     const doc = (globalThis as any).document;
     const labelRe = new RegExp(re, "i");
     const leaf = [...doc.querySelectorAll("body *")].reverse().find((el: any) =>
       el.children.length === 0 && labelRe.test(String(el.textContent ?? "").trim()) && el.getClientRects().length > 0);
     let row: any = leaf;
     for (let i = 0; i < 4 && row && !/\d\s?₽/.test(String(row.innerText ?? "")); i++) row = row.parentElement;
-    const m = String(row?.innerText ?? "").match(/\d[\d \u00a0\u202f]*(?:[,.]\d{1,2})?\s?₽/g);
+    const m = String(row?.innerText ?? "").match(new RegExp(amount, "g"));
     return m ? m[m.length - 1] : null;
-  }, label.source);
+  }, [label.source, RUB_AMOUNT.source] as [string, string]);
   const screenshot = () => jpegScreenshot(page, SHOP_SCREENSHOT_B64_MAX);
   const probe = () => ariaProbe(page);
   /**
@@ -171,6 +216,8 @@ export function playwrightShopPage(page: any): ShopPage {
     return /^\d{1,3}$/.test(raw.trim()) ? Number(raw.trim()) : -1;
   };
   const payLocator = () => page.getByRole("button", { name: LAVKA_TEXT.pay }).first();
+  /** hex-id мини-корзины → slug подписанной позиции; пополняет product(). */
+  const slugByCartId = new Map<string, string>();
 
   return {
     openHome: () => goto(`${LAVKA_ORIGIN}/`),
@@ -243,7 +290,7 @@ export function playwrightShopPage(page: any): ShopPage {
     },
     async searchCards() {
       await page.locator(LAVKA_TESTID.productCard).first().waitFor({ state: "visible", timeout: UI_TIMEOUT_MS }).catch(() => {});
-      const raw: Array<{ href: string | null; name: string; price: string; text: string }> = await page.evaluate(
+      const raw: Array<{ href: string | null; name: string; alt: string; price: string; text: string }> = await page.evaluate(
         (sel: { card: string; link: string; price: string }) => {
           const doc = (globalThis as any).document;
           return [...doc.querySelectorAll(sel.card)].slice(0, 12).map((card: any) => {
@@ -251,6 +298,7 @@ export function playwrightShopPage(page: any): ShopPage {
             return {
               href: link?.getAttribute("href") ?? null,
               name: String(link?.innerText ?? link?.textContent ?? ""),
+              alt: String(card.querySelector("img[alt]")?.getAttribute("alt") ?? ""),
               price: String(card.querySelector(sel.price)?.innerText ?? ""),
               text: String(card.innerText ?? "").slice(0, 400),
             };
@@ -262,7 +310,7 @@ export function playwrightShopPage(page: any): ShopPage {
       for (const r of raw) {
         const id = productIdFromHref(r.href);
         if (!id) continue;
-        cards.push({ id, name: r.name, price_rub: parseShopRubles(r.price), available: !LAVKA_TEXT.outOfStock.test(r.text) });
+        cards.push({ id, name: lavkaCardName(r.name, r.alt), price_rub: parseShopRubles(r.price), available: !LAVKA_TEXT.outOfStock.test(r.text) });
       }
       return cards;
     },
@@ -273,6 +321,12 @@ export function playwrightShopPage(page: any): ShopPage {
       if (!title) return { name: null, price_rub: null, available: false };
       const amount = await text(page.locator(LAVKA_TESTID.productAmount).first());
       const name = [title, amount].filter(Boolean).join(" ");
+      const slug = productIdFromHref(new URL(String(page.url())).pathname);
+      const blocks: unknown[] = (await page.evaluate(() =>
+        [...(globalThis as any).document.querySelectorAll('script[type="application/ld+json"]')].map((el: any) => String(el.textContent ?? "")),
+      ).catch(() => [])).flatMap((raw: string) => { try { return [JSON.parse(raw)]; } catch { return []; } });
+      const cartId = lavkaLdProductId(blocks, title);
+      if (slug && cartId && cartId !== slug) slugByCartId.set(cartId, slug);
       const barVisible = await visible(bar(), UI_TIMEOUT_MS);
       const barText = barVisible ? (await text(bar())) ?? "" : "";
       const price = parseShopRubles(await text(bar().locator(LAVKA_TESTID.price).first()));
@@ -317,8 +371,9 @@ export function playwrightShopPage(page: any): ShopPage {
       );
       const rows = new Map<string, CartRow>();
       for (const r of raw) {
-        const id = productIdFromHref(r.href);
-        if (!id) continue;
+        const href = productIdFromHref(r.href);
+        if (!href) continue;
+        const id = slugByCartId.get(href) ?? href;
         // Строка без читаемого количества — чужая вёрстка: пусть сверка корзины упадёт.
         const qty = /^\d{1,3}$/.test(r.qty.trim()) ? Number(r.qty.trim()) : -1;
         const lineRub = parseShopRubles(r.price);
@@ -334,6 +389,12 @@ export function playwrightShopPage(page: any): ShopPage {
       await button.first().click();
       await page.waitForLoadState("load", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
       await wait(1_000);
+      const next = page.getByRole("button", { name: LAVKA_TEXT.toPayment }).first();
+      if (await visible(next, UI_TIMEOUT_MS)) {
+        await next.click();
+        await page.waitForLoadState("load", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
+        await wait(1_500);
+      }
       return true;
     },
     async checkout() {

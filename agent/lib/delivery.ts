@@ -10,9 +10,12 @@
  * подпись на телефоне (lib/signed-actions.ts, сервис yandex_delivery, потолок
  * 1000 ₽) → claim → prepare на Mac → checkFinal → confirm на Mac → complete.
  *
- * Контакты отправителя и получателя агент не вводит: остаются те, что
- * подставляет Яндекс Go (аккаунт владельца). Если страница требует телефон —
- * отказ `contact_required`, владелец оформляет сам. Комментарий курьеру
+ * Контакты агент не придумывает: телефон отправителя подставляет Яндекс Go
+ * (аккаунт владельца), пустой телефон получателя заполняется тем же номером —
+ * из поля в поле, наружу он не читается. Если страница всё равно требует
+ * контакт — отказ `contact_required`, владелец оформляет сам. Способ оплаты
+ * агент не добавляет: без него кнопка заказа неактивна — отказ
+ * `payment_needs_owner`. Комментарий курьеру
  * (что забрать, подъезд) — необязательный, виден в карточке и подписывается.
  */
 import { normalizeTaxiAddress, TAXI_SCREENSHOT_B64_MAX } from "./taxi.ts";
@@ -50,6 +53,7 @@ export const DELIVERY_PRE_ORDER_CODES = [
   "price_changed",
   "session_unknown",
   "order_button_missing",
+  "payment_needs_owner",
   "delivery_busy",
 ] as const;
 export const DELIVERY_ORDER_CODES = ["no_active_order", "cancel_unavailable"] as const;
@@ -209,12 +213,13 @@ export const DELIVERY_FAIL_LABEL: Record<DeliveryFailCode, string> = {
   unexpected_page: "открылась неожиданная страница — остановился",
   address_not_found: "адрес не найден",
   tariff_unavailable: "тариф доставки сейчас недоступен",
-  contact_required: "страница просит контакт отправителя или получателя — агент их не вводит, оформи сам",
+  contact_required: "страница просит контакт, которого у агента нет (подставляет только телефон владельца) — оформи сам",
   comment_unavailable: "поле комментария курьеру не найдено",
   price_unreadable: "не удалось прочитать цену",
   price_changed: "цена изменилась сверх подписанной",
   session_unknown: "подготовленный заказ не найден или устарел",
   order_button_missing: "кнопка заказа не найдена",
+  payment_needs_owner: "в Доставке не выбран способ оплаты — агент его не добавляет, выбери в Яндекс Go сам",
   delivery_busy: "браузер доставки занят другим запросом",
   no_active_order: "активной доставки нет",
   cancel_unavailable: "доставку нельзя отменить со страницы",
