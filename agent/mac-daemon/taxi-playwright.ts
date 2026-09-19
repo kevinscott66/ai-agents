@@ -45,7 +45,8 @@ export async function launchPlaywrightTaxi(env: TaxiEnv, profileDir: string, opt
     viewport: { width: 1024, height: 720 },
   });
   const page = playwrightTaxiPage(raw);
-  return { page: () => page, close: () => context.close() };
+  const fronted = { ...page, front: () => raw.bringToFront() };
+  return { page: () => fronted, close: () => context.close() };
 }
 
 export function playwrightTaxiPage(page: any): TaxiPage {

@@ -265,7 +265,7 @@ export const TAXI_FAIL_LABEL: Record<TaxiFailCode, string> = {
   profile_insecure: "профиль браузера доступен другим пользователям Mac — нужен chmod 700",
   browser_unavailable: "не удалось запустить Chrome для такси",
   login_required: "в Яндекс Go не выполнен вход — владелец входит сам: bun mac-daemon/taxi.ts login",
-  captcha: "Яндекс показал капчу — агент её не решает, нужен владелец",
+  captcha: "Яндекс показал капчу — агент её не решает: владелец проходит её сам в окне Chrome агента на Mac (окно ждёт 15 минут), потом вызов повторяют",
   unexpected_page: "открылась неожиданная страница — остановился",
   address_not_found: "адрес не найден",
   tariff_unavailable: "тариф сейчас недоступен",
