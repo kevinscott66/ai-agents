@@ -60,7 +60,9 @@ export async function launchPlaywrightShop(env: ShopEnv, profileDir: string, opt
   });
   const { edaShopPage } = await import("./eda-playwright.ts");
   const { marketShopPage } = await import("./market-playwright.ts");
-  const page = routeShopPage({ lavka: playwrightShopPage(raw), eda: edaShopPage(raw), market: marketShopPage(raw) });
+  const routed = routeShopPage({ lavka: playwrightShopPage(raw), eda: edaShopPage(raw), market: marketShopPage(raw) });
+  // Вкладка одна на все сервисы — наверх выводится она сама.
+  const page: ShopPage = { ...routed, front: () => raw.bringToFront() };
   return { page: () => page, close: () => context.close() };
 }
 

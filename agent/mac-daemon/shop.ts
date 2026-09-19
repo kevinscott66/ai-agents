@@ -67,7 +67,7 @@ import {
   type ShopRequest,
   type ShopService,
 } from "../lib/shop.ts";
-import { ensureLoginProfileDir, printOutcome, profileDirProblem, runCli, runnerErrorCode, waitForEnter, settleOrRelease } from "./runner-kit.ts";
+import { CAPTCHA_HOLD_MS, ensureLoginProfileDir, printOutcome, profileDirProblem, runCli, runnerErrorCode, waitForEnter, settleOrRelease } from "./runner-kit.ts";
 import { SHOP_STATE_POLL } from "./shop-selectors.ts";
 
 export interface ShopEnv {
@@ -171,6 +171,8 @@ export interface ShopPage {
   orderState(): Promise<{ state: ShopOrderState; eta_min: number | null }>;
   screenshot(): Promise<string | null>;
   probe(): Promise<string>;
+  /** Вывести окно наверх: на капче его ждёт владелец. */
+  front?(): Promise<void>;
 }
 
 export interface ShopBrowser {
@@ -235,9 +237,17 @@ export interface ShopRunnerOptions {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   idleMs?: number;
+  /** Сколько окно с капчей ждёт владельца, прежде чем закрыться по простою. */
+  captchaHoldMs?: number;
   deadlineMs?: number;
   /** Только для тестов: сколько ждать, что зависший шаг закончится сам. */
   selfSettleMs?: number;
+}
+
+/** Что исполнитель положил в корзину и не смог убрать: капча не пустила. */
+interface Stranded {
+  target: ShopTarget;
+  lines: ShopLine[];
 }
 
 export class ShopRunner {
@@ -252,6 +262,11 @@ export class ShopRunner {
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly idleMs: number;
+  private readonly captchaHoldMs: number;
+  /** Последний запуск встал на капче: окно держим открытым дольше обычного. */
+  private captchaHold = false;
+  /** Свои позиции, оставшиеся в корзине после капчи; убираются первым делом в следующем prepare. */
+  private stranded: Stranded | null = null;
   private readonly deadlineMs: number;
   private readonly selfSettleMs: number | undefined;
   /** Растёт на каждом close(): запуск, закончившийся после закрытия, — сирота. */
@@ -263,6 +278,7 @@ export class ShopRunner {
     this.now = opts.now ?? Date.now;
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.idleMs = opts.idleMs ?? 5 * 60_000;
+    this.captchaHoldMs = opts.captchaHoldMs ?? CAPTCHA_HOLD_MS;
     this.deadlineMs = opts.deadlineMs ?? SHOP_RUN_DEADLINE_MS;
     this.selfSettleMs = opts.selfSettleMs;
   }
@@ -276,6 +292,7 @@ export class ShopRunner {
     }
     this.busy = true;
     this.current = { op: request.op, since: this.now() };
+    this.captchaHold = false;
     if (this.idleTimer) clearTimeout(this.idleTimer);
     // Присваивается внутри work — без приведения TS сузил бы до null.
     let page = null as ShopPage | null;
@@ -293,6 +310,12 @@ export class ShopRunner {
       if (page && SCREENSHOT_CODES.includes(e.code)) {
         const shot = e.screenshot !== undefined ? e.screenshot : await page.screenshot().catch(() => null);
         if (shot) out.screenshot = shot;
+      }
+      if (page && e.code === "captcha") {
+        // Капчу проходит владелец в этом же окне: оно остаётся на капче, наверху
+        // и открытым CAPTCHA_HOLD_MS. Сам исполнитель капчу не трогает.
+        this.captchaHold = true;
+        await page.front?.().catch(() => {});
       }
       return out;
     } finally {
@@ -348,7 +371,7 @@ export class ShopRunner {
 
   private scheduleIdleClose() {
     if (!this.browser) return;
-    this.idleTimer = setTimeout(() => { if (!this.busy) void this.close(); }, this.idleMs);
+    this.idleTimer = setTimeout(() => { if (!this.busy) void this.close(); }, this.captchaHold ? this.captchaHoldMs : this.idleMs);
     this.idleTimer.unref?.();
   }
 
@@ -450,8 +473,14 @@ export class ShopRunner {
       case "prepare": {
         const active = this.activeSession();
         if (active && active.id !== request.session) throw new ShopError("shop_busy");
-        if (active) await this.clearLines(page, active.target, active.items);
+        if (active) this.strand(active.target, await this.clearLines(page, active.target, active.items));
         this.session = null;
+        // Хвост прошлой капчи: свои позиции убираем до проверки «корзина пуста».
+        const stranded = this.stranded;
+        if (stranded) {
+          this.stranded = null;
+          this.strand(stranded.target, await this.clearLines(page, stranded.target, stranded.lines));
+        }
         if (shopNeedsPlace(request.service) !== (request.place !== undefined)) throw new ShopError("place_not_found");
         const target: ShopTarget = { service: request.service, ...(request.place ? { place: request.place } : {}) };
         const address = await this.openAt(page, () => page.openCart(target));
@@ -464,7 +493,7 @@ export class ShopRunner {
           return { ok: true, op: "prepare", address, lines, total_rub: total };
         } catch (e) {
           await this.snapshot(page, e);
-          await this.clearLines(page, target, added);
+          await this.cleanupAfter(page, e, target, added);
           throw e;
         }
       }
@@ -481,7 +510,7 @@ export class ShopRunner {
           checkAborted();
         } catch (e) {
           await this.snapshot(page, e);
-          await this.clearLines(page, session.target, session.items);
+          await this.cleanupAfter(page, e, session.target, session.items);
           throw e;
         }
         await page.clickPay();
@@ -495,7 +524,7 @@ export class ShopRunner {
         const session = this.activeSession();
         if (session?.id === request.session) {
           this.session = null;
-          await this.clearLines(page, session.target, session.items);
+          this.strand(session.target, await this.clearLines(page, session.target, session.items));
         }
         return { ok: true, op: "abandon" };
       }
@@ -606,28 +635,50 @@ export class ShopRunner {
     }
   }
 
-  /** Убрать то, что положил сам. Лучшее усилие: ошибки не перекрывают исходный отказ. */
-  private async clearLines(page: ShopPage, target: ShopTarget, lines: ReadonlyArray<ShopLine>) {
+  /**
+   * Уборка после отказа. На капче страницу не уводим — её проходит владелец
+   * в этом окне, — а свои позиции запоминаем до следующего prepare.
+   */
+  private async cleanupAfter(page: ShopPage, e: unknown, target: ShopTarget, lines: ShopLine[]) {
+    if (e instanceof ShopError && e.code === "captcha") {
+      this.strand(target, lines);
+      return;
+    }
+    this.strand(target, await this.clearLines(page, target, lines));
+  }
+
+  private strand(target: ShopTarget, lines: ShopLine[]) {
+    if (!lines.length) return;
+    const same = this.stranded && this.stranded.target.service === target.service && this.stranded.target.place === target.place;
+    this.stranded = { target, lines: same ? [...this.stranded!.lines, ...lines] : lines };
+  }
+
+  /**
+   * Убрать то, что положил сам. Лучшее усилие: ошибки не перекрывают исходный
+   * отказ. Возвращает позиции, до которых не дошли из-за капчи или входа.
+   */
+  private async clearLines(page: ShopPage, target: ShopTarget, lines: ReadonlyArray<ShopLine>): Promise<ShopLine[]> {
     if (target.place && lines.length) {
       // В Еде блюдо с разными опциями — разные строки корзины: убираем строки своих вариантов.
       try {
         await page.openCart(target);
-        if ((await page.guard()) !== "ok") return;
+        if ((await page.guard()) !== "ok") return [...lines];
         await page.removeCartRows?.(lines.map((l) => cartId(target, l)));
       } catch {
         // лучшее усилие
       }
-      return;
+      return [];
     }
-    for (const line of lines) {
+    for (const [i, line] of lines.entries()) {
       try {
         await page.openProduct(target, line);
-        if ((await page.guard()) !== "ok") return;
+        if ((await page.guard()) !== "ok") return lines.slice(i);
         await page.setProductQty(0);
       } catch {
         // следующая позиция
       }
     }
+    return [];
   }
 
   private async pollState(page: ShopPage): Promise<ShopOrderState> {

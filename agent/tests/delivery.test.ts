@@ -166,6 +166,32 @@ describe("mac runner", () => {
     await r.close();
   });
 
+  test("captcha: window in front and open for the hold, other refusals only for the idle time", async () => {
+    const { s, page } = fakePage({ guard: "captcha" });
+    let fronted = 0;
+    let closed = 0;
+    page.front = async () => { fronted++; };
+    const r = new DeliveryRunner({ DELIVERY_ENABLED: "true", DELIVERY_PROFILE_DIR: "/profile" }, {
+      launch: async () => ({ page: () => page, close: async () => { closed++; } }),
+      checkProfile: (e) => e.DELIVERY_PROFILE_DIR ?? "",
+      now: () => T0,
+      sleep: async () => {},
+      idleMs: 10,
+      captchaHoldMs: 150,
+    });
+    expect((await r.run(prepare) as { code: string }).code).toBe("captcha");
+    expect(fronted).toBe(1);
+    await Bun.sleep(50);
+    expect(closed).toBe(0);
+    await Bun.sleep(150);
+    expect(closed).toBe(1);
+    s.guard = "login_required";
+    expect((await r.run(prepare) as { code: string }).code).toBe("login_required");
+    expect(fronted).toBe(1);
+    await Bun.sleep(50);
+    expect(closed).toBe(2);
+  });
+
   test("captcha stops with a screenshot, nothing is touched", async () => {
     const { s, page } = fakePage({ guard: "captcha" });
     const r = runner(page);
