@@ -2,6 +2,8 @@ import { NativeKnowledge } from "./native-knowledge.ts";
 /** Separate device credentials/job state; never stores Telegram or service credentials. */
 import { NativeMedia, parseUpload, type NativeLocation } from './native-media.ts';
 import { DAY_MS } from './time-constants.ts';
+import { nativeStatePath } from './native-db-path.ts';
+import { cutToCodeUnits } from './text-cut.ts';
 import { Database } from 'bun:sqlite';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { mkdirSync, chmodSync } from 'node:fs';
@@ -9,6 +11,12 @@ import { dirname, resolve } from 'node:path';
 import type { NativeArtifactSink, NativeGeneration, NativeExecutionOutcome } from './native-context.ts';
 /** Ответ в приложении не режется на части, как в Telegram, поэтому потолок шире. */
 export const NATIVE_REPLY_MAX = 32_000;
+/** Весь список ответов хода в JSON: клиент читает не больше 4 МиБ, оставляем запас на медиа и роли. */
+export const NATIVE_TURN_REPLIES_BYTES = 3 * 1024 * 1024;
+/** Режет по UTF-16 (как считает iOS), не разрывая суррогатную пару эмодзи. */
+export function clipReply(text: string, max = NATIVE_REPLY_MAX): string {
+  return cutToCodeUnits(text, max);
+}
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
 export class NativeAccess {
   readonly db: Database;
@@ -147,10 +155,16 @@ export class NativeAccess {
     if(!row) return;
     const replies = JSON.parse(row.replies) as string[];
     if (replies.length >= 80) return;
-    replies.push(text.slice(0, NATIVE_REPLY_MAX));
+    // Список ответов целиком обязан влезать в ответ сервера, иначе iPhone не заберёт результат хода.
+    const used = Buffer.byteLength(JSON.stringify(replies));
+    let reply = clipReply(text);
+    while (reply && used + Buffer.byteLength(JSON.stringify(reply)) + 1 > NATIVE_TURN_REPLIES_BYTES) reply = clipReply(reply, Math.floor(reply.length / 2));
+    if (!reply && text) return;
+    text = reply;
+    replies.push(text);
     const link = this.db.query('SELECT conversation_id FROM conversation_turns WHERE turn_id=?').get(id) as {conversation_id:string}|null;
     if (link) {
-      this.db.query('INSERT OR IGNORE INTO conversation_messages(id,conversation_id,role,text) VALUES(?,?,?,?)').run(id+':reply:'+replies.length,link.conversation_id,'assistant',text.slice(0,NATIVE_REPLY_MAX));
+      this.db.query('INSERT OR IGNORE INTO conversation_messages(id,conversation_id,role,text) VALUES(?,?,?,?)').run(id+':reply:'+replies.length,link.conversation_id,'assistant',text);
       this.db.query('INSERT OR REPLACE INTO native_message_authors(message_id,agent_key) VALUES(?,?)').run(id+':reply:'+replies.length,agentKey);
       this.db.query('UPDATE conversations SET updated=? WHERE id=?').run(Date.now(),link.conversation_id);
     }
@@ -161,7 +175,7 @@ export class NativeAccess {
     if(!/^[a-z][a-z0-9_]{0,31}$/.test(agentKey)||!this.conversation(conversationId,userId))throw new Error('native_owner_mismatch');
     return this.db.transaction(()=>{
       const messageId='team:'+randomBytes(16).toString('hex');
-      const row=this.db.query('INSERT INTO conversation_messages(id,conversation_id,role,text) VALUES(?,?,?,?) RETURNING seq').get(messageId,conversationId,'assistant',text.slice(0,NATIVE_REPLY_MAX)) as {seq:number};
+      const row=this.db.query('INSERT INTO conversation_messages(id,conversation_id,role,text) VALUES(?,?,?,?) RETURNING seq').get(messageId,conversationId,'assistant',clipReply(text)) as {seq:number};
       this.db.query('INSERT INTO native_message_authors VALUES(?,?)').run(messageId,agentKey);
       this.db.query('UPDATE conversations SET updated=? WHERE id=?').run(Date.now(),conversationId);
       return {messageId,seq:row.seq};
@@ -213,6 +227,14 @@ export class NativeAccess {
       this.db.query('DELETE FROM conversation_messages WHERE conversation_id=?').run(id);
       this.db.query('DELETE FROM conversation_approvals WHERE turn_id IN (SELECT turn_id FROM conversation_turns WHERE conversation_id=?)').run(id);
       this.db.query('DELETE FROM native_generations WHERE turn_id IN (SELECT turn_id FROM conversation_turns WHERE conversation_id=?)').run(id);
+      // Ход хранит копию ответов, вложения (входящие и созданные агентом) и
+      // координаты отдельно от сообщений — удаляем и их, иначе «удалённый»
+      // диалог продолжает отдаваться по старым ссылкам и занимать квоту.
+      const turnsOf = 'SELECT turn_id FROM conversation_turns WHERE conversation_id=?';
+      this.db.query(`DELETE FROM native_output_media WHERE turn_id IN (${turnsOf})`).run(id);
+      this.db.query(`DELETE FROM native_attachments WHERE user_id=? AND turn_id IN (${turnsOf})`).run(userId,id);
+      this.db.query(`DELETE FROM native_turn_media WHERE turn_id IN (${turnsOf})`).run(id);
+      this.db.query(`DELETE FROM turns WHERE user_id=? AND id IN (${turnsOf})`).run(userId,id);
       this.db.query('DELETE FROM conversation_turns WHERE conversation_id=?').run(id);
       this.knowledge.forgetConversation(id);
       this.db.query('DELETE FROM native_knowledge_state WHERE conversation_id=?').run(id);
@@ -284,5 +306,5 @@ export class NativeAccess {
 }
 let store: NativeAccess | undefined;
 export function nativeAccess(): NativeAccess {
-  return store ??= new NativeAccess(process.env.NATIVE_STATE_PATH || resolve(dirname(process.env.MEMORY_DB_PATH || 'data/memory.db'), 'native.db'));
+  return store ??= new NativeAccess(nativeStatePath());
 }

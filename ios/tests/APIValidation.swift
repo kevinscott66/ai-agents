@@ -15,12 +15,12 @@ struct ByteFixture: AsyncSequence, AsyncIteratorProtocol {
     }
     static func main() async throws {
         for status in ["running", "done", "error", "interrupted"] {
-            _ = try Turn(id: "expected", status: status, replies: [String(repeating: "😀", count: 4_000)]).validated(for: "expected")
+            _ = try Turn(id: "expected", status: status, replies: [String(repeating: "😀", count: 16_000), String(repeating: "a", count: 8_001), String(repeating: "a", count: 32_000)]).validated(for: "expected")
         }
         rejects { _ = try Turn(id: "wrong", status: "done", replies: []).validated(for: "expected") }
         rejects { _ = try Turn(id: "expected", status: "unknown", replies: []).validated(for: "expected") }
         rejects { _ = try Turn(id: "expected", status: "done", replies: Array(repeating: "", count: 81)).validated(for: "expected") }
-        rejects { _ = try Turn(id: "expected", status: "done", replies: [String(repeating: "😀", count: 4_001)]).validated(for: "expected") }
+        rejects { _ = try Turn(id: "expected", status: "done", replies: [String(repeating: "😀", count: 16_001)]).validated(for: "expected") }
         rejects { _ = try JSONDecoder().decode(Turn.self, from: Data(#"{"id":"expected","status":"done","replies":[1]}"#.utf8)) }
         let legacy = try JSONDecoder().decode(Turn.self, from: Data(#"{"id":"expected","status":"done","replies":[]}"#.utf8))
         precondition(legacy.outputMedia == nil && legacy.generations == nil)

@@ -290,15 +290,29 @@ private func jsonBody(_ fields: [String: String]) -> String { String(data: try! 
     @Published var items: [Item] = []
     @Published var outcomes: [String: String] = [:]
     @Published var working: Set<String> = []
+    /// Очередь не обновилась два опроса подряд: карточки ниже могут быть устаревшими, а пустота — ложной.
+    @Published var refreshError: String?
+    @Published var lastRefreshed: Date?
+    private var failures = 0
     private var server = ""
 
     func refresh(server: String) async {
-        if self.server != server { self.server = server; items = []; outcomes = [:]; working = [] }
-        guard let record = SigningKeyStore.read(server: server), record.active else { items = []; return }
-        guard let response = try? await signingCall(server, "/api/native/signing/actions"), response.status == 200, self.server == server else { return }
+        if self.server != server { self.server = server; items = []; outcomes = [:]; working = []; refreshError = nil; lastRefreshed = nil; failures = 0 }
+        guard let record = SigningKeyStore.read(server: server), record.active else { items = []; refreshError = nil; failures = 0; return }
         struct Pending: Decodable { let nonce: String; let payload: String }
         struct Reply: Decodable { let actions: [Pending] }
-        guard let pending = try? JSONDecoder().decode(Reply.self, from: Data(response.body.utf8)).actions else { return }
+        let pending: [Pending]
+        do {
+            let response = try await signingCall(server, "/api/native/signing/actions")
+            guard self.server == server else { return }
+            guard response.status == 200 else { return failed(SigningRefusal.message(status: response.status, body: response.body)) }
+            guard let decoded = try? JSONDecoder().decode(Reply.self, from: Data(response.body.utf8)).actions else { return failed("Сервер прислал непонятный ответ.") }
+            pending = decoded
+        } catch {
+            guard self.server == server else { return }
+            return failed(error.localizedDescription)
+        }
+        failures = 0; refreshError = nil; lastRefreshed = Date()
         let fresh = pending.map { entry -> Item in
             do { return Item(payload: entry.payload, action: try SignedActionPayload.parse(entry.payload, nonce: entry.nonce, expectedKey: record.keyId), problem: nil, nonce: entry.nonce) }
             catch { return Item(payload: entry.payload, action: nil, problem: error.localizedDescription, nonce: entry.nonce) }
@@ -306,6 +320,12 @@ private func jsonBody(_ fields: [String: String]) -> String { String(data: try! 
         // Решённые карточки остаются, пока владелец видит итог.
         let decided = items.filter { outcomes[$0.nonce] != nil && !fresh.contains($0) }
         items = fresh + decided
+    }
+
+    /// Один сбой опроса раз в 5 секунд не показываем — сеть моргает. Второй подряд уже состояние.
+    private func failed(_ reason: String) {
+        failures += 1
+        if failures >= 2 { refreshError = "Не удалось обновить действия на подпись: " + reason }
     }
 
     func approve(_ item: Item, server: String) async {

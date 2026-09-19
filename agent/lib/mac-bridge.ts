@@ -324,6 +324,7 @@ import type { MacControl } from "./mac-control.ts";
 import type { TaxiRequest } from "./taxi.ts";
 import type { DeliveryRequest } from "./delivery.ts";
 import type { RepairRequest } from "./selector-repair.ts";
+import type { CodeTask } from "./code-task.ts";
 import type { ShopRequest } from "./shop.ts";
 import {
   DEFAULT_MAC_BRIDGE_HOST,
@@ -509,10 +510,23 @@ export function sendRepairToMac(request: RepairRequest, userId: string | undefin
 
 export const MAC_REPAIR_TIMEOUT_MS = 40 * 60_000;
 
-type ShortRequest = { operation: "calendar_today" | "open_workspace" } | { control: MacControl } | { taxi: TaxiRequest } | { shop: ShopRequest } | { delivery: DeliveryRequest } | { repair: RepairRequest };
+/**
+ * Задача на код (самоулучшение, пункт 9) — после одобрения карточки CODE_TASK.
+ * Условия — как у починки. Таймаут с запасом на bun install, прогон
+ * исполнителя (до 35 минут), tsc и пуш; ответ — CodeTaskOutcome одной строкой.
+ */
+export function sendCodeTaskToMac(task: CodeTask, userId: string | undefined, chatId: number): Promise<MacRunResult> {
+  if (!userId || !isUserAllowed(userId) || String(chatId) !== userId || chatId <= 0) return Promise.reject(new Error("forbidden"));
+  if (!isMacOnline()) return Promise.reject(new Error("mac_offline"));
+  return sendMacRequest({ codeTask: task });
+}
+
+export const MAC_CODE_TASK_TIMEOUT_MS = 50 * 60_000;
+
+type ShortRequest = { operation: "calendar_today" | "open_workspace" } | { control: MacControl } | { taxi: TaxiRequest } | { shop: ShopRequest } | { delivery: DeliveryRequest } | { repair: RepairRequest } | { codeTask: CodeTask };
 
 function sendMacRequest(req: MacRunRequest | ShortRequest): Promise<MacRunResult> {
-  const short = "operation" in req || "control" in req || "taxi" in req || "shop" in req || "delivery" in req || "repair" in req;
+  const short = "operation" in req || "control" in req || "taxi" in req || "shop" in req || "delivery" in req || "repair" in req || "codeTask" in req;
   return new Promise<MacRunResult>((resolve, reject) => {
     if (!activeSocket) {
       reject(new Error("mac_offline"));
@@ -534,7 +548,7 @@ function sendMacRequest(req: MacRunRequest | ShortRequest): Promise<MacRunResult
         cancelOnMac(id);
         p.reject(new Error("mac_timeout"));
       }
-    }, "taxi" in req ? MAC_TAXI_TIMEOUT_MS : "shop" in req ? MAC_SHOP_TIMEOUT_MS : "delivery" in req ? MAC_DELIVERY_TIMEOUT_MS : "repair" in req ? MAC_REPAIR_TIMEOUT_MS : short ? 30_000 : _readRunTimeoutMs());
+    }, "taxi" in req ? MAC_TAXI_TIMEOUT_MS : "shop" in req ? MAC_SHOP_TIMEOUT_MS : "delivery" in req ? MAC_DELIVERY_TIMEOUT_MS : "repair" in req ? MAC_REPAIR_TIMEOUT_MS : "codeTask" in req ? MAC_CODE_TASK_TIMEOUT_MS : short ? 30_000 : _readRunTimeoutMs());
     pending.set(id, {
       id,
       stdout: "",
@@ -569,6 +583,8 @@ function sendMacRequest(req: MacRunRequest | ShortRequest): Promise<MacRunResult
             type: "delivery", id, request: req.delivery,
           } : "repair" in req ? {
             type: "repair", id, request: req.repair,
+          } : "codeTask" in req ? {
+            type: "code_task", id, task: req.codeTask,
           } : {
             type: req.provider === "codex" ? "run_codex" : "run",
             id,
