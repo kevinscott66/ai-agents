@@ -7,7 +7,10 @@ export type KnowledgeEntry = {
     kind: 'fact' | 'decision' | 'task';
     text: string;
     sourceMessageIds: string[];
+    /** Записано агентом или владельцем напрямую: сжатие памяти его не переписывает. */
+    pinned?: boolean;
 };
+export type KnowledgeEdit = { kind: KnowledgeEntry['kind']; text: string } | null;
 export type KnowledgeProject = {
     id: string;
     title: string;
@@ -43,12 +46,12 @@ export function parseKnowledgeUpdate(raw: unknown): KnowledgeEntry[] {
         throw invalid();
     const seen = new Set<string>();
     return entries.map(e => {
-        if (!e || typeof e !== 'object' || Object.keys(e).some(k => !['id', 'kind', 'text', 'sourceMessageIds'].includes(k)) || !['fact', 'decision', 'task'].includes(e.kind) || typeof e.id !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(e.id) || seen.has(e.id))
+        if (!e || typeof e !== 'object' || Object.keys(e).some(k => !['id', 'kind', 'text', 'sourceMessageIds', 'pinned'].includes(k)) || (e.pinned !== undefined && typeof e.pinned !== 'boolean') || !['fact', 'decision', 'task'].includes(e.kind) || typeof e.id !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(e.id) || seen.has(e.id))
             throw invalid();
         seen.add(e.id);
         if (!Array.isArray(e.sourceMessageIds) || !e.sourceMessageIds.length || e.sourceMessageIds.length > 8 || e.sourceMessageIds.some((x: unknown) => typeof x !== 'string' || !x || x.length > 200))
             throw invalid();
-        return { id: e.id, kind: e.kind, text: clean(e.text, 600), sourceMessageIds: [...new Set<string>(e.sourceMessageIds)] };
+        return { id: e.id, kind: e.kind, text: clean(e.text, 600), sourceMessageIds: [...new Set<string>(e.sourceMessageIds)], ...(e.pinned ? { pinned: true } : {}) };
     });
 }
 export class NativeKnowledge {
@@ -145,4 +148,76 @@ export class NativeKnowledge {
     forgetConversation(chat: string) { for (const table of ['native_chat_knowledge', 'native_knowledge_proposals', 'native_knowledge_rejections', 'native_project_chats'])
         this.db.query(`DELETE FROM ${table} WHERE conversation_id=?`).run(chat); }
     removeProjectEntry(user: string, project: string, chat: string, entry: string) { this.project(user, project); this.db.query('DELETE FROM native_project_knowledge WHERE project_id=? AND conversation_id=? AND entry_id=?').run(project, chat, entry); }
+    private edit(change: KnowledgeEdit): { kind: KnowledgeEntry['kind']; text: string } | null {
+        if (change === null) return null;
+        if (!change || !['fact', 'decision', 'task'].includes(change.kind)) throw invalid();
+        return { kind: change.kind, text: clean(change.text, 600) };
+    }
+    private latestMessage(chat: string): string {
+        const r = this.db.query('SELECT id FROM conversation_messages WHERE conversation_id=? ORDER BY seq DESC LIMIT 1').get(chat) as { id: string } | null;
+        if (!r) throw new Error('invalid_knowledge_source');
+        return r.id;
+    }
+    /**
+     * Прямая правка одной записи памяти диалога агентом или владельцем, без
+     * подтверждения. Запись помечается pinned — сжатие после ответа её не
+     * переписывает и не выбрасывает. null удаляет запись. false — записи нет.
+     */
+    editChatEntry(user: string, chat: string, id: string, change: KnowledgeEdit): boolean {
+        if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(id)) throw invalid();
+        const next = this.edit(change);
+        return this.db.transaction(() => {
+            const s = this.snapshot(user, chat);
+            const old = s.entries.find(e => e.id === id);
+            let entries: KnowledgeEntry[];
+            if (!next) {
+                if (!old) return false;
+                entries = s.entries.filter(e => e.id !== id);
+            } else {
+                const entry: KnowledgeEntry = { id, ...next, sourceMessageIds: old?.sourceMessageIds ?? [this.latestMessage(chat)], pinned: true };
+                entries = old ? s.entries.map(e => e.id === id ? entry : e) : [...s.entries, entry];
+                if (entries.length > 24) throw new Error('knowledge_limit');
+            }
+            this.db.query('INSERT INTO native_chat_knowledge VALUES(?,?,?) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision,entries=excluded.entries').run(chat, s.revision + 1, JSON.stringify(entries));
+            this.db.query('DELETE FROM native_knowledge_proposals WHERE conversation_id=? AND entry_id=?').run(chat, id);
+            return true;
+        })();
+    }
+    /**
+     * Прямая правка общей памяти проекта этого диалога. source — диалог, из
+     * которого запись пришла; без него ищется единственная запись с таким id,
+     * а новая привязывается к текущему диалогу. Удалённое не вернётся
+     * автоматическим переносом: его отпечаток уходит в отказы.
+     */
+    editProjectEntry(user: string, chat: string, id: string, change: KnowledgeEdit, source?: string, sources?: string[]): boolean {
+        if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(id) || (source !== undefined && (typeof source !== 'string' || source.length > 64))) throw invalid();
+        const next = this.edit(change);
+        return this.db.transaction(() => {
+            const project = this.projectForChat(user, chat);
+            if (!project) throw new Error('knowledge_no_project');
+            const rows = this.db.query('SELECT conversation_id,entry FROM native_project_knowledge WHERE project_id=? AND entry_id=?' + (source ? ' AND conversation_id=?' : '')).all(...(source ? [project.id, id, source] : [project.id, id])) as { conversation_id: string; entry: string }[];
+            if (!next) {
+                if (!rows.length) return false;
+                for (const r of rows) {
+                    this.db.query('DELETE FROM native_project_knowledge WHERE project_id=? AND conversation_id=? AND entry_id=?').run(project.id, r.conversation_id, id);
+                    this.db.query('INSERT INTO native_knowledge_rejections VALUES(?,?,?,?,?) ON CONFLICT(project_id,conversation_id,entry_id) DO UPDATE SET fingerprint=excluded.fingerprint,updated=excluded.updated').run(project.id, r.conversation_id, id, fingerprint(JSON.parse(r.entry) as KnowledgeEntry), Date.now());
+                }
+                return true;
+            }
+            if (rows.length > 1) throw invalid();
+            const row = rows[0];
+            if (!row && (this.db.query('SELECT COUNT(*) AS n FROM native_project_knowledge WHERE project_id=?').get(project.id) as { n: number }).n >= 100) throw new Error('knowledge_limit');
+            const origin = row?.conversation_id ?? chat;
+            const entry: KnowledgeEntry = { id, ...next, sourceMessageIds: sources ?? (row ? (JSON.parse(row.entry) as KnowledgeEntry).sourceMessageIds : [this.latestMessage(chat)]) };
+            this.db.query('INSERT INTO native_project_knowledge VALUES(?,?,?,?,?) ON CONFLICT(project_id,conversation_id,entry_id) DO UPDATE SET entry=excluded.entry,approved=excluded.approved').run(project.id, origin, id, JSON.stringify(entry), Date.now());
+            this.db.query('DELETE FROM native_knowledge_proposals WHERE project_id=? AND conversation_id=? AND entry_id=?').run(project.id, origin, id);
+            return true;
+        })();
+    }
+    /** Автоматический перенос записи диалога в проект, без подтверждения владельца. */
+    promote(user: string, chat: string, entryId: string): boolean {
+        const entry = this.snapshot(user, chat).entries.find(e => e.id === entryId);
+        if (!entry || !this.shouldAutoPropose(user, chat, entryId)) return false;
+        return this.editProjectEntry(user, chat, entryId, { kind: entry.kind, text: entry.text }, chat, entry.sourceMessageIds);
+    }
 }

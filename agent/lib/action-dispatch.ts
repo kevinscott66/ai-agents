@@ -79,6 +79,7 @@ import {
   type MacBridge,
 } from "./dispatch/mac.ts";
 import { handleCloudflareDns } from "./dispatch/cloudflare.ts";
+import { handleCodeTask } from "./code-tasks.ts";
 import { handleOrderTaxi, handleTaxiCancel } from "./dispatch/taxi.ts";
 import { handleMarketPurchase, handleOrderFood } from "./dispatch/shop.ts";
 import { handleDeliveryCancel, handleOrderDelivery } from "./dispatch/delivery.ts";
@@ -986,6 +987,10 @@ export async function dispatchAction<T extends ActionType>(
       case "USERBOT_SEND_DM": {
         const p = payload as PayloadByType["USERBOT_SEND_DM"];
         return await handleUserbotSendDm(p, ctx as TelegramHandlerContext);
+      }
+      case "CODE_TASK": {
+        const p = payload as PayloadByType["CODE_TASK"];
+        return await handleCodeTask(p, ctx);
       }
       case "CLOUDFLARE_DNS": {
         const p = payload as PayloadByType["CLOUDFLARE_DNS"];

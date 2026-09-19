@@ -1765,6 +1765,73 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    // Контексты разговора в Telegram-чате (lib/chat-contexts.ts): /new
+    // начинает чистую историю, /chats показывает список, /switch возвращает
+    // к прежней. `messages.context_id IS NULL` — «Основной», то есть всё,
+    // что было до этой миграции. Архив получает ту же колонку, иначе
+    // db-maint остановит перенос: колонка источника не объявлена в архиве.
+    name: "068_chat_contexts",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS chat_contexts (
+          id TEXT PRIMARY KEY,
+          chat_id TEXT NOT NULL,
+          title TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_contexts_chat
+          ON chat_contexts(chat_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS chat_active_context (
+          chat_id TEXT PRIMARY KEY,
+          context_id TEXT,
+          updated_at INTEGER NOT NULL
+        );
+      `);
+      addColumn(db, "messages", "context_id TEXT");
+      addColumn(db, "messages_archive", "context_id TEXT");
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_messages_chat_context_ts
+          ON messages(chat_id, context_id, ts DESC);
+      `);
+    },
+  },
+  {
+    // Самоулучшение, пункт 9 (lib/code-tasks.ts): CODE_TASK — задача на код,
+    // Mac открывает PR. Только оркестратор и только с подтверждением (то же
+    // держит ALWAYS_APPROVE_ACTIONS, строка — второй рубеж). Таблица — учёт
+    // запусков для потолков: одна одновременно, пять за сутки; застрявший
+    // 'running' (рестарт посреди задачи) становится 'failed'.
+    name: "069_code_tasks",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS code_tasks (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          goal TEXT NOT NULL,
+          chat_id INTEGER NOT NULL,
+          user_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'running'
+            CHECK (status IN ('running','done','failed','no_change')),
+          branch TEXT,
+          pr_url TEXT,
+          error TEXT,
+          created_at INTEGER NOT NULL,
+          finished_at INTEGER
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_code_tasks_created
+          ON code_tasks(created_at);
+      `);
+      const ins = db.prepare(
+        `INSERT OR IGNORE INTO permissions(agent_key, action_type, allowed, requires_approval)
+         VALUES (?, 'CODE_TASK', ?, 1)`,
+      );
+      for (const c of CHARACTERS) ins.run(c.key, c.key === "orchestrator" ? 1 : 0);
+    },
+  },
 ];
 
 /**

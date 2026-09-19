@@ -3,7 +3,7 @@ import { nativeTurnContext } from "./native-context.ts";
  * C5/R-A: Anthropic tool_use схема + диспатчер.
  *
  * Аудит 2026-09-11: здесь было написано «все 12 инструментов идут через единый
- * `gateOrDispatch`». Неверно дважды. Инструментов в `TOOL_NAMES` тридцать семь
+ * `gateOrDispatch`». Неверно дважды. Инструментов в `TOOL_NAMES` тридцать восемь
  * (число сверяется тестом audit-2026-09-11-tool-counts: в круге 29 оно уже
  * успело протухнуть на два, пока список рос); двадцать семь — это
  * `INLINE_TOOL_NAMES` из `constants.ts`, то есть ровно тот набор, который через
@@ -600,11 +600,11 @@ export const TOOLS: Anthropic.Tool[] = [
   {
     name: "WRITE_WIKI",
     description:
-      "Записать (создать/перезаписать) страницу в вики. scope — только '_team' или твой собственный ключ роли. Используй для долгоживущих заметок: решения, чек-листы, контекст проекта.",
+      "Записать (создать/перезаписать) страницу в вики. scope — только '_team' или твой собственный ключ роли. Используй для долгоживущих заметок: решения, чек-листы, контекст проекта. В диалоге приложения вместо вики правит память напрямую, без подтверждения владельца: scope='conversation' (память этого диалога) или 'project' (общая память проекта диалога), slug — id записи (тот же id перезаписывает), title — fact|decision|task, content — текст до 600 символов; пустой content удаляет запись.",
     input_schema: {
       type: "object",
       properties: {
-        scope: { type: "string", description: "'_team' или твой собственный ключ роли." },
+        scope: { type: "string", description: "'_team' или твой собственный ключ роли; в приложении — 'conversation' или 'project'." },
         slug: { type: "string", description: "Slug страницы (можно с подпапкой: 'projects/foo')." },
         title: { type: "string", description: "Заголовок страницы." },
         content: { type: "string", description: "Тело в markdown." },
@@ -950,6 +950,19 @@ export const TOOLS: Anthropic.Tool[] = [
     input_schema: { type: "object", properties: {} },
   },
   {
+    name: "CODE_TASK",
+    description:
+      "Поставить задачу на код команды агентов: Claude Code на Mac владельца пишет правку в отдельной ветке и открывает PR в публичный репозиторий; мерж и выкатка — только владелец. Только когда владелец сам попросил в своей личке улучшить или починить агента. Задача ждёт подтверждения владельца при любой автономии: он видит заголовок и весь текст. Текст уйдёт в публичный PR — без секретов, адресов, телефонов и имён. Нельзя трогать CI, зависимости, выкатку, сайт, политику разрешений и демон Mac — такие задачи не ставь. Одна задача за раз, до 5 в сутки; итог придёт сам — не повторяй вызов.",
+    input_schema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "Одна строка до 100 символов: что изменить. Станет заголовком PR." },
+        goal: { type: "string", description: "До 4000 символов: что не так сейчас, что должно получиться, где в коде искать (если знаешь) и как проверить." },
+      },
+      required: ["title", "goal"],
+    },
+  },
+  {
     name: "GENERATE_SVG_IMAGE",
     description:
       "Напиши валидный SVG (width/height в px, тёмные тексты на светлом фоне или наоборот, viewBox), бэкенд отрендерит его в PNG и отправит как фото. Размер SVG ≤ 200KB. Полезно для постеров, баннеров, схем, инфографики, мокапов UI.",
@@ -1172,6 +1185,7 @@ export const TOOL_NAMES = new Set<string>([
   "MARKET_PURCHASE",
   "ORDER_DELIVERY",
   "DELIVERY_CANCEL",
+  "CODE_TASK",
   // 2026-08-02: инструмент был объявлен в TOOLS, получил payload-валидатор и
   // case в диспатчере — но не попал сюда, поэтому executeTool отбивал его на
   // `unknown tool` ДО gateOrDispatch: ни строки в agent_actions, ни ошибки в
@@ -1381,7 +1395,21 @@ async function dispatchTool(
   const nativeMemory = nativeTurnContext.getStore();
   if (nativeMemory && ["SEARCH_WIKI", "READ_WIKI", "WRITE_WIKI"].includes(name)) {
     if (nativeMemory.userId !== String(ctx.chatId)) return JSON.stringify({error:"native_owner_mismatch"});
-    if (name === "WRITE_WIKI") return JSON.stringify({error:"Память диалога обновляется автоматически после ответа. Общая память проекта меняется только после подтверждения владельца в разделе Память диалога."});
+    if (name === "WRITE_WIKI") {
+      // Приложение: вики команды здесь нет, WRITE_WIKI правит память диалога
+      // или его проекта напрямую. slug — id записи, title — вид, пустой content удаляет.
+      if (!nativeMemory.writeKnowledge) return JSON.stringify({error:"native_memory_unavailable"});
+      const id = String(i.slug ?? "").trim().replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
+      if (!id) return JSON.stringify({error:"slug (id записи) обязателен"});
+      const kind = ["fact","decision","task"].includes(String(i.title)) ? String(i.title) as "fact"|"decision"|"task" : "fact";
+      const scope = i.scope === "project" || i.scope === "_team" ? "project" : "conversation";
+      try {
+        return JSON.stringify(nativeMemory.writeKnowledge({scope, id, kind, text: String(i.content ?? "")}));
+      } catch (e) {
+        const code = getErrorMessage(e);
+        return JSON.stringify({error: code === "knowledge_no_project" ? "У диалога нет проекта: пиши в scope=conversation." : code === "knowledge_limit" ? "Память заполнена: удали или объедини устаревшие записи." : code === "native_memory_scope_changed" ? code : "invalid_knowledge"});
+      }
+    }
     const query=String(i.query ?? i.slug ?? '').slice(0,2000);
     return JSON.stringify({scope:"current_conversation_and_approved_project",content:nativeMemory.readKnowledge?.(query) ?? nativeMemory.knowledge ?? "Память этого диалога пока пуста."});
   }
@@ -2112,11 +2140,11 @@ async function dispatchTool(
   // apply the MAC_USER_IDS whitelist check. SEC-audit LOW-2: MAC_STOP also needs
   // it — without injection isUserAllowed(undefined) was always false, so the
   // emergency kill-switch was dead (failed closed). Inject for both.
-  // USERBOT_SEND_DM, CLOUDFLARE_DNS, такси, магазины и доставка: хендлер по _userId сверяет, что просил владелец из своей лички.
+  // USERBOT_SEND_DM, CLOUDFLARE_DNS, CODE_TASK, такси, магазины и доставка: хендлер по _userId сверяет, что просил владелец из своей лички.
   if (
     at === "MAC_RUN_CLAUDE" || at === "MAC_STOP" || at === "MAC_CONTROL" || at === "USERBOT_SEND_DM" ||
     at === "CLOUDFLARE_DNS" || at === "ORDER_TAXI" || at === "TAXI_CANCEL" || at === "ORDER_FOOD" ||
-    at === "MARKET_PURCHASE" || at === "ORDER_DELIVERY" || at === "DELIVERY_CANCEL"
+    at === "MARKET_PURCHASE" || at === "ORDER_DELIVERY" || at === "DELIVERY_CANCEL" || at === "CODE_TASK"
   ) {
     const p = built.payload as { _userId?: string; _delegated?: boolean };
     p._userId = ctx.triggerUserId;
