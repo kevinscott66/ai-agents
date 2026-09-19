@@ -14,6 +14,11 @@ import { ACTION_STATUS_LABELS, label } from "../lib/labels";
 import { AUTONOMY_MODES } from "../lib/types";
 import type { TabKey } from "../lib/tabnav";
 
+/** Подпись статуса роли — по-русски, как весь интерфейс. */
+const AGENT_STATUS_LABEL: Record<"online" | "idle" | "blocked" | "error", string> = {
+  online: "в сети", idle: "простаивает", blocked: "заблокирован", error: "ошибка",
+};
+
 interface Props {
   /**
    * Переключить вкладку. Было `(tab: any)`, и App подставлял сюда
@@ -333,11 +338,11 @@ export default function Dashboard({ onNav }: Props) {
           className="stat-card" 
           onClick={() => onNav("approvals")}
           role="button"
-          aria-label={`Ждут аппрува: ${approvalsPending ?? "неизвестно"}, перейти к списку аппрувов`}
+          aria-label={`Ждут согласования: ${approvalsPending ?? "неизвестно"}, перейти к согласованиям`}
           tabIndex={0}
           onKeyDown={(e) => e.key === 'Enter' && onNav("approvals")}
         >
-          <div className="label">Ждут аппрува</div>
+          <div className="label">Ждут согласования</div>
           <div className="value">{approvalsPending ?? "—"}</div>
         </div>
         <div 
@@ -403,7 +408,7 @@ export default function Dashboard({ onNav }: Props) {
                   {agent.provider ?? "internal"} · {agent.execution_state ?? indicator.status}
                 </span>
                 <span className={`agent-status ${indicator.status}`}>
-                  {indicator.status}
+                  {AGENT_STATUS_LABEL[indicator.status]}
                 </span>
               </div>
             );

@@ -30,6 +30,7 @@ import {
 } from "node:fs";
 import { join, dirname, resolve, relative, sep } from "node:path";
 import { db, type ChatRow } from "./db.ts";
+import { activeContextId, noteContextMessage } from "./chat-contexts.ts";
 import { log, scrubSecretString } from "./log.ts";
 import { resolveMemoryDir } from "./memory-dir.ts";
 
@@ -266,7 +267,10 @@ export function recordMessage(args: {
   ts?: number;
   tgMessageId?: number; // Telegram message ID for deduplication
   transport?: 'bot_api' | 'userbot'; // Transport method
+  /** Контекст чата (lib/chat-contexts.ts). Не задан — активный на момент записи. */
+  contextId?: string | null;
 }) {
+  const contextId = args.contextId !== undefined ? args.contextId : activeContextId(args.chatId);
   // T-543: дедуп по (chat_id, tg_message_id), когда известен id Telegram.
   //
   // Аудит 2026-08-12: было `INSERT OR IGNORE`, и оно съедало расшифровки
@@ -282,8 +286,8 @@ export function recordMessage(args: {
   if (args.tgMessageId) {
     db.prepare(
       `INSERT INTO messages(
-        chat_id, agent_key, is_bot, from_user_id, from_name, text, ts, tg_message_id, transport
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        chat_id, agent_key, is_bot, from_user_id, from_name, text, ts, tg_message_id, transport, context_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(chat_id, tg_message_id) WHERE tg_message_id IS NOT NULL
        DO UPDATE SET text = excluded.text, transport = excluded.transport
         WHERE messages.text = '' AND excluded.text <> ''`
@@ -296,13 +300,14 @@ export function recordMessage(args: {
       args.text,
       args.ts ?? Date.now(),
       args.tgMessageId,
-      args.transport ?? 'bot_api'
+      args.transport ?? 'bot_api',
+      contextId
     );
   } else {
     // Fallback to original behavior for compatibility
     db.prepare(
-      `INSERT INTO messages(chat_id, agent_key, is_bot, from_user_id, from_name, text, ts, transport)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO messages(chat_id, agent_key, is_bot, from_user_id, from_name, text, ts, transport, context_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       args.chatId,
       args.agentKey,
@@ -311,9 +316,11 @@ export function recordMessage(args: {
       args.fromName,
       args.text,
       args.ts ?? Date.now(),
-      args.transport ?? 'bot_api'
+      args.transport ?? 'bot_api',
+      contextId
     );
   }
+  if (contextId) noteContextMessage(contextId, args.text, args.isBot);
 }
 
 /**
@@ -329,13 +336,20 @@ export function recordMessage(args: {
  *
  * `id` — AUTOINCREMENT, то есть настоящий порядок вставки; для равных ts это и
  * есть порядок реплик.
+ *
+ * История берётся только из контекста чата (lib/chat-contexts.ts): по
+ * умолчанию — из активного. `IS ?` нужен ради «Основного», у него NULL.
  */
-export function getRecentMessages(chatId: string, limit = 30): ChatRow[] {
+export function getRecentMessages(
+  chatId: string,
+  limit = 30,
+  contextId: string | null = activeContextId(chatId),
+): ChatRow[] {
   const rows = db
     .prepare(
-      `SELECT * FROM messages WHERE chat_id = ? ORDER BY ts DESC, id DESC LIMIT ?`
+      `SELECT * FROM messages WHERE chat_id = ? AND context_id IS ? ORDER BY ts DESC, id DESC LIMIT ?`
     )
-    .all(chatId, limit) as ChatRow[];
+    .all(chatId, contextId, limit) as ChatRow[];
   return rows.reverse(); // от старого к новому
 }
 

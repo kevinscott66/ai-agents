@@ -5,8 +5,10 @@ struct KnowledgeEntry: Codable, Identifiable {
     let text: String
     let sourceMessageIds: [String]
     var sourceConversationId: String? = nil
+    var pinned: Bool? = nil
     var projectIdentity: String { (sourceConversationId ?? "") + ":" + id }
     var kindLabel: String { ["fact":"Факт", "decision":"Решение", "task":"Задача"][kind] ?? "Запись" }
+    var kindIcon: String { ["fact":"info.circle", "decision":"checkmark.seal", "task":"checklist"][kind] ?? "doc.text" }
 }
 struct KnowledgeProposal: Codable, Identifiable {
     let id: String
@@ -83,9 +85,11 @@ struct Turn: Codable {
     var replyDetails: [NativeReplyDetail]? = nil
     var outputMedia: [NativeOutputMedia]? = nil
     var generations: [NativeGeneration]? = nil
+    /// Совпадает с NATIVE_REPLY_MAX сервера (agent/lib/native-access.ts): длина в UTF-16, как String.length в JS.
+    static let maximumReplyUnits = 32_000
     func validated(for requestedID: String) throws -> Turn {
         guard id == requestedID, ["running", "done", "error", "interrupted"].contains(status),
-              replies.count <= 80, replies.allSatisfy({ $0.utf16.count <= 8_000 }) else {
+              replies.count <= 80, replies.allSatisfy({ $0.utf16.count <= Turn.maximumReplyUnits }) else {
             throw AgentError.message("Некорректный ответ сервера. Ожидание запроса сохранено.")
         }
         if let details = replyDetails {
@@ -178,7 +182,7 @@ struct AgentAPI {
     static func validateCredential(_ current: String?, expected: String?) throws {
         if let expected, current != expected { throw AgentError.message("Подключение изменилось. Откройте экран заново.") }
     }
-    private func request<T: Decodable>(_ path: String, body: [String: String]? = nil, authenticated: Bool = true, expectedToken: String? = nil, encodedBody: Data? = nil) async throws -> T {
+    private func request<T: Decodable>(_ path: String, body: [String: String]? = nil, authenticated: Bool = true, expectedToken: String? = nil, encodedBody: Data? = nil, retried: Bool = false) async throws -> T {
         guard var parts = URLComponents(string: server), parts.scheme == "https", parts.host != nil,
               parts.user == nil, parts.password == nil, parts.query == nil, parts.fragment == nil,
               parts.path.isEmpty || parts.path == "/" else { throw AgentError.message("Укажите HTTPS-адрес сервера без пути") }
@@ -200,8 +204,9 @@ struct AgentAPI {
         let config = URLSessionConfiguration.ephemeral
         config.httpShouldSetCookies = false
         config.timeoutIntervalForResource = (path == "/api/native/attachments" || path.hasPrefix("/api/native/voice/")) ? 180 : 30
+        var tunnel: Int?
         #if os(iOS)
-        try await FluxNetwork.configure(config)
+        tunnel = try await FluxNetwork.configure(config)
         if !config.proxyConfigurations.isEmpty { request.timeoutInterval = (path == "/api/native/attachments" || path.hasPrefix("/api/native/voice/")) ? 120 : config.timeoutIntervalForRequest }
         if path == "/api/native/attachments" || path.hasPrefix("/api/native/voice/") { config.timeoutIntervalForResource = 180 }
         #endif
@@ -209,15 +214,25 @@ struct AgentAPI {
         defer { session.invalidateAndCancel() }
         // Proxy startup suspends; recheck immediately before any authenticated mutation leaves the device.
         try Self.validateCredential(Credentials.read(server: server), expected: expectedToken)
-        let (bytes, response) = try await session.bytes(for: request)
+        let bytes: URLSession.AsyncBytes, response: URLResponse
+        do { (bytes, response) = try await session.bytes(for: request) }
+        catch where FluxNetwork.isTunnelFailure(error, generation: tunnel) {
+            // Сеть сменилась под туннелем: поднимаем его заново. Чтение повторяем
+            // один раз, изменение — никогда: оно могло дойти до сервера.
+            await FluxNetwork.dropTunnel(generation: tunnel)
+            guard request.httpMethod == nil || request.httpMethod == "GET", !retried else {
+                throw AgentError.message("Сеть сменилась, OpenFlux переподключается. Проверьте результат и повторите.")
+            }
+            return try await self.request(path, body: body, authenticated: authenticated, expectedToken: expectedToken, encodedBody: encodedBody, retried: true)
+        }
         try Self.validateCredential(Credentials.read(server: server), expected: expectedToken)
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
             let code = (response as? HTTPURLResponse)?.statusCode ?? 0
             let errorData = path == "/api/native/attachments" ? try await Self.readBody(bytes) : nil
             let uploadError = errorData.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: String] }?["error"]
-            let isKnowledge = path.contains("/knowledge") || path == "/api/native/projects" || path.hasSuffix("/project") || path.hasSuffix("/proposals")
+            let isKnowledge = path.contains("/knowledge") || path == "/api/native/projects" || path.hasSuffix("/project") || path.hasSuffix("/proposals") || path.hasSuffix("/memory")
             let isVoice = path.hasPrefix("/api/native/voice/")
-            let message = isVoice && code == 503 ? "Голосовой сервис не настроен или временно недоступен." : isVoice && code == 502 ? "Голосовой сервис не смог обработать запрос. Попробуйте снова." : isVoice && code == 429 ? "Голосовой сервис занят. Попробуйте немного позже." : isKnowledge && code == 409 ? "Предложение устарело. Обновите память диалога." : isKnowledge && code == 429 ? "Достигнут лимит памяти или проектов." : uploadError == "media_quota" ? "Хранилище вложений заполнено (лимит 40 МБ); файлы хранятся 30 дней." : code == 401 ? "Код или ключ недействителен. Подключите устройство заново." : code == 409 ? "Лид уже выполняет запрос. Дождитесь результата." : code == 503 ? "Лид или доступ приложения пока недоступен." : code == 413 ? "Файл слишком большой" : code == 507 ? "Хранилище вложений заполнено" : code == 429 ? "Загрузка уже идёт. Дождитесь завершения." : "Сервер вернул ошибку \(code)"
+            let message = isVoice && code == 503 ? "Голосовой сервис не настроен или временно недоступен." : isVoice && code == 502 ? "Голосовой сервис не смог обработать запрос. Попробуйте снова." : isVoice && code == 429 ? "Голосовой сервис занят. Попробуйте немного позже." : isKnowledge && code == 409 ? (path.hasSuffix("/memory") ? "У диалога нет проекта. Выберите проект." : "Предложение устарело. Обновите память диалога.") : isKnowledge && code == 429 ? "Достигнут лимит памяти или проектов." : uploadError == "media_quota" ? "Хранилище вложений заполнено (лимит 40 МБ); файлы хранятся 30 дней." : code == 401 ? "Код или ключ недействителен. Подключите устройство заново." : code == 409 ? "Лид уже выполняет запрос. Дождитесь результата." : code == 503 ? "Лид или доступ приложения пока недоступен." : code == 413 ? "Файл слишком большой" : code == 507 ? "Хранилище вложений заполнено" : code == 429 ? "Загрузка уже идёт. Дождитесь завершения." : "Сервер вернул ошибку \(code)"
             if path == "/api/native/turns", (body != nil || encodedBody != nil) {
                 let data = try await Self.readBody(bytes)
                 if Self.turnWasRejected(status: code, data: data) { throw TurnRejected(message: message) }
@@ -258,7 +273,7 @@ struct AgentAPI {
     }
     static func knowledgeRoute(_ conversationID: String, resource: String = "knowledge") throws -> String {
         guard conversationID.range(of: #"^[a-zA-Z0-9-]{16,64}$"#, options: .regularExpression) != nil else { throw AgentError.message("Некорректный диалог") }
-        guard ["knowledge", "project", "proposals"].contains(resource) else { throw AgentError.message("Некорректный путь памяти") }
+        guard ["knowledge", "project", "proposals", "memory"].contains(resource) else { throw AgentError.message("Некорректный путь памяти") }
         return "/api/native/conversations/" + conversationID + "/" + resource
     }
     func knowledgeProjects(expectedToken: String) async throws -> [KnowledgeProject] {
@@ -278,6 +293,15 @@ struct AgentAPI {
         // JSONEncoder omits optional nil; the API requires an explicit null to detach.
         let data = try JSONSerialization.data(withJSONObject: ["projectId": projectID as Any? ?? NSNull()])
         return try await request(Self.knowledgeRoute(conversationID, resource: "project"), expectedToken: expectedToken, encodedBody: data)
+    }
+    /// Прямая правка записи владельцем: без text — удаление.
+    func editKnowledge(_ entryID: String, scope: String, kind: String?, text: String?, sourceConversationID: String? = nil, conversationID: String, expectedToken: String) async throws -> KnowledgeSnapshot {
+        guard ["conversation", "project"].contains(scope) else { throw AgentError.message("Некорректная память") }
+        var body: [String: Any] = ["scope": scope, "entryId": entryID]
+        if let kind, let text { body["kind"] = kind; body["text"] = text } else { body["remove"] = true }
+        if let sourceConversationID { body["sourceConversationId"] = sourceConversationID }
+        let data = try JSONSerialization.data(withJSONObject: body)
+        return try await request(Self.knowledgeRoute(conversationID, resource: "memory"), expectedToken: expectedToken, encodedBody: data)
     }
     func proposeKnowledge(_ entryID: String, conversationID: String, expectedToken: String) async throws {
         struct Result: Decodable { let proposal: KnowledgeProposal }
@@ -366,12 +390,18 @@ struct AgentAPI {
         request.setValue("Bearer \(expectedToken)", forHTTPHeaderField: "Authorization")
         let config = URLSessionConfiguration.ephemeral; config.httpShouldSetCookies = false
         config.timeoutIntervalForResource = 120
+        var tunnel: Int?
         #if os(iOS)
-        try await FluxNetwork.configure(config)
+        tunnel = try await FluxNetwork.configure(config)
         #endif
         let session = URLSession(configuration: config, delegate: NoRedirect(), delegateQueue: nil)
         defer { session.invalidateAndCancel() }
-        let (bytes, response) = try await session.bytes(for: request)
+        let bytes: URLSession.AsyncBytes, response: URLResponse
+        do { (bytes, response) = try await session.bytes(for: request) }
+        catch where FluxNetwork.isTunnelFailure(error, generation: tunnel) {
+            await FluxNetwork.dropTunnel(generation: tunnel)
+            throw AgentError.message("Сеть сменилась, OpenFlux переподключается. Откройте файл ещё раз.")
+        }
         guard let response = response as? HTTPURLResponse, response.statusCode == 200 else { throw AgentError.message("Файл недоступен или срок хранения истёк") }
         guard response.expectedContentLength <= 10 * 1024 * 1024 else { throw AgentError.message("Файл слишком большой") }
         var data = Data()
