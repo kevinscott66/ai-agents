@@ -2,6 +2,7 @@
  * C17: Nightly automatic backups.
  *
  * - DB snapshot via SQLite VACUUM INTO (atomic, no shell).
+ * - native.db (состояние приложения на iPhone) тем же VACUUM INTO, если он есть.
  * - Wiki (memory/) snapshot via tar+gzip.
  * - Retention: deletes backup files older than `retainDays` (default 14).
  * - Scheduler: setInterval (default 24h) + one delayed initial run (60s)
@@ -16,6 +17,7 @@ import { join, basename, dirname } from "node:path";
 import { DAY_MS, HOUR_MS, MINUTE_MS } from "./time-constants.ts";
 import { resolveDbPath } from "./db-path.ts";
 import { resolveMemoryDir } from "./memory-dir.ts";
+import { nativeStatePath } from "./native-db-path.ts";
 import { log } from "./log.ts";
 import { emitAlert } from "./alerting.ts";
 
@@ -44,10 +46,14 @@ export interface RunBackupOptions {
   retainDays?: number;
   /** Override "today" for retention/naming (used by tests). */
   now?: Date;
+  /** Путь к native.db; по умолчанию тот же, что у `nativeAccess()`. */
+  nativePath?: string;
 }
 
 export interface BackupResult {
   dbPath: string | null;
+  /** Снапшот native.db; null, если его нет (установка без приложения) или шаг упал. */
+  nativePath: string | null;
   wikiPath: string | null;
   cleaned: number;
   /** Файлов, которые ретеншн не тронул, потому что свежей замены нет. */
@@ -160,6 +166,7 @@ export function backupLockPath(backupDir: string): string {
 function emptyBackupResult(error: string): BackupResult {
   return {
     dbPath: null,
+    nativePath: null,
     wikiPath: null,
     cleaned: 0,
     keptUnverified: 0,
@@ -389,6 +396,48 @@ export async function runBackup(
   }
 }
 
+/**
+ * Снапшот SQLite через VACUUM INTO во временное имя, проверка и rename.
+ * Общий для memory.db и native.db — у обоих один и тот же порядок защиты.
+ */
+function snapshotSqlite(label: string, srcPath: string, outPath: string): void {
+  // Пишем во временное имя и подменяем только проверенный файл. Раньше
+  // сегодняшний снапшот удалялся ПЕРЕД VACUUM INTO (он отказывается
+  // перезаписывать) — то есть при любом сбое дальше вчерашнего бэкапа уже
+  // не было, а нового ещё не появилось.
+  const tmpPath = `${outPath}.tmp-${process.pid}-${randomUUID()}`;
+  const t0 = Date.now();
+  let published = false;
+  try {
+    const src = new Database(srcPath, { readonly: true });
+    try {
+      src.prepare(`VACUUM INTO ?`).run(tmpPath);
+    } finally {
+      src.close();
+    }
+    verifySnapshot(tmpPath);
+    const size = fs.statSync(tmpPath).size;
+    fs.renameSync(tmpPath, outPath);
+    published = true;
+    // Аудит 2026-08-28: fsync каталога делала только ветка вики
+    // (`else` ниже), поэтому ссылка на снапшот БД не синхронизировалась
+    // никогда — а в дни, когда каталог вики не найден или архив упал, не
+    // синхронизировалась вовсе. VACUUM INTO даёт полноценный коммит
+    // SQLite со своим fsync, то есть durable здесь СОДЕРЖИМОЕ, но не
+    // запись в каталоге: питание, пропавшее после rename, оставляет файл
+    // под временным именем — снапшота за день нет, а `.tmp-*` не подберёт
+    // никто (removeTempFile в finally уже не выполнится).
+    fsyncPath(dirname(outPath), "backup dir");
+    const ms = Date.now() - t0;
+    const kb = Math.max(1, Math.round(size / 1024));
+    log.info(`[backup] ${label} -> ${outPath} (${ms}ms, ${kb}KB, quick_check ok)`);
+  } finally {
+    // Covers VACUUM INTO, verification, stat and rename failures. Once
+    // published, the temp name no longer exists and is left untouched.
+    if (!published) removeTempFile(tmpPath, `${label} snapshot`);
+  }
+}
+
 async function runBackupUnlocked(
   dataDir: string,
   backupDir: string,
@@ -396,6 +445,7 @@ async function runBackupUnlocked(
 ): Promise<BackupResult> {
   const result: BackupResult = {
     dbPath: null,
+    nativePath: null,
     wikiPath: null,
     cleaned: 0,
     keptUnverified: 0,
@@ -423,45 +473,34 @@ async function runBackupUnlocked(
       log.warn(`[backup] db source not found: ${dbPath} — skipped`);
     } else {
       const outPath = join(backupDir, `db-${tag}.sqlite`);
-      // Пишем во временное имя и подменяем только проверенный файл. Раньше
-      // сегодняшний снапшот удалялся ПЕРЕД VACUUM INTO (он отказывается
-      // перезаписывать) — то есть при любом сбое дальше вчерашнего бэкапа уже
-      // не было, а нового ещё не появилось.
-      const tmpPath = `${outPath}.tmp-${process.pid}-${randomUUID()}`;
-      const t0 = Date.now();
-      let published = false;
-      try {
-        const src = new Database(dbPath, { readonly: true });
-        try {
-          src.prepare(`VACUUM INTO ?`).run(tmpPath);
-        } finally {
-          src.close();
-        }
-        verifySnapshot(tmpPath);
-        const size = fs.statSync(tmpPath).size;
-        fs.renameSync(tmpPath, outPath);
-        published = true;
-        // Аудит 2026-08-28: fsync каталога делала только ветка вики
-        // (`else` ниже), поэтому ссылка на снапшот БД не синхронизировалась
-        // никогда — а в дни, когда каталог вики не найден или архив упал, не
-        // синхронизировалась вовсе. VACUUM INTO даёт полноценный коммит
-        // SQLite со своим fsync, то есть durable здесь СОДЕРЖИМОЕ, но не
-        // запись в каталоге: питание, пропавшее после rename, оставляет файл
-        // под временным именем — снапшота за день нет, а `.tmp-*` не подберёт
-        // никто (removeTempFile в finally уже не выполнится).
-        fsyncPath(dirname(outPath), "backup dir");
-        result.dbPath = outPath;
-        const ms = Date.now() - t0;
-        const kb = Math.max(1, Math.round(size / 1024));
-        log.info(`[backup] db -> ${outPath} (${ms}ms, ${kb}KB, quick_check ok)`);
-      } finally {
-        // Covers VACUUM INTO, verification, stat and rename failures. Once
-        // published, the temp name no longer exists and is left untouched.
-        if (!published) removeTempFile(tmpPath, "db snapshot");
-      }
+      snapshotSqlite("db", dbPath, outPath);
+      result.dbPath = outPath;
     }
   } catch (e: any) {
     const msg = `[backup] db failed: ${e?.message ?? e}`;
+    log.warn(msg);
+    result.errors.push(msg);
+  }
+
+  // 1б) native.db — устройства, диалоги и вложения приложения на iPhone.
+  //
+  // Аудит 2026-09-19 (AUD-003): ночной бэкап снимал только memory.db и вики, а
+  // native.db жил рядом без единой копии. Потеря диска означала потерю всей
+  // переписки в приложении и привязок устройств. Файла может не быть вовсе —
+  // установка без приложения ещё ни разу его не открыла; это не ошибка и не
+  // «частичный бэкап», поэтому только лог. Упавший снапшот существующего файла
+  // идёт в errors, как и у memory.db.
+  try {
+    const nativePath = opts.nativePath ?? nativeStatePath();
+    if (!fs.existsSync(nativePath)) {
+      log.info(`[backup] native db not found: ${nativePath} — skipped`);
+    } else {
+      const outPath = join(backupDir, `native-${tag}.sqlite`);
+      snapshotSqlite("native", nativePath, outPath);
+      result.nativePath = outPath;
+    }
+  } catch (e: any) {
+    const msg = `[backup] native failed: ${e?.message ?? e}`;
     log.warn(msg);
     result.errors.push(msg);
   }
@@ -566,6 +605,7 @@ async function runBackupUnlocked(
     const cutoff = now.getTime() - retainDays * DAY_MS;
     const kinds = [
       { prefix: "db-", fresh: result.dbPath !== null },
+      { prefix: "native-", fresh: result.nativePath !== null },
       { prefix: "memory-", fresh: result.wikiPath !== null },
     ];
     const entries = fs.readdirSync(backupDir);
@@ -678,6 +718,7 @@ export function startBackupScheduler(
         emitAlert("warn", "backup_failed", "прогон бэкапа завершился с ошибками", {
           errors: res.errors,
           dbPath: res.dbPath,
+          nativePath: res.nativePath,
           wikiPath: res.wikiPath,
         });
       } else if (!res.dbPath && !res.wikiPath) {

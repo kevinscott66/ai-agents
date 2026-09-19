@@ -2,6 +2,7 @@ import { NativeKnowledge } from "./native-knowledge.ts";
 /** Separate device credentials/job state; never stores Telegram or service credentials. */
 import { NativeMedia, parseUpload, type NativeLocation } from './native-media.ts';
 import { DAY_MS } from './time-constants.ts';
+import { nativeStatePath } from './native-db-path.ts';
 import { Database } from 'bun:sqlite';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { mkdirSync, chmodSync } from 'node:fs';
@@ -284,5 +285,5 @@ export class NativeAccess {
 }
 let store: NativeAccess | undefined;
 export function nativeAccess(): NativeAccess {
-  return store ??= new NativeAccess(process.env.NATIVE_STATE_PATH || resolve(dirname(process.env.MEMORY_DB_PATH || 'data/memory.db'), 'native.db'));
+  return store ??= new NativeAccess(nativeStatePath());
 }

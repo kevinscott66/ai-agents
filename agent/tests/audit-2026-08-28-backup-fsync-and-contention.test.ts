@@ -115,22 +115,34 @@ describe("fsync каталога после публикации снапшот�
 
   test("в ветке БД fsync стоит между rename и записью пути в результат", () => {
     // Порядок важен: до rename синхронизировать нечего, после записи
-    // result.dbPath ветка уже считается опубликованной.
-    const branch = SRC.indexOf("const outPath = join(backupDir, `db-${tag}.sqlite`);");
-    expect(branch).toBeGreaterThan(0);
+    // result.dbPath ветка уже считается опубликованной. С AUD-003 rename и
+    // fsync живут в общем snapshotSqlite (им же снимается native.db), а путь
+    // в результат ветки пишут только после его возврата.
+    const helper = SRC.indexOf("function snapshotSqlite(");
+    expect(helper).toBeGreaterThan(0);
     // Конец региона проверяем отдельно. `indexOf` на пропавшем якоре отдаёт
-    // -1, `slice(branch, -1)` — весь остаток файла, и сторож молча начинает
-    // сторожить не ту ветку: перенос fsync в соседнюю секцию такой тест
-    // пропустит. Проверено переименованием якоря — тест оставался зелёным.
-    const end = SRC.indexOf("// 2) Wiki tarball.");
-    expect(end).toBeGreaterThan(branch);
-    const head = SRC.slice(branch, end);
-    const rename = head.indexOf("fs.renameSync(tmpPath, outPath);");
-    const fsync = head.indexOf('fsyncPath(dirname(outPath), "backup dir");');
-    const assign = head.indexOf("result.dbPath = outPath;");
+    // -1, `slice(helper, -1)` — весь остаток файла, и сторож молча начинает
+    // сторожить не тот регион.
+    const helperEnd = SRC.indexOf("async function runBackupUnlocked(");
+    expect(helperEnd).toBeGreaterThan(helper);
+    const body = SRC.slice(helper, helperEnd);
+    const rename = body.indexOf("fs.renameSync(tmpPath, outPath);");
+    const fsync = body.indexOf('fsyncPath(dirname(outPath), "backup dir");');
     expect(rename).toBeGreaterThan(-1);
     expect(fsync).toBeGreaterThan(rename);
-    expect(assign).toBeGreaterThan(fsync);
+
+    const branch = SRC.indexOf("const outPath = join(backupDir, `db-${tag}.sqlite`);");
+    const end = SRC.indexOf("// 2) Wiki tarball.");
+    expect(branch).toBeGreaterThan(helperEnd);
+    expect(end).toBeGreaterThan(branch);
+    const head = SRC.slice(branch, end);
+    for (const [call, assign] of [
+      ['snapshotSqlite("db", dbPath, outPath);', "result.dbPath = outPath;"],
+      ['snapshotSqlite("native", nativePath, outPath);', "result.nativePath = outPath;"],
+    ]) {
+      expect(head.indexOf(call)).toBeGreaterThan(-1);
+      expect(head.indexOf(assign)).toBeGreaterThan(head.indexOf(call));
+    }
   });
 });
 
