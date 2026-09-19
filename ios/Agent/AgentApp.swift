@@ -40,13 +40,16 @@ struct ChatLine: Identifiable, Codable {
     private var firstSequence: Int?
     private var syncing = false
     private var syncGeneration = UUID()
+    /// Меняется только при смене сервера или ключа: поздний ответ прежнего подключения не должен трогать новое.
+    private var bindGeneration = UUID()
     private func bind(server: String) {
         let token = Credentials.read(server: server)
         if boundServer != server || boundToken != token {
             operation = UUID(); polling?.cancel(); polling = nil; busy = false
             let previousServer = boundServer
-            syncGeneration = UUID(); boundServer = server; boundToken = token
+            syncGeneration = UUID(); bindGeneration = UUID(); boundServer = server; boundToken = token
             conversationCursor = nil; moreConversations = false; loadedMoreConversations = false
+            archived = []; archiveCursor = nil; moreArchived = false; archiveLoaded = false; archiveLoading = false; archiveError = nil
             if !previousServer.isEmpty { clearMedia() }; lines = []; generations = []; conversations = []; fresh = false; firstSequence = nil; moreHistory = false; remoteBusy = false
             conversationId = UserDefaults.standard.string(forKey: "conversation:" + server)
         }
@@ -106,18 +109,43 @@ struct ChatLine: Identifiable, Codable {
         }
     }
     @Published var archived: [ConversationRecord] = []
-    func loadArchived(server: String) async {
+    @Published var moreArchived = false
+    /// Архив хоть раз загружен с этого подключения: только тогда пустой список значит «архив пуст».
+    @Published var archiveLoaded = false
+    @Published var archiveLoading = false
+    @Published var archiveError: String?
+    private var archiveCursor: String?
+    /// Первая страница архива или (more) следующая за уже загруженными — сервер отдаёт по 200.
+    func loadArchived(server: String, more: Bool = false) async {
         bind(server: server)
-        guard let token = boundToken else { return }
-        do { archived = try await AgentAPI(server: server).conversations(archived: true, expectedToken: token).conversations; historyError = nil }
-        catch { historyError = "Не удалось загрузить архив: " + error.localizedDescription }
+        guard let token = boundToken, !archiveLoading else { return }
+        let cursor = more ? archiveCursor : nil
+        if more && (!moreArchived || cursor == nil) { return }
+        let generation = bindGeneration
+        archiveLoading = true
+        defer { if generation == bindGeneration { archiveLoading = false } }
+        do {
+            let index = try await AgentAPI(server: server).conversations(cursor: cursor, archived: true, expectedToken: token)
+            guard generation == bindGeneration, Credentials.read(server: server) == token else { return }
+            if more {
+                let ids = Set(archived.map(\.id)); archived += index.conversations.filter { !ids.contains($0.id) }
+            } else {
+                archived = index.conversations
+            }
+            archiveCursor = index.nextCursor; moreArchived = index.more; archiveLoaded = true; archiveError = nil
+        } catch {
+            guard generation == bindGeneration else { return }
+            archiveError = "Не удалось загрузить архив: " + error.localizedDescription
+        }
     }
     /// Переименовать, убрать в архив или вернуть из него. Список обновляется сразу, сервер — следом.
     func editConversation(_ id: String, title: String? = nil, archived toArchive: Bool? = nil, server: String) async {
         bind(server: server)
         guard let token = boundToken else { return }
+        let generation = bindGeneration
         do {
             try await AgentAPI(server: server).editConversation(id, title: title, archived: toArchive, expectedToken: token)
+            guard generation == bindGeneration, Credentials.read(server: server) == token else { return }
             if let title {
                 let name = AgentAPI.conversationTitle(title.trimmingCharacters(in: .whitespacesAndNewlines))
                 conversations = conversations.map { $0.id == id ? ConversationRecord(id: $0.id, title: name, updated: $0.updated, archived: $0.archived) : $0 }
@@ -130,17 +158,19 @@ struct ChatLine: Identifiable, Codable {
             if toArchive == false { archived.removeAll { $0.id == id } }
             historyError = nil
             await synchronize(server: server)
-        } catch { historyError = "Не удалось изменить диалог: " + error.localizedDescription }
+        } catch { if generation == bindGeneration { historyError = "Не удалось изменить диалог: " + error.localizedDescription } }
     }
     func deleteConversation(_ id: String, server: String) async {
         bind(server: server)
         guard let token = boundToken, !(conversationId == id && (busy || pending)) else { historyError = "Дождитесь ответа в этом диалоге"; return }
+        let generation = bindGeneration
         do {
             try await AgentAPI(server: server).deleteConversation(id, expectedToken: token)
+            guard generation == bindGeneration, Credentials.read(server: server) == token else { return }
             conversations.removeAll { $0.id == id }; archived.removeAll { $0.id == id }
             if conversationId == id { newConversation(server: server) }
             historyError = nil
-        } catch { historyError = "Не удалось удалить диалог: " + error.localizedDescription }
+        } catch { if generation == bindGeneration { historyError = "Не удалось удалить диалог: " + error.localizedDescription } }
     }
     func loadMoreConversations(server: String) async {
         bind(server: server)
@@ -597,7 +627,21 @@ struct RootView: View {
     }
     private var archiveList: some View {
         List {
-            if model.archived.isEmpty { Text("Архив пуст").foregroundStyle(.secondary) }
+            if let error = model.archiveError {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(error).font(.callout)
+                    if !model.archived.isEmpty { Text("Ниже — список с прошлой загрузки, он мог устареть.").font(.caption).foregroundStyle(.secondary) }
+                    Button("Повторить") { Task { await model.loadArchived(server: server) } }.disabled(model.archiveLoading)
+                }
+            }
+            if let error = model.historyError { Text(error).font(.caption).foregroundStyle(.secondary) }
+            if model.archived.isEmpty {
+                if model.archiveLoading || (!model.archiveLoaded && model.archiveError == nil) {
+                    HStack(spacing: 8) { ProgressView(); Text("Загружаю архив…").foregroundStyle(.secondary) }
+                } else if model.archiveLoaded && model.archiveError == nil {
+                    Text("Архив пуст").foregroundStyle(.secondary)
+                }
+            }
             ForEach(model.archived) { conversation in
                 VStack(alignment: .leading, spacing: 4) {
                     Text(conversation.title).lineLimit(2)
@@ -608,6 +652,11 @@ struct RootView: View {
                     Button(role: .destructive) { deleting = conversation } label: { Label("Удалить", systemImage: "trash") }
                     Button { Task { await model.editConversation(conversation.id, archived: false, server: server) } } label: { Label("Вернуть", systemImage: "tray.and.arrow.up") }.tint(.indigo)
                 }
+            }
+            if model.moreArchived {
+                Button { Task { await model.loadArchived(server: server, more: true) } } label: {
+                    HStack(spacing: 8) { if model.archiveLoading && !model.archived.isEmpty { ProgressView() }; Text("Показать более старые") }
+                }.disabled(model.archiveLoading)
             }
         }
         .navigationTitle("Архив")
