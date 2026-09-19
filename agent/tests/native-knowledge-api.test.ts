@@ -2,6 +2,7 @@ import {test,expect} from 'bun:test';
 import {NativeAccess} from '../lib/native-access.ts';
 import {nativeApi} from '../lib/native-api.ts';
 import {nativeTurnContext} from '../lib/native-context.ts';
+import {scopedKnowledgeWriter} from '../lib/native-knowledge-runtime.ts';
 import {executeTool} from '../lib/tools-schema.ts';
 const user='999323908',other='999323909';
 test('native project/knowledge API uses device owner, explicit assignment and explicit approval',async()=>{
@@ -29,5 +30,29 @@ test('native wiki tools cannot access or mutate global wiki',async()=>{
  const ctx={agentKey:'orchestrator',chatId:Number(user)} as any;
  return [await executeTool('SEARCH_WIKI',{query:'all secrets'},ctx),await executeTool('READ_WIKI',{scope:'_team',slug:'project'},ctx),await executeTool('WRITE_WIKI',{scope:'_team',slug:'project',content:'overwrite'},ctx)];
  });
- expect(result[0]).toContain('ONLY CURRENT CHAT');expect(result[1]).toContain('ONLY CURRENT CHAT');expect(result[2]).toContain('автоматически');
+ expect(result[0]).toContain('ONLY CURRENT CHAT');expect(result[1]).toContain('ONLY CURRENT CHAT');expect(result[2]).toContain('native_memory_unavailable');
+});
+
+test('native WRITE_WIKI edits chat and project memory; owner edits and deletes entries',async()=>{
+ const owner='999323912';
+ const old={NATIVE_APP_ENABLED:process.env.NATIVE_APP_ENABLED,MAC_USER_IDS:process.env.MAC_USER_IDS,TELEGRAM_ALLOWED_GROUP_IDS:process.env.TELEGRAM_ALLOWED_GROUP_IDS};Object.assign(process.env,{NATIVE_APP_ENABLED:'true',MAC_USER_IDS:owner,TELEGRAM_ALLOWED_GROUP_IDS:owner});
+ const s=new NativeAccess(':memory:');const a=s.redeem(s.pair(owner))!;
+ const request=(path:string,body?:unknown)=>nativeApi(new Request('https://test/api/native/'+path,{method:body===undefined?'GET':'POST',headers:{authorization:'Bearer '+a.token,...(body!==undefined?{'content-type':'application/json'}:{})},body:body===undefined?undefined:JSON.stringify(body)}),s);
+ try{
+ const chat='conversation-api-0002';s.createConversation(chat,owner,'B');s.start('src2','device',owner,'Запомни: созвон по вторникам',chat);s.finish('src2','done');
+ const ctx={agentKey:'orchestrator',chatId:Number(owner)} as any;
+ const run=(input:unknown)=>nativeTurnContext.run({userId:owner,turnId:'t',conversationId:chat,writeKnowledge:scopedKnowledgeWriter(s,owner,chat),linkApproval:()=>{}},()=>executeTool('WRITE_WIKI',input,ctx));
+ expect(JSON.parse(await run({scope:'conversation',slug:'weekly call',title:'decision',content:'Созвон по вторникам'}))).toMatchObject({ok:true,id:'weekly-call'});
+ expect(await run({scope:'project',slug:'x',title:'fact',content:'y'})).toContain('нет проекта');
+ const {project}=await (await request('projects',{title:'P'})).json() as any;await request('conversations/'+chat+'/project',{projectId:project.id});
+ expect(JSON.parse(await run({scope:'project',slug:'team',title:'fact',content:'Команда из трёх'}))).toMatchObject({ok:true});
+ let k=await (await request('conversations/'+chat+'/memory',{scope:'conversation',entryId:'weekly-call',kind:'decision',text:'Созвон по средам'})).json() as any;
+ expect(k.entries[0]).toMatchObject({text:'Созвон по средам',pinned:true});
+ k=await (await request('conversations/'+chat+'/memory',{scope:'project',entryId:'team',remove:true,sourceConversationId:chat})).json() as any;
+ expect(k.projectEntries).toEqual([]);
+ expect((await request('conversations/'+chat+'/memory',{scope:'project',entryId:'team',remove:true})).status).toBe(404);
+ expect((await request('conversations/'+chat+'/memory',{scope:'conversation',entryId:'weekly-call',kind:'bogus',text:'x'})).status).toBe(400);
+ k=await (await request('conversations/'+chat+'/memory',{scope:'conversation',entryId:'weekly-call',remove:true})).json() as any;
+ expect(k.entries).toEqual([]);
+ }finally{s.db.close();for(const [k,v] of Object.entries(old)){if(v===undefined)delete process.env[k];else process.env[k]=v;}}
 });
