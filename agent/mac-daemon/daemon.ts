@@ -19,7 +19,7 @@ import { realpathSync, existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync } f
 import { bridgeSecretTransportError } from "./bridge-url.ts";
 import { cancelRun, killAll, registerChild, stopChild, type KillableChild } from "./kill.ts";
 import { feedPrompt } from "./run-io.ts";
-import { parseBridgeMsg, toPermissionMode, type RepairMsg, type RunMsg } from "./protocol.ts";
+import { parseBridgeMsg, toPermissionMode, type CodeTaskMsg, type RepairMsg, type RunMsg } from "./protocol.ts";
 import { sanitizeChildEnv, resolveClaudeBin } from "./child-env.ts";
 import { isolatedClaudeProbeEnv } from "./readiness-config.ts";
 import { tmpdir } from "node:os";
@@ -32,6 +32,7 @@ import { runMacControl, controlErrorCode } from "./macctl.ts";
 import { runTaxiRequest, taxiErrorCode, closeTaxiRunner } from "./taxi.ts";
 import { runShopRequest, shopErrorCode, closeShopRunner, holdShopRunner } from "./shop.ts";
 import { runSelectorRepair, type CmdResult } from "./selector-repair.ts";
+import { runCodeTask } from "./code-task.ts";
 import { runDeliveryRequest, deliveryErrorCode, closeDeliveryRunner } from "./delivery.ts";
 import { createDaemonHandshake } from "./auth-handshake.ts";
 import { createAuthGate } from "./auth-gate.ts";
@@ -382,16 +383,18 @@ async function collect(stream: ReadableStream<Uint8Array> | null, onText?: (t: s
   return out;
 }
 
-async function handleRepair(ws: WebSocket, msg: RepairMsg): Promise<void> {
+function repairRepo(): string | null {
   const raw = process.env.SELECTOR_REPAIR_REPO?.trim();
-  const repo = raw && existsSync(raw) ? resolveAllowedProject(raw) : null;
-  const controller = new AbortController();
-  runControllers.set(msg.id, controller);
-  const spawnTracked = async (argv: string[], cwd: string, env: Record<string, string>, timeoutMs: number, stdin: string | null, onOut?: (t: string) => void): Promise<CmdResult> => {
+  return raw && existsSync(raw) ? resolveAllowedProject(raw) : null;
+}
+
+/** Запуск дочерних процессов починки и задач на код: учёт для cancel и таймаут. */
+function trackedSpawner(id: string, controller: AbortController) {
+  return async (argv: string[], cwd: string, env: Record<string, string>, timeoutMs: number, stdin: string | null, onOut?: (t: string) => void): Promise<CmdResult> => {
     if (controller.signal.aborted) return { code: 130, stdout: "", stderr: "cancelled" };
     const child = Bun.spawn({ cmd: argv, cwd, env, detached: true, stdin: stdin === null ? "ignore" : "pipe", stdout: "pipe", stderr: "pipe" });
     const entry: KillableChild = { kill: (signal) => child.kill(signal), exited: child.exited, processGroupId: child.pid };
-    activeChildren.set(msg.id, entry);
+    activeChildren.set(id, entry);
     const timer = setTimeout(() => void stopChild(entry), timeoutMs);
     try {
       if (stdin !== null) {
@@ -405,9 +408,16 @@ async function handleRepair(ws: WebSocket, msg: RepairMsg): Promise<void> {
       return { code: await child.exited, stdout, stderr };
     } finally {
       clearTimeout(timer);
-      if (activeChildren.get(msg.id) === entry) activeChildren.delete(msg.id);
+      if (activeChildren.get(id) === entry) activeChildren.delete(id);
     }
   };
+}
+
+async function handleRepair(ws: WebSocket, msg: RepairMsg): Promise<void> {
+  const repo = repairRepo();
+  const controller = new AbortController();
+  runControllers.set(msg.id, controller);
+  const spawnTracked = trackedSpawner(msg.id, controller);
   try {
     const out = await runSelectorRepair(msg.request, {
       repo,
@@ -417,6 +427,31 @@ async function handleRepair(ws: WebSocket, msg: RepairMsg): Promise<void> {
       runClaude: (argv, cwd, prompt, timeoutMs) =>
         // Вывод починщика мосту не уходит: в ответе только RepairOutcome.
         spawnTracked(argv, cwd, repairEnv(cwd, REPAIR_SHOP_ENV), timeoutMs, prompt),
+      now: () => new Date(),
+      log: (line) => console.log(line),
+    });
+    sendChunk(ws, msg.id, "stdout", JSON.stringify(out));
+    sendResult(ws, msg.id, true, 0);
+  } finally {
+    runControllers.delete(msg.id);
+  }
+}
+
+/**
+ * Задача на код (пункт 9). Тот же клон, что у починки; исполнитель и команды
+ * демона получают отфильтрованное окружение, профиль покупок им не нужен.
+ */
+async function handleCodeTask(ws: WebSocket, msg: CodeTaskMsg): Promise<void> {
+  const controller = new AbortController();
+  runControllers.set(msg.id, controller);
+  const spawnTracked = trackedSpawner(msg.id, controller);
+  try {
+    const out = await runCodeTask(msg.task, {
+      repo: repairRepo(),
+      claudeBin: CLAUDE_BIN,
+      runCmd: (argv, cwd, timeoutMs) => spawnTracked(argv, cwd, repairEnv(cwd, REPAIR_ENV_EXTRA), timeoutMs, null),
+      // Вывод исполнителя мосту не уходит: в ответе только CodeTaskOutcome.
+      runClaude: (argv, cwd, prompt, timeoutMs) => spawnTracked(argv, cwd, repairEnv(cwd, []), timeoutMs, prompt),
       now: () => new Date(),
       log: (line) => console.log(line),
     });
@@ -634,6 +669,13 @@ function connect(): void {
         // Свой замок — замок покупок (holdShopRunner); отмена — cancel по id.
         handleRepair(ws, msg).catch((e) => {
           console.error("[daemon] handleRepair error:", e);
+          sendResult(ws, msg.id, false, undefined, `handler_failed: ${e instanceof Error ? e.message : String(e)}`);
+        });
+        return;
+      case "code_task":
+        // Одна задача за раз (флаг в code-task.ts); отмена — cancel по id.
+        handleCodeTask(ws, msg).catch((e) => {
+          console.error("[daemon] handleCodeTask error:", e);
           sendResult(ws, msg.id, false, undefined, `handler_failed: ${e instanceof Error ? e.message : String(e)}`);
         });
         return;

@@ -9,6 +9,7 @@ import type { ActionType } from "./permissions.ts";
 import type { TaskStatus } from "./tasks.ts";
 import type { MacControl } from "./mac-control.ts";
 import type { UserbotDm } from "./userbot-dm.ts";
+import type { CodeTask } from "./code-task.ts";
 import type { DnsChange } from "./cloudflare-dns.ts";
 import type { TaxiTariff } from "./taxi.ts";
 import type { ShopOptionPick, ShopService } from "./shop.ts";
@@ -271,6 +272,12 @@ export type UserbotSendDmPayload = UserbotDm & { _userId?: string; _delegated?: 
  */
 export type CloudflareDnsPayload = DnsChange & { _userId?: string; _delegated?: boolean };
 
+/**
+ * CODE_TASK: задача на код для Mac (lib/code-task.ts); `_userId`/`_delegated`
+ * дописывает tool-loop, как у USERBOT_SEND_DM.
+ */
+export type CodeTaskPayload = CodeTask & { _userId?: string; _delegated?: boolean };
+
 /** ORDER_TAXI: нормализованные адреса, ключ тарифа и цена из TAXI_QUOTE. */
 export interface OrderTaxiPayload {
   from: string;
@@ -510,6 +517,7 @@ export type PayloadByType = {
   MARKET_PURCHASE: MarketPurchasePayload;
   ORDER_DELIVERY: OrderDeliveryPayload;
   DELIVERY_CANCEL: { _userId?: string; _delegated?: boolean };
+  CODE_TASK: CodeTaskPayload;
   SCHEDULE_POST: SchedulePostPayload;
   CREATE_REMINDER: CreateReminderPayload;
   CANCEL_REMINDER: CancelReminderPayload;
