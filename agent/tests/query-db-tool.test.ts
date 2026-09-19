@@ -3,6 +3,7 @@
  * SELECT-only, денилист приватных таблиц (messages/wiki/audit/...), авто-LIMIT.
  */
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { Database } from "bun:sqlite";
 import { db } from "../lib/db.ts";
 import { executeTool } from "../lib/tools-schema.ts";
 import { validateQueryDbSql, runQueryDbSandboxed } from "../lib/query-db.ts";
@@ -119,15 +120,59 @@ describe("QUERY_DB — бюджет ресурсов", () => {
     expect(elapsed).toBeLessThan(6000);
   });
 
+  /**
+   * AUD-031. Раньше здесь считали тики setInterval(100) за 1.2 с и ждали >5.
+   * В полном прогоне однажды пришло 4 — и это не отличало блокирующий SQL от
+   * разовой паузы планировщика (GC, чужой таймер соседнего файла). Повторить
+   * не удалось ни под нагрузкой CPU, ни тремя полными прогонами параллельно:
+   * всегда 11 тиков, самая длинная пауза ~110 мс.
+   *
+   * Поэтому мерим не число тиков, а самую длинную паузу event loop за время
+   * запроса. Синхронный SQL в основном процессе даёт одну паузу во весь
+   * запрос; планировщик — короткие. Контрольный тест ниже доказывает, что
+   * метрика настоящую блокировку ловит.
+   */
+  async function longestStall(work: () => unknown): Promise<{ stall: number; elapsed: number; stamps: number[] }> {
+    const t0 = performance.now();
+    const stamps: number[] = [];
+    const iv = setInterval(() => stamps.push(performance.now() - t0), 20);
+    await new Promise((r) => setTimeout(r, 0));
+    await work();
+    await new Promise((r) => setTimeout(r, 30));
+    clearInterval(iv);
+    const elapsed = performance.now() - t0;
+    let prev = 0;
+    let stall = 0;
+    for (const s of [...stamps, elapsed]) {
+      stall = Math.max(stall, s - prev);
+      prev = s;
+    }
+    return { stall, elapsed, stamps: stamps.map(Math.round) };
+  }
+
   test("основной процесс остаётся отзывчивым, пока запрос молотит", async () => {
     const v = validateQueryDbSql(HOSTILE);
     if (!v.ok) throw new Error("validator changed");
-    let ticks = 0;
-    const iv = setInterval(() => ticks++, 100);
-    await runQueryDbSandboxed(v.sql, v.limit, { timeoutMs: 1200 });
-    clearInterval(iv);
-    // Синхронный запрос внутри процесса дал бы 0 тиков.
-    expect(ticks).toBeGreaterThan(5);
+    const m = await longestStall(() => runQueryDbSandboxed(v.sql, v.limit, { timeoutMs: 1200 }));
+    // Запрос действительно шёл до таймаута, а не отвалился сразу.
+    expect(m.elapsed).toBeGreaterThan(1200);
+    // Блокирующий запрос дал бы одну паузу ≥ 1200 мс. Пауза в пол-окна —
+    // уже не планировщик; на провале печатаем штампы для разбора.
+    if (m.stall >= 600) throw new Error(`event loop стоял ${Math.round(m.stall)} мс: ${JSON.stringify(m.stamps)}`);
+  });
+
+  test("контроль: тот же замер ловит SQL, выполненный в основном процессе", async () => {
+    const mem = new Database(":memory:");
+    let blocked = 0;
+    const m = await longestStall(() => {
+      const t = performance.now();
+      mem.query("WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x < 2000000) SELECT count(*) FROM c").get();
+      blocked = performance.now() - t;
+    });
+    mem.close();
+    // Весь синхронный запрос — одна пауза, какой бы быстрой ни была машина.
+    expect(blocked).toBeGreaterThan(50);
+    expect(m.stall).toBeGreaterThanOrEqual(blocked);
   });
 
   test("нормальный запрос по-прежнему возвращает строки", async () => {
