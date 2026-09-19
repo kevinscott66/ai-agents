@@ -221,6 +221,12 @@ export async function handleSendMessage(
 
   if (!ctx.telegram) return { ok: false, error: "no telegram context" };
   const tg = ctx.telegram;
+  // Приложение «Агент»: ctx.telegram — nativeReplyTransport. Ему нужен исходный
+  // Markdown одним сообщением, без HTML-разметки Telegram и без «(1/3)».
+  if (nativeTurnContext.getStore()) {
+    if (!payload.text.trim()) return { ok: false, error: "empty message" };
+    return { ok: true, result: await tg.sendMessage(chatId, payload.text) };
+  }
   let first = true;
   let result: any;
   try {

@@ -6,6 +6,8 @@ import UniformTypeIdentifiers
 struct ChatLine: Identifiable, Codable {
     var id = UUID().uuidString; let role: String; let text: String
     var agentKey: String? = nil
+    /// Когда сообщение отправлено или получено, миллисекунды Unix.
+    var created: Double? = nil
     var attachments: [NativeAttachment]? = nil
     var location: SharedLocation? = nil
 }
@@ -80,7 +82,7 @@ struct ChatLine: Identifiable, Codable {
             if let id = conversationId {
                 let history = try await AgentAPI(server: server).history(id, before: older ? firstSequence : nil, expectedToken: token)
                 guard generation == syncGeneration, Credentials.read(server: server) == token, conversationId == id, !busy, !pending else { return }
-                let incoming = history.messages.map { ChatLine(id:$0.id,role:$0.role == "user" ? "Вы" : "Агент",text:$0.text,agentKey:$0.agentKey,attachments:$0.attachments,location:$0.location) }
+                let incoming = history.messages.map { ChatLine(id:$0.id,role:$0.role == "user" ? "Вы" : "Агент",text:$0.text,agentKey:$0.agentKey,created:$0.created,attachments:$0.attachments,location:$0.location) }
                 if older {
                     let ids = Set(lines.map(\.id)); lines = incoming.filter { !ids.contains($0.id) } + lines
                     firstSequence = history.messages.first?.seq ?? firstSequence; moreHistory = history.more
@@ -102,6 +104,43 @@ struct ChatLine: Identifiable, Codable {
         conversations = (incoming + conversations.filter { !incomingIDs.contains($0.id) }).sorted {
             $0.updated == $1.updated ? $0.id > $1.id : $0.updated > $1.updated
         }
+    }
+    @Published var archived: [ConversationRecord] = []
+    func loadArchived(server: String) async {
+        bind(server: server)
+        guard let token = boundToken else { return }
+        do { archived = try await AgentAPI(server: server).conversations(archived: true, expectedToken: token).conversations; historyError = nil }
+        catch { historyError = "Не удалось загрузить архив: " + error.localizedDescription }
+    }
+    /// Переименовать, убрать в архив или вернуть из него. Список обновляется сразу, сервер — следом.
+    func editConversation(_ id: String, title: String? = nil, archived toArchive: Bool? = nil, server: String) async {
+        bind(server: server)
+        guard let token = boundToken else { return }
+        do {
+            try await AgentAPI(server: server).editConversation(id, title: title, archived: toArchive, expectedToken: token)
+            if let title {
+                let name = AgentAPI.conversationTitle(title.trimmingCharacters(in: .whitespacesAndNewlines))
+                conversations = conversations.map { $0.id == id ? ConversationRecord(id: $0.id, title: name, updated: $0.updated, archived: $0.archived) : $0 }
+                archived = archived.map { $0.id == id ? ConversationRecord(id: $0.id, title: name, updated: $0.updated, archived: $0.archived) : $0 }
+            }
+            if toArchive == true {
+                conversations.removeAll { $0.id == id }
+                if conversationId == id, !busy, !pending { newConversation(server: server) }
+            }
+            if toArchive == false { archived.removeAll { $0.id == id } }
+            historyError = nil
+            await synchronize(server: server)
+        } catch { historyError = "Не удалось изменить диалог: " + error.localizedDescription }
+    }
+    func deleteConversation(_ id: String, server: String) async {
+        bind(server: server)
+        guard let token = boundToken, !(conversationId == id && (busy || pending)) else { historyError = "Дождитесь ответа в этом диалоге"; return }
+        do {
+            try await AgentAPI(server: server).deleteConversation(id, expectedToken: token)
+            conversations.removeAll { $0.id == id }; archived.removeAll { $0.id == id }
+            if conversationId == id { newConversation(server: server) }
+            historyError = nil
+        } catch { historyError = "Не удалось удалить диалог: " + error.localizedDescription }
     }
     func loadMoreConversations(server: String) async {
         bind(server: server)
@@ -133,7 +172,7 @@ struct ChatLine: Identifiable, Codable {
         UserDefaults.standard.set(dialogID, forKey: "conversation:" + server)
         let id = UUID().uuidString
         draft = ""; clearMedia(); error = nil; recovering = false; busy = true; pending = true; currentReplies = 0; currentTurn = id
-        lines.append(ChatLine(id: id + ":user", role: "Вы", text: text, attachments: media.map(\.metadata), location: place))
+        lines.append(ChatLine(id: id + ":user", role: "Вы", text: text, created: Date().timeIntervalSince1970 * 1000, attachments: media.map(\.metadata), location: place))
         // Save the request ID before sending. A reconnect only polls this ID.
         UserDefaults.standard.set(id, forKey: "pendingTurn")
         UserDefaults.standard.set(server, forKey: "pendingServer")
@@ -204,8 +243,10 @@ struct ChatLine: Identifiable, Codable {
         for (index, text) in turn.replies.enumerated() {
             let id = turn.id + ":reply:" + String(index + 1)
             let media = turn.outputMedia?.first(where: { $0.messageId == id })?.attachments
-            let line = ChatLine(id: id, role: "Агент", text: text, agentKey: turn.replyDetails?.first(where: { $0.messageId == id })?.agentKey, attachments: media)
-            if let existing = lines.firstIndex(where: { $0.id == id }) { lines[existing] = line }
+            let existing = lines.firstIndex(where: { $0.id == id })
+            let line = ChatLine(id: id, role: "Агент", text: text, agentKey: turn.replyDetails?.first(where: { $0.messageId == id })?.agentKey,
+                                created: existing.flatMap { lines[$0].created } ?? Date().timeIntervalSince1970 * 1000, attachments: media)
+            if let existing { lines[existing] = line }
             else { lines.append(line) }
         }
         if let jobs = turn.generations {
@@ -293,6 +334,9 @@ struct RootView: View {
     @State private var actions = false
     @State private var settings = false
     @State private var abandon = false
+    @State private var renaming: ConversationRecord?
+    @State private var renameText = ""
+    @State private var deleting: ConversationRecord?
     private static func restoredServer() -> String? {
         if let pending = UserDefaults.standard.string(forKey: "pendingServer"), Credentials.read(server: pending) != nil { return pending }
         return Credentials.pairedServers().first { Credentials.read(server: $0) != nil }
@@ -389,9 +433,18 @@ struct RootView: View {
                                     Text(Date(timeIntervalSince1970: conversation.updated / 1000), style: .date).font(.caption).foregroundStyle(.secondary)
                                 }
                             }.disabled(model.busy || model.pending)
+                            .contextMenu { conversationActions(conversation, archived: false) }
+                            .swipeActions(edge: .trailing) {
+                                Button(role: .destructive) { deleting = conversation } label: { Label("Удалить", systemImage: "trash") }
+                                Button { Task { await model.editConversation(conversation.id, archived: true, server: server) } } label: { Label("В архив", systemImage: "archivebox") }.tint(.indigo)
+                            }
+                            .swipeActions(edge: .leading) {
+                                Button { renaming = conversation; renameText = conversation.title } label: { Label("Переименовать", systemImage: "pencil") }.tint(.blue)
+                            }
                         }
                         if model.moreConversations { Button("Предыдущие диалоги") { Task { await model.loadMoreConversations(server: server) } } }
                         Button("Обновить историю") { Task { await model.synchronize(server: server) } }
+                        NavigationLink { archiveList } label: { Label("Архив", systemImage: "archivebox") }
                     }
                     Section("Быстрый старт") {
                         Button { choose("Агент, начни мой день"); menu = false } label: { Label("Начать день", systemImage: "sun.max") }
@@ -400,7 +453,21 @@ struct RootView: View {
                     }
                     Section { Text("Один собеседник. Команда из 12 ролей.").font(.footnote).foregroundStyle(.secondary) }
                 }.navigationTitle("Агент").toolbar { ToolbarItem(placement: .confirmationAction) { Button("Готово") { menu = false } } }
-            }.presentationDetents([.large]).presentationDragIndicator(.visible)
+            }
+            .alert("Переименовать диалог", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+                TextField("Название", text: $renameText)
+                Button("Отмена", role: .cancel) { renaming = nil }
+                Button("Сохранить") {
+                    let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if let item = renaming, !name.isEmpty { Task { await model.editConversation(item.id, title: name, server: server) } }
+                    renaming = nil
+                }
+            }
+            .alert("Удалить диалог?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), presenting: deleting) { item in
+                Button("Отмена", role: .cancel) { deleting = nil }
+                Button("Удалить", role: .destructive) { Task { await model.deleteConversation(item.id, server: server) }; deleting = nil }
+            } message: { item in Text("«\(item.title)» и его память удалятся без возможности вернуть. Чтобы просто убрать из списка, отправьте в архив.") }
+            .presentationDetents([.large]).presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $actions) {
             NavigationStack { ActionsView { choose($0); actions = false }.toolbar { ToolbarItem(placement: .confirmationAction) { Button("Готово") { actions = false } } } }
@@ -469,13 +536,16 @@ struct RootView: View {
                                         ForEach(line.attachments ?? []) { item in AttachmentRow(attachment: item, server: server) }
                                         if let place = line.location { locationLabel(place) }
                                     }.padding(.horizontal, 18).padding(.vertical, 12).background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 24))
-                                }.id(line.id)
+                                }
+                                .overlay(alignment: .bottomTrailing) { messageTime(line).offset(y: 18) }
+                                .id(line.id)
                             } else {
                                 VStack(alignment: .leading, spacing: 12) {
                                     if let key = line.agentKey { Text(AgentRole.name(key)).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary) }
                                     if !line.text.isEmpty { Text(.init(line.text)).font(.body).lineSpacing(5).textSelection(.enabled) }
                                     ForEach(line.attachments ?? []) { item in AttachmentRow(attachment: item, server: server) }
                                     if !line.text.isEmpty { HStack(spacing: 8) {
+                                        messageTime(line).padding(.trailing, 4)
                                         Button { UIPasteboard.general.string = line.text } label: { Image(systemName: "doc.on.doc").frame(width: 44, height: 44) }.accessibilityLabel("Скопировать ответ")
                                         Button { voice.stop(); model.speak(line.text) } label: { Image(systemName: "speaker.wave.2").frame(width: 44, height: 44) }.accessibilityLabel("Озвучить ответ")
                                         Button { model.stopSpeech() } label: { Image(systemName: "speaker.slash").frame(width: 44, height: 44) }.accessibilityLabel("Остановить озвучивание")
@@ -506,6 +576,41 @@ struct RootView: View {
                     }
                 }
         }
+    }
+    /// Время как в ChatGPT/Claude: сегодня — часы, раньше — дата и часы.
+    @ViewBuilder private func messageTime(_ line: ChatLine) -> some View {
+        if let created = line.created {
+            let date = Date(timeIntervalSince1970: created / 1000)
+            Text(Calendar.current.isDateInToday(date) ? date.formatted(date: .omitted, time: .shortened) : date.formatted(.dateTime.day().month(.abbreviated).hour().minute()))
+                .font(.caption2).monospacedDigit().foregroundStyle(.tertiary)
+                .accessibilityLabel("Отправлено " + date.formatted(date: .abbreviated, time: .shortened))
+        }
+    }
+    @ViewBuilder private func conversationActions(_ conversation: ConversationRecord, archived: Bool) -> some View {
+        Button { renaming = conversation; renameText = conversation.title } label: { Label("Переименовать", systemImage: "pencil") }
+        Button { Task { await model.editConversation(conversation.id, archived: !archived, server: server) } } label: {
+            Label(archived ? "Вернуть из архива" : "В архив", systemImage: archived ? "tray.and.arrow.up" : "archivebox")
+        }
+        Button(role: .destructive) { deleting = conversation } label: { Label("Удалить", systemImage: "trash") }
+    }
+    private var archiveList: some View {
+        List {
+            if model.archived.isEmpty { Text("Архив пуст").foregroundStyle(.secondary) }
+            ForEach(model.archived) { conversation in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(conversation.title).lineLimit(2)
+                    Text(Date(timeIntervalSince1970: conversation.updated / 1000), style: .date).font(.caption).foregroundStyle(.secondary)
+                }
+                .contextMenu { conversationActions(conversation, archived: true) }
+                .swipeActions(edge: .trailing) {
+                    Button(role: .destructive) { deleting = conversation } label: { Label("Удалить", systemImage: "trash") }
+                    Button { Task { await model.editConversation(conversation.id, archived: false, server: server) } } label: { Label("Вернуть", systemImage: "tray.and.arrow.up") }.tint(.indigo)
+                }
+            }
+        }
+        .navigationTitle("Архив")
+        .task { await model.loadArchived(server: server) }
+        .refreshable { await model.loadArchived(server: server) }
     }
     private func approvalCard(_ item: ChatApproval) -> some View {
         ChatApprovalCard(item: item, outcome: approvals.outcomes[item.id], working: approvals.working.contains(item.id)) { approve in

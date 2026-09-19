@@ -7,6 +7,8 @@ import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { mkdirSync, chmodSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import type { NativeArtifactSink, NativeGeneration, NativeExecutionOutcome } from './native-context.ts';
+/** Ответ в приложении не режется на части, как в Telegram, поэтому потолок шире. */
+export const NATIVE_REPLY_MAX = 32_000;
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
 export class NativeAccess {
   readonly db: Database;
@@ -32,6 +34,12 @@ export class NativeAccess {
       CREATE TABLE IF NOT EXISTS native_generations(id TEXT PRIMARY KEY,turn_id TEXT NOT NULL,state TEXT NOT NULL,started INTEGER NOT NULL,ended INTEGER);
       CREATE TABLE IF NOT EXISTS alert_settings(user_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS alert_state(user_id TEXT NOT NULL, agent TEXT NOT NULL, unhealthy INTEGER NOT NULL, PRIMARY KEY(user_id,agent));`);
+    // Время сообщения и архив чата добавлены позже: старые базы догоняем
+    // ALTER'ом, а время ставит триггер — ни одна вставка его не забудет.
+    const columns = (table:string) => (this.db.query(`PRAGMA table_info(${table})`).all() as {name:string}[]).map(c=>c.name);
+    if (!columns('conversation_messages').includes('created')) this.db.run('ALTER TABLE conversation_messages ADD COLUMN created INTEGER');
+    if (!columns('conversations').includes('archived')) this.db.run('ALTER TABLE conversations ADD COLUMN archived INTEGER NOT NULL DEFAULT 0');
+    this.db.run(`CREATE TRIGGER IF NOT EXISTS conversation_message_created AFTER INSERT ON conversation_messages WHEN NEW.created IS NULL BEGIN UPDATE conversation_messages SET created=CAST((julianday('now')-2440587.5)*${DAY_MS} AS INTEGER) WHERE seq=NEW.seq; END`);
     this.knowledge = new NativeKnowledge(this.db);
     this.db.run("CREATE TABLE IF NOT EXISTS native_knowledge_state(conversation_id TEXT PRIMARY KEY,state TEXT NOT NULL,updated INTEGER NOT NULL)");
     this.db.query("UPDATE native_knowledge_state SET state='interrupted' WHERE state='updating'").run();
@@ -41,11 +49,11 @@ export class NativeAccess {
       for (const row of rows) {
         const owned = this.db.query("SELECT id FROM conversations WHERE user_id=? AND id LIKE 'legacy-%' ORDER BY created LIMIT 1").get(row.user_id) as {id:string}|null;
         const dialog = owned?.id ?? 'legacy-' + randomBytes(16).toString('hex');
-        this.db.query('INSERT OR IGNORE INTO conversations VALUES(?,?,?,?,?)').run(dialog,row.user_id,'Ранее в приложении',row.created,row.created);
+        this.db.query('INSERT OR IGNORE INTO conversations(id,user_id,title,created,updated) VALUES(?,?,?,?,?)').run(dialog,row.user_id,'Ранее в приложении',row.created,row.created);
         this.db.query('INSERT INTO conversation_turns VALUES(?,?)').run(row.id,dialog);
-        const insert = this.db.query('INSERT INTO conversation_messages(id,conversation_id,role,text) VALUES(?,?,?,?)');
-        insert.run(row.id+':user',dialog,'user',row.text);
-        (JSON.parse(row.replies) as string[]).forEach((text,index) => insert.run(row.id+':reply:'+(index+1),dialog,'assistant',text));
+        const insert = this.db.query('INSERT INTO conversation_messages(id,conversation_id,role,text,created) VALUES(?,?,?,?,?)');
+        insert.run(row.id+':user',dialog,'user',row.text,row.created);
+        (JSON.parse(row.replies) as string[]).forEach((text,index) => insert.run(row.id+':reply:'+(index+1),dialog,'assistant',text,row.created));
         this.db.query('UPDATE conversations SET updated=MAX(updated,?) WHERE id=?').run(row.created,dialog);
       }
     })();
@@ -121,7 +129,7 @@ export class NativeAccess {
       if (!conversationId) {
         const owned = this.db.query("SELECT id FROM conversations WHERE user_id=? AND id LIKE 'legacy-%' ORDER BY created LIMIT 1").get(userId) as {id:string}|null;
         conversationId = owned?.id ?? 'legacy-' + randomBytes(16).toString('hex');
-        this.db.query('INSERT OR IGNORE INTO conversations VALUES(?,?,?,?,?)').run(conversationId,userId,'Ранее в приложении',Date.now(),Date.now());
+        this.db.query('INSERT OR IGNORE INTO conversations(id,user_id,title,created,updated) VALUES(?,?,?,?,?)').run(conversationId,userId,'Ранее в приложении',Date.now(),Date.now());
       }
       this.db.query("INSERT INTO turns(id,device,user_id,text,status,created) VALUES(?,?,?,?,'running',?)").run(id, device, userId, text, Date.now());
       if (conversationId) {
@@ -139,10 +147,10 @@ export class NativeAccess {
     if(!row) return;
     const replies = JSON.parse(row.replies) as string[];
     if (replies.length >= 80) return;
-    replies.push(text.slice(0, 8000));
+    replies.push(text.slice(0, NATIVE_REPLY_MAX));
     const link = this.db.query('SELECT conversation_id FROM conversation_turns WHERE turn_id=?').get(id) as {conversation_id:string}|null;
     if (link) {
-      this.db.query('INSERT OR IGNORE INTO conversation_messages(id,conversation_id,role,text) VALUES(?,?,?,?)').run(id+':reply:'+replies.length,link.conversation_id,'assistant',text.slice(0,8000));
+      this.db.query('INSERT OR IGNORE INTO conversation_messages(id,conversation_id,role,text) VALUES(?,?,?,?)').run(id+':reply:'+replies.length,link.conversation_id,'assistant',text.slice(0,NATIVE_REPLY_MAX));
       this.db.query('INSERT OR REPLACE INTO native_message_authors(message_id,agent_key) VALUES(?,?)').run(id+':reply:'+replies.length,agentKey);
       this.db.query('UPDATE conversations SET updated=? WHERE id=?').run(Date.now(),link.conversation_id);
     }
@@ -153,7 +161,7 @@ export class NativeAccess {
     if(!/^[a-z][a-z0-9_]{0,31}$/.test(agentKey)||!this.conversation(conversationId,userId))throw new Error('native_owner_mismatch');
     return this.db.transaction(()=>{
       const messageId='team:'+randomBytes(16).toString('hex');
-      const row=this.db.query('INSERT INTO conversation_messages(id,conversation_id,role,text) VALUES(?,?,?,?) RETURNING seq').get(messageId,conversationId,'assistant',text.slice(0,8000)) as {seq:number};
+      const row=this.db.query('INSERT INTO conversation_messages(id,conversation_id,role,text) VALUES(?,?,?,?) RETURNING seq').get(messageId,conversationId,'assistant',text.slice(0,NATIVE_REPLY_MAX)) as {seq:number};
       this.db.query('INSERT INTO native_message_authors VALUES(?,?)').run(messageId,agentKey);
       this.db.query('UPDATE conversations SET updated=? WHERE id=?').run(Date.now(),conversationId);
       return {messageId,seq:row.seq};
@@ -183,24 +191,51 @@ export class NativeAccess {
     })();
   }
   conversation(id: string, userId: string) {
-    return this.db.query('SELECT id,title,created,updated FROM conversations WHERE id=? AND user_id=?').get(id,userId);
+    return this.db.query('SELECT id,title,created,updated,archived=1 AS archived FROM conversations WHERE id=? AND user_id=?').get(id,userId) as {id:string;title:string;created:number;updated:number;archived:number}|null;
+  }
+  /** Переименовать и/или убрать в архив (вернуть из архива). Порядок в списке не трогаем. */
+  editConversation(id:string,userId:string,edit:{title?:string;archived?:boolean}) {
+    if (!this.conversation(id,userId)) return null;
+    if (edit.title !== undefined) this.db.query('UPDATE conversations SET title=? WHERE id=? AND user_id=?').run(edit.title.trim().slice(0,100),id,userId);
+    if (edit.archived !== undefined) this.db.query('UPDATE conversations SET archived=? WHERE id=? AND user_id=?').run(edit.archived ? 1 : 0,id,userId);
+    return this.conversation(id,userId);
+  }
+  /**
+   * Удалить чат владельца с сообщениями, вложениями ответов и памятью диалога.
+   * Идущий в нём ход не трогаем: 'busy'. Одобрения остаются в своём журнале.
+   */
+  deleteConversation(id:string,userId:string): 'deleted'|'busy'|null {
+    return this.db.transaction(() => {
+      if (!this.conversation(id,userId)) return null;
+      if (this.db.query("SELECT 1 FROM conversation_turns c JOIN turns t ON t.id=c.turn_id WHERE c.conversation_id=? AND t.status='running'").get(id)) return 'busy';
+      this.db.query('DELETE FROM native_message_authors WHERE message_id IN (SELECT id FROM conversation_messages WHERE conversation_id=?)').run(id);
+      this.db.query('DELETE FROM native_output_media WHERE message_id IN (SELECT id FROM conversation_messages WHERE conversation_id=?)').run(id);
+      this.db.query('DELETE FROM conversation_messages WHERE conversation_id=?').run(id);
+      this.db.query('DELETE FROM conversation_approvals WHERE turn_id IN (SELECT turn_id FROM conversation_turns WHERE conversation_id=?)').run(id);
+      this.db.query('DELETE FROM native_generations WHERE turn_id IN (SELECT turn_id FROM conversation_turns WHERE conversation_id=?)').run(id);
+      this.db.query('DELETE FROM conversation_turns WHERE conversation_id=?').run(id);
+      this.knowledge.forgetConversation(id);
+      this.db.query('DELETE FROM native_knowledge_state WHERE conversation_id=?').run(id);
+      this.db.query('DELETE FROM conversations WHERE id=? AND user_id=?').run(id,userId);
+      return 'deleted' as const;
+    })();
   }
   createConversation(id:string,userId:string,title:string) {
-    this.db.query('INSERT OR IGNORE INTO conversations VALUES(?,?,?,?,?)').run(id,userId,title.slice(0,100),Date.now(),Date.now());
+    this.db.query('INSERT OR IGNORE INTO conversations(id,user_id,title,created,updated) VALUES(?,?,?,?,?)').run(id,userId,title.slice(0,100),Date.now(),Date.now());
     return this.conversation(id,userId);
   }
   running(userId:string) { return !!this.db.query("SELECT 1 FROM turns WHERE user_id=? AND status='running'").get(userId); }
-  conversations(userId:string, before?: {updated:number;id:string}, limit = 200) {
-    const fields = 'SELECT id,title,created,updated FROM conversations WHERE user_id=?';
+  conversations(userId:string, before?: {updated:number;id:string}, limit = 200, archived = false) {
+    const fields = `SELECT id,title,created,updated,archived=1 AS archived FROM conversations WHERE user_id=? AND archived=${archived ? 1 : 0}`;
     const order = ' ORDER BY updated DESC,id DESC LIMIT ?';
     return (before
       ? this.db.query(fields + ' AND (updated < ? OR (updated = ? AND id < ?))' + order).all(userId,before.updated,before.updated,before.id,limit)
-      : this.db.query(fields + order).all(userId,limit)) as {id:string;title:string;created:number;updated:number}[];
+      : this.db.query(fields + order).all(userId,limit)) as {id:string;title:string;created:number;updated:number;archived:number}[];
   }
   history(id:string,userId:string,before = Number.MAX_SAFE_INTEGER) {
     if (!this.conversation(id,userId)) return null;
-    const rows = this.db.query('SELECT m.seq,m.id,m.role,m.text,a.agent_key AS agentKey FROM conversation_messages m LEFT JOIN native_message_authors a ON a.message_id=m.id WHERE m.conversation_id=? AND m.seq<? ORDER BY m.seq DESC LIMIT 101').all(id,before) as {seq:number;id:string;role:string;text:string;agentKey?:string}[];
-    const more = rows.length > 100; const messages = rows.slice(0,100).reverse().map(row => ({...row,...(row.role === 'user' ? this.media.history(row.id.replace(/:user$/,''),userId) : this.outputAttachments(row.id))}));
+    const rows = this.db.query('SELECT m.seq,m.id,m.role,m.text,m.created,a.agent_key AS agentKey FROM conversation_messages m LEFT JOIN native_message_authors a ON a.message_id=m.id WHERE m.conversation_id=? AND m.seq<? ORDER BY m.seq DESC LIMIT 101').all(id,before) as {seq:number;id:string;role:string;text:string;created:number|null;agentKey?:string}[];
+    const more = rows.length > 100; const messages = rows.slice(0,100).reverse().map(({created,...row}) => ({...row,...(created === null ? {} : {created}),...(row.role === 'user' ? this.media.history(row.id.replace(/:user$/,''),userId) : this.outputAttachments(row.id))}));
     const running = this.running(userId);
     const generations=(this.db.query('SELECT g.id,g.state,g.started,g.ended FROM native_generations g JOIN conversation_turns t ON t.turn_id=g.turn_id WHERE t.conversation_id=? ORDER BY g.started DESC LIMIT 100').all(id) as NativeGeneration[]).map(g=>({...g,ended:g.ended ?? undefined}));
     return {messages,more,running,generations};

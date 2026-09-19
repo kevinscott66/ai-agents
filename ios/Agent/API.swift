@@ -24,7 +24,7 @@ struct KnowledgeSnapshot: Decodable {
     let proposals: [KnowledgeProposal]
     var memoryState: KnowledgeMemoryState? = nil
 }
-struct ConversationRecord: Codable, Identifiable { let id: String; let title: String; let updated: Double }
+struct ConversationRecord: Codable, Identifiable { let id: String; let title: String; let updated: Double; var archived: Int? = nil }
 struct SharedLocation: Codable, Equatable {
     let latitude: Double
     let longitude: Double
@@ -55,6 +55,8 @@ enum AgentRole {
 }
 struct ConversationMessage: Codable, Identifiable {
     let seq: Int; let id: String; let role: String; let text: String
+    /// Миллисекунды Unix; у сообщений до появления времени на сервере его нет.
+    var created: Double? = nil
     var agentKey: String? = nil
     var attachments: [NativeAttachment]? = nil
     var location: SharedLocation? = nil
@@ -285,9 +287,12 @@ struct AgentAPI {
         struct Health: Decodable {}
         let _: Health = try await request("/api/health", authenticated: false)
     }
-    func conversations(cursor: String? = nil, expectedToken: String? = nil) async throws -> ConversationIndex {
+    func conversations(cursor: String? = nil, archived: Bool = false, expectedToken: String? = nil) async throws -> ConversationIndex {
         var route = URLComponents(); route.path = "/api/native/conversations"
-        if let cursor { route.queryItems = [URLQueryItem(name: "cursor", value: cursor)] }
+        var query: [URLQueryItem] = []
+        if let cursor { query.append(URLQueryItem(name: "cursor", value: cursor)) }
+        if archived { query.append(URLQueryItem(name: "archived", value: "1")) }
+        if !query.isEmpty { route.queryItems = query }
         return try await request(route.string!, expectedToken: expectedToken)
     }
     static func conversationTitle(_ text: String) -> String {
@@ -301,6 +306,18 @@ struct AgentAPI {
     func createConversation(_ id: String, title: String, expectedToken: String? = nil) async throws {
         struct Result: Decodable { let conversation: ConversationRecord }
         let _: Result = try await request("/api/native/conversations", body: ["id":id,"title":Self.conversationTitle(title)], expectedToken: expectedToken)
+    }
+    /// Переименовать и/или убрать в архив; nil — не менять.
+    func editConversation(_ id: String, title: String? = nil, archived: Bool? = nil, expectedToken: String? = nil) async throws {
+        guard id.range(of: #"^[a-zA-Z0-9-]{16,64}$"#, options: .regularExpression) != nil else { throw AgentError.message("Некорректный диалог") }
+        struct Edit: Encodable { let title: String?; let archived: Bool? }
+        struct Result: Decodable { let conversation: ConversationRecord }
+        let _: Result = try await request("/api/native/conversations/" + id, expectedToken: expectedToken, encodedBody: JSONEncoder().encode(Edit(title: title.map(Self.conversationTitle), archived: archived)))
+    }
+    func deleteConversation(_ id: String, expectedToken: String? = nil) async throws {
+        guard id.range(of: #"^[a-zA-Z0-9-]{16,64}$"#, options: .regularExpression) != nil else { throw AgentError.message("Некорректный диалог") }
+        struct Result: Decodable { let ok: Bool }
+        let _: Result = try await request("/api/native/conversations/" + id + "/delete", expectedToken: expectedToken, encodedBody: Data("{}".utf8))
     }
     func history(_ id: String, before: Int? = nil, expectedToken: String? = nil) async throws -> ConversationHistory {
         guard id.range(of: #"^[a-zA-Z0-9-]{16,64}$"#, options: .regularExpression) != nil else { throw AgentError.message("Некорректный диалог") }

@@ -52,3 +52,42 @@ test('restart migrates legacy turns once without replay', () => {
   const third=new NativeAccess(path); expect(third.history(conversation.id,'1')!.messages).toHaveLength(2); third.db.close();
  } finally { rmSync(dir,{recursive:true,force:true}); }
 });
+test('messages carry their time; old databases gain the column', () => {
+ const dir = mkdtempSync(join(tmpdir(),'native-time-')); const path=join(dir,'native.db');
+ try {
+  const { Database } = require('bun:sqlite');
+  const old = new Database(path);
+  old.run("CREATE TABLE conversations(id TEXT PRIMARY KEY,user_id TEXT NOT NULL,title TEXT NOT NULL,created INTEGER NOT NULL,updated INTEGER NOT NULL); CREATE TABLE conversation_messages(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT UNIQUE NOT NULL,conversation_id TEXT NOT NULL,role TEXT NOT NULL,text TEXT NOT NULL); INSERT INTO conversations VALUES('dialog-0000000001','1','Old',1,1); INSERT INTO conversation_messages(id,conversation_id,role,text) VALUES('old:user','dialog-0000000001','user','before');");
+  old.close();
+  const s = new NativeAccess(path);
+  const before = Date.now();
+  s.start('turn-000000000001','d','1','hello','dialog-0000000001'); s.append('turn-000000000001','answer');
+  s.appendConversationReply('1','dialog-0000000001','team','researcher');
+  const messages = s.history('dialog-0000000001','1')!.messages as {text:string;created?:number}[];
+  expect(messages[0]).not.toHaveProperty('created');
+  for (const m of messages.slice(1)) { expect(m.created).toBeGreaterThanOrEqual(before - 1000); expect(m.created).toBeLessThanOrEqual(Date.now() + 1000); }
+  expect(messages.map(m => m.text)).toEqual(['before','hello','answer','team']);
+  s.db.close();
+ } finally { rmSync(dir,{recursive:true,force:true}); }
+});
+test('rename, archive and delete stay within the owner', () => {
+ const s = new NativeAccess(':memory:');
+ try {
+  s.createConversation('dialog-0000000001','1','One'); s.createConversation('dialog-0000000002','1','Two');
+  expect(s.editConversation('dialog-0000000001','2',{title:'Hijack'})).toBeNull();
+  expect(s.editConversation('dialog-0000000001','1',{title:'  Renamed  '})!.title).toBe('Renamed');
+  s.editConversation('dialog-0000000001','1',{archived:true});
+  expect(s.conversations('1').map(c => c.id)).toEqual(['dialog-0000000002']);
+  expect(s.conversations('1',undefined,200,true).map(c => c.id)).toEqual(['dialog-0000000001']);
+  s.editConversation('dialog-0000000001','1',{archived:false});
+  expect(s.conversations('1')).toHaveLength(2);
+  s.start('turn-000000000001','d','1','hello','dialog-0000000002');
+  expect(s.deleteConversation('dialog-0000000002','1')).toBe('busy');
+  s.append('turn-000000000001','answer'); s.finish('turn-000000000001','done');
+  expect(s.deleteConversation('dialog-0000000002','2')).toBeNull();
+  expect(s.deleteConversation('dialog-0000000002','1')).toBe('deleted');
+  expect(s.history('dialog-0000000002','1')).toBeNull();
+  expect(s.db.query("SELECT COUNT(*) AS n FROM conversation_messages WHERE conversation_id='dialog-0000000002'").get()).toEqual({n:0});
+  expect(s.conversations('1').map(c => c.id)).toEqual(['dialog-0000000001']);
+ } finally { s.db.close(); }
+});

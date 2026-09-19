@@ -54,7 +54,7 @@ import { runCompactor } from "../lib/compactor.ts";
 import { runWithTools } from "../lib/tool-loop.ts";
 import { genRequestId } from "../lib/request-id.ts";
 import {
-  sendChunked,
+  sendChunked, WHOLE_MESSAGE_FITS,
   messagePlainFits,
   HTML_MESSAGE_FITS,
   PartialSendError,
@@ -918,7 +918,7 @@ export function registerMessageHandler(
             delivered.push(part);
             lastSent = s;
           },
-          HTML_MESSAGE_FITS,
+          voice?.native ? WHOLE_MESSAGE_FITS : HTML_MESSAGE_FITS,
         );
       } catch (sendErr) {
         if (delivered.length) {
