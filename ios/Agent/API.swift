@@ -178,7 +178,7 @@ struct AgentAPI {
     static func validateCredential(_ current: String?, expected: String?) throws {
         if let expected, current != expected { throw AgentError.message("Подключение изменилось. Откройте экран заново.") }
     }
-    private func request<T: Decodable>(_ path: String, body: [String: String]? = nil, authenticated: Bool = true, expectedToken: String? = nil, encodedBody: Data? = nil) async throws -> T {
+    private func request<T: Decodable>(_ path: String, body: [String: String]? = nil, authenticated: Bool = true, expectedToken: String? = nil, encodedBody: Data? = nil, retried: Bool = false) async throws -> T {
         guard var parts = URLComponents(string: server), parts.scheme == "https", parts.host != nil,
               parts.user == nil, parts.password == nil, parts.query == nil, parts.fragment == nil,
               parts.path.isEmpty || parts.path == "/" else { throw AgentError.message("Укажите HTTPS-адрес сервера без пути") }
@@ -200,8 +200,9 @@ struct AgentAPI {
         let config = URLSessionConfiguration.ephemeral
         config.httpShouldSetCookies = false
         config.timeoutIntervalForResource = (path == "/api/native/attachments" || path.hasPrefix("/api/native/voice/")) ? 180 : 30
+        var tunnel: Int?
         #if os(iOS)
-        try await FluxNetwork.configure(config)
+        tunnel = try await FluxNetwork.configure(config)
         if !config.proxyConfigurations.isEmpty { request.timeoutInterval = (path == "/api/native/attachments" || path.hasPrefix("/api/native/voice/")) ? 120 : config.timeoutIntervalForRequest }
         if path == "/api/native/attachments" || path.hasPrefix("/api/native/voice/") { config.timeoutIntervalForResource = 180 }
         #endif
@@ -209,7 +210,17 @@ struct AgentAPI {
         defer { session.invalidateAndCancel() }
         // Proxy startup suspends; recheck immediately before any authenticated mutation leaves the device.
         try Self.validateCredential(Credentials.read(server: server), expected: expectedToken)
-        let (bytes, response) = try await session.bytes(for: request)
+        let bytes: URLSession.AsyncBytes, response: URLResponse
+        do { (bytes, response) = try await session.bytes(for: request) }
+        catch where FluxNetwork.isTunnelFailure(error, generation: tunnel) {
+            // Сеть сменилась под туннелем: поднимаем его заново. Чтение повторяем
+            // один раз, изменение — никогда: оно могло дойти до сервера.
+            await FluxNetwork.dropTunnel(generation: tunnel)
+            guard request.httpMethod == nil || request.httpMethod == "GET", !retried else {
+                throw AgentError.message("Сеть сменилась, OpenFlux переподключается. Проверьте результат и повторите.")
+            }
+            return try await self.request(path, body: body, authenticated: authenticated, expectedToken: expectedToken, encodedBody: encodedBody, retried: true)
+        }
         try Self.validateCredential(Credentials.read(server: server), expected: expectedToken)
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
             let code = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -366,12 +377,18 @@ struct AgentAPI {
         request.setValue("Bearer \(expectedToken)", forHTTPHeaderField: "Authorization")
         let config = URLSessionConfiguration.ephemeral; config.httpShouldSetCookies = false
         config.timeoutIntervalForResource = 120
+        var tunnel: Int?
         #if os(iOS)
-        try await FluxNetwork.configure(config)
+        tunnel = try await FluxNetwork.configure(config)
         #endif
         let session = URLSession(configuration: config, delegate: NoRedirect(), delegateQueue: nil)
         defer { session.invalidateAndCancel() }
-        let (bytes, response) = try await session.bytes(for: request)
+        let bytes: URLSession.AsyncBytes, response: URLResponse
+        do { (bytes, response) = try await session.bytes(for: request) }
+        catch where FluxNetwork.isTunnelFailure(error, generation: tunnel) {
+            await FluxNetwork.dropTunnel(generation: tunnel)
+            throw AgentError.message("Сеть сменилась, OpenFlux переподключается. Откройте файл ещё раз.")
+        }
         guard let response = response as? HTTPURLResponse, response.statusCode == 200 else { throw AgentError.message("Файл недоступен или срок хранения истёк") }
         guard response.expectedContentLength <= 10 * 1024 * 1024 else { throw AgentError.message("Файл слишком большой") }
         var data = Data()

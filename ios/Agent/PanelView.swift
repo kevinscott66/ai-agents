@@ -184,12 +184,18 @@ enum PanelTransport {
         if method == "POST" { request.httpBody = body?.data(using: .utf8); request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         let config = URLSessionConfiguration.ephemeral; config.httpShouldSetCookies = false
         config.timeoutIntervalForRequest = 12; config.timeoutIntervalForResource = 15
+        var tunnel: Int?
         #if os(iOS)
-        try await FluxNetwork.configure(config)
+        tunnel = try await FluxNetwork.configure(config)
         #endif
         let session = URLSession(configuration: config, delegate: NoRedirect(), delegateQueue: nil)
         defer { session.invalidateAndCancel() }
-        let (bytes, response) = try await session.bytes(for: request)
+        let bytes: URLSession.AsyncBytes, response: URLResponse
+        do { (bytes, response) = try await session.bytes(for: request) }
+        catch where FluxNetwork.isTunnelFailure(error, generation: tunnel) {
+            await FluxNetwork.dropTunnel(generation: tunnel)
+            throw AgentError.message(method == "GET" ? "Сеть сменилась, OpenFlux переподключается. Обновите панель." : "Сеть сменилась, OpenFlux переподключается. Проверьте результат и повторите.")
+        }
         guard let response = response as? HTTPURLResponse, response.expectedContentLength <= Int64(AgentAPI.maximumResponseBytes) else { throw AgentError.message("Ответ панели слишком большой") }
         let data = try await AgentAPI.readBody(bytes)
         return ["status": response.statusCode, "body": String(data: data, encoding: .utf8) ?? ""]
