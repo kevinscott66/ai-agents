@@ -25,6 +25,17 @@ struct KnowledgeSnapshot: Decodable {
     let projectEntries: [KnowledgeEntry]
     let proposals: [KnowledgeProposal]
     var memoryState: KnowledgeMemoryState? = nil
+    /// Откуда запись: id сообщения → автор, дата, выдержка. Нет ключа — сообщение удалено.
+    var sources: [String: KnowledgeSource]? = nil
+}
+struct KnowledgeSource: Decodable {
+    let conversationId: String
+    let conversationTitle: String
+    let seq: Int
+    let role: String
+    var agentKey: String? = nil
+    var created: Double? = nil
+    let excerpt: String
 }
 struct ConversationRecord: Codable, Identifiable { let id: String; let title: String; let updated: Double; var archived: Int? = nil }
 struct SharedLocation: Codable, Equatable {

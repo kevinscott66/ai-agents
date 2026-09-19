@@ -61,6 +61,15 @@ struct AgentAPI {
   precondition(changed.snapshot == nil && changed.error != nil, "Old identity leaked snapshot")
   await changed.createProject("Forbidden")
   precondition(writes == 2, "Changed identity submitted mutation")
+  // AUD-016: источники приходят словарём id → сообщение; без поля старый ответ тоже читается.
+  let json = #"{"revision":1,"entries":[],"project":null,"projectEntries":[],"proposals":[],"sources":{"m1":{"conversationId":"other","conversationTitle":"План","seq":3,"role":"assistant","agentKey":"pm","created":1700000000000,"excerpt":"Решили так"},"m2":{"conversationId":"dialog","conversationTitle":"Этот","seq":1,"role":"user","created":null,"excerpt":"Моё"}}}"#
+  let decoded = try! JSONDecoder().decode(KnowledgeSnapshot.self, from: Data(json.utf8))
+  let other = decoded.sources!["m1"]!, own = decoded.sources!["m2"]!
+  precondition(KnowledgeSourceLabel.author(own) == "Вы" && KnowledgeSourceLabel.author(other) == "Менеджер проекта")
+  precondition(KnowledgeSourceLabel.caption(own, current: "dialog") == "Вы", "Own-dialog source without date must be just the author")
+  precondition(KnowledgeSourceLabel.caption(other, current: "dialog").hasSuffix("диалог «План»"), "Foreign dialog must be named")
+  let legacy = try! JSONDecoder().decode(KnowledgeSnapshot.self, from: Data(#"{"revision":1,"entries":[],"project":null,"projectEntries":[],"proposals":[]}"#.utf8))
+  precondition(legacy.sources == nil)
   print("PASS: knowledge uncertainty GET recovery, no mutation retries and account isolation")
  }
 }

@@ -54,6 +54,23 @@ export function parseKnowledgeUpdate(raw: unknown): KnowledgeEntry[] {
         return { id: e.id, kind: e.kind, text: clean(e.text, 600), sourceMessageIds: [...new Set<string>(e.sourceMessageIds)], ...(e.pinned ? { pinned: true } : {}) };
     });
 }
+/**
+ * Источник записи памяти так, как его видит владелец (AUD-016): кто сказал,
+ * когда, выдержка и где искать — диалог и порядковый номер сообщения. Раньше
+ * карточка знала только технический id, и проверить факт перед переносом в
+ * общую память было нечем. Сообщения, которых больше нет (диалог удалён), в
+ * карту не попадают — клиент показывает их как удалённые.
+ */
+export type KnowledgeSource = {
+    conversationId: string;
+    conversationTitle: string;
+    seq: number;
+    role: string;
+    agentKey?: string;
+    created: number | null;
+    excerpt: string;
+};
+const SOURCE_EXCERPT = 240;
 export class NativeKnowledge {
     readonly engineering: EngineeringMemory;
     constructor(readonly db: Database) {
@@ -104,6 +121,26 @@ export class NativeKnowledge {
         return { revision: r?.revision ?? 0, entries: r ? JSON.parse(r.entries) as KnowledgeEntry[] : [], project, projectEntries, proposals,
             importedProject: selectEngineeringEntries(imported), importedProjectCount: imported.length };
     }
+    /** Источники записей снимка, только из диалогов этого владельца. */
+    sources(user: string, snap: { entries: KnowledgeEntry[]; projectEntries: KnowledgeEntry[]; proposals: KnowledgeProposal[] }): Record<string, KnowledgeSource> {
+        const ids = [...new Set([...snap.entries, ...snap.projectEntries, ...snap.proposals.map(p => p.entry)].flatMap(e => e.sourceMessageIds))];
+        const out: Record<string, KnowledgeSource> = {};
+        // Пачками: у SQLite потолок на число параметров, а записей в проекте до сотни по восемь источников.
+        for (let i = 0; i < ids.length; i += 200) {
+            const chunk = ids.slice(i, i + 200);
+            const rows = this.db.query(`SELECT m.id,m.seq,m.conversation_id,m.role,m.text,m.created,c.title,a.agent_key FROM conversation_messages m JOIN conversations c ON c.id=m.conversation_id AND c.user_id=? LEFT JOIN native_message_authors a ON a.message_id=m.id WHERE m.id IN (${chunk.map(() => '?').join(',')})`).all(user, ...chunk) as {
+                id: string; seq: number; conversation_id: string; role: string; text: string; created: number | null; title: string; agent_key: string | null;
+            }[];
+            for (const r of rows) {
+                const flat = scrubSecretString(r.text).replace(/\s+/g, ' ').trim();
+                out[r.id] = { conversationId: r.conversation_id, conversationTitle: r.title, seq: r.seq, role: r.role, ...(r.agent_key ? { agentKey: r.agent_key } : {}), created: r.created ?? null,
+                    excerpt: flat.length > SOURCE_EXCERPT ? flat.slice(0, SOURCE_EXCERPT - 1) + '…' : flat };
+            }
+        }
+        return out;
+    }
+    /** Снимок для клиента: с источниками. В промпты агента идёт `snapshot` — без них. */
+    view(user: string, chat: string) { const s = this.snapshot(user, chat); return { ...s, sources: this.sources(user, s) }; }
     updateChat(user: string, chat: string, revision: number, entries: KnowledgeEntry[]): boolean { const valid = parseKnowledgeUpdate({ entries }); if (!Number.isSafeInteger(revision) || revision < 0)
         throw invalid(); return this.db.transaction(() => { this.own(user, chat); if (this.snapshot(user, chat).revision !== revision)
         return false; for (const e of valid)

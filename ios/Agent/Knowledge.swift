@@ -90,16 +90,33 @@ struct KnowledgeDraft: Identifiable {
     }
 }
 
+enum KnowledgeSourceLabel {
+    static func author(_ source: KnowledgeSource) -> String {
+        if source.role == "user" { return "Вы" }
+        return AgentRole.name(source.agentKey)
+    }
+    static func caption(_ source: KnowledgeSource, current: String) -> String {
+        var parts = [author(source)]
+        if let created = source.created, created > 0 {
+            parts.append(Date(timeIntervalSince1970: created / 1000).formatted(date: .abbreviated, time: .shortened))
+        }
+        if source.conversationId != current { parts.append("диалог «\(source.conversationTitle)»") }
+        return parts.joined(separator: " · ")
+    }
+}
+
 struct KnowledgeView: View {
     @StateObject private var model: KnowledgeModel
     @State private var projectTitle = ""
     @State private var creatingProject = false
     @State private var draft: KnowledgeDraft?
-    init(server: String, conversationID: String) {
+    private let onOpenSource: ((String, String) -> Void)?
+    init(server: String, conversationID: String, onOpenSource: ((String, String) -> Void)? = nil) {
         _model = StateObject(wrappedValue: KnowledgeModel(server: server, conversationID: conversationID))
+        self.onOpenSource = onOpenSource
     }
     #if DEBUG
-    init(preview: KnowledgeModel) { _model = StateObject(wrappedValue: preview) }
+    init(preview: KnowledgeModel) { _model = StateObject(wrappedValue: preview); onOpenSource = nil }
     #endif
     private var disabled: Bool { model.loading || model.working || model.needsRefresh }
     var body: some View {
@@ -225,8 +242,27 @@ struct KnowledgeView: View {
                 Text(entry.text).textSelection(.enabled)
                 Text(([entry.kindLabel] + (entry.pinned == true ? ["записано вручную"] : []) + (shared ? ["из другого диалога"] : [])).joined(separator: " · "))
                     .font(.caption).foregroundStyle(.secondary)
+                if !entry.sourceMessageIds.isEmpty {
+                    DisclosureGroup("Источник") {
+                        ForEach(entry.sourceMessageIds, id: \.self) { id in sourceRow(id) }
+                    }.font(.caption).foregroundStyle(.secondary)
+                }
             }
         }.padding(.vertical, 2)
+    }
+    @ViewBuilder private func sourceRow(_ id: String) -> some View {
+        if let source = model.snapshot?.sources?[id] {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(KnowledgeSourceLabel.caption(source, current: model.conversationID)).font(.caption2).foregroundStyle(.secondary)
+                Text(source.excerpt).font(.caption).foregroundStyle(.primary).textSelection(.enabled)
+                if let onOpenSource {
+                    Button("Открыть в диалоге", systemImage: "arrow.turn.down.right") { onOpenSource(source.conversationId, id) }
+                        .buttonStyle(.borderless).font(.caption).frame(minHeight: 36)
+                }
+            }.padding(.vertical, 2)
+        } else {
+            Text("Сообщение удалено").font(.caption).foregroundStyle(.secondary)
+        }
     }
 }
 
