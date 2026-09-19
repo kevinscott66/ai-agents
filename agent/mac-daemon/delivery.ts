@@ -9,8 +9,11 @@
  * Отличия от такси:
  *   - свой профиль Chrome (DELIVERY_PROFILE_DIR): Chrome запирает профиль, а
  *     совпадение с TAXI_PROFILE_DIR — отказ `profile_shared`;
- *   - контакты отправителя и получателя агент не вводит: если страница их
- *     требует — отказ `contact_required`;
+ *   - телефон отправителя подставляет Яндекс Go, пустой телефон получателя
+ *     заполняется им же; если страница требует ещё контакт — отказ
+ *     `contact_required`;
+ *   - способ оплаты агент не добавляет: кнопка «Заказать» без него
+ *     неактивна — отказ `payment_needs_owner`;
  *   - комментарий курьеру вписывается только подписанный.
  *
  * Выключено, пока владелец не поставит DELIVERY_ENABLED=true. Вход — только
@@ -62,11 +65,18 @@ export interface DeliveryPage {
   setRoute(from: string, to: string): Promise<boolean>;
   tariffs(): Promise<DeliveryTariffRow[]>;
   selectTariff(tariff: DeliveryTariff): Promise<void>;
+  /**
+   * Пустой телефон получателя заполнить телефоном отправителя — это номер
+   * аккаунта владельца, его подставляет сам Яндекс Go. Значение не читается
+   * наружу: только из поля в поле.
+   */
+  fillRecipientFromSender?(): Promise<void>;
   /** Видно ли пустое обязательное поле контакта. */
   contactRequired(): Promise<boolean>;
   /** Вписать комментарий и прочитать обратно; false — поля нет или не вписалось. */
   setComment(comment: string): Promise<boolean>;
-  orderButton(): Promise<{ label: string; price_rub: number | null } | null>;
+  /** blocked: «payment» — кнопка неактивна и просит способ оплаты, «disabled» — неактивна по другой причине. */
+  orderButton(): Promise<{ label: string; price_rub: number | null; blocked?: "payment" | "disabled" | null } | null>;
   clickOrder(): Promise<void>;
   orderState(): Promise<{ state: DeliveryOrderState; eta_min: number | null }>;
   cancelOrder(): Promise<"clicked" | "unavailable">;
@@ -261,6 +271,7 @@ export class DeliveryRunner {
           row = (await page.tariffs()).find((r) => r.tariff === request.tariff);
           if (!row?.selected) throw new DeliveryError("tariff_unavailable");
         }
+        await page.fillRecipientFromSender?.();
         if (await page.contactRequired()) throw new DeliveryError("contact_required");
         if (request.comment !== null && !(await page.setComment(request.comment))) throw new DeliveryError("comment_unavailable");
         await this.guard(page);
@@ -324,6 +335,8 @@ export class DeliveryRunner {
     if (!row?.selected) throw new DeliveryError("tariff_unavailable");
     const button = await page.orderButton();
     if (!button) throw new DeliveryError("order_button_missing");
+    if (button.blocked === "payment") throw new DeliveryError("payment_needs_owner");
+    if (button.blocked) throw new DeliveryError("order_button_missing");
     const prices = [row.price_rub, button.price_rub].filter((p): p is number => p !== null);
     if (!prices.length) throw new DeliveryError("price_unreadable");
     return Math.max(...prices);

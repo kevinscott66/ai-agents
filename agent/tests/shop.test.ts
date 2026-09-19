@@ -61,13 +61,14 @@ import {
   type QtyResult,
   type ShopPage,
 } from "../mac-daemon/shop.ts";
-import { productIdFromHref, routeShopPage } from "../mac-daemon/shop-playwright.ts";
+import { lavkaCardName, lavkaLdProductId, productIdFromHref, routeShopPage, RUB_AMOUNT } from "../mac-daemon/shop-playwright.ts";
 import {
   dishMatches,
   dishName,
   edaBasePrice,
   edaOptionGroups,
   edaPlaceUrl,
+  isBlankContact,
   optionDelta,
   parseEdaCartRow,
   edaPlacesFromLinks,
@@ -76,6 +77,7 @@ import {
 } from "../mac-daemon/eda-playwright.ts";
 import { marketIdFromHref, marketUrlFor } from "../mac-daemon/market-playwright.ts";
 import { MARKET_TESTID, MARKET_TEXT } from "../mac-daemon/market-selectors.ts";
+import { LAVKA_TEXT } from "../mac-daemon/shop-selectors.ts";
 import { EDA_TESTID, EDA_TEXT } from "../mac-daemon/eda-selectors.ts";
 import {
   parseShopPlaceEta,
@@ -120,6 +122,30 @@ describe("parsing", () => {
     expect(normalizeShopService("ozon")).toBeNull();
     expect(productIdFromHref("/good/moloko-3-2-1l?from=search")).toBe("moloko-3-2-1l");
     expect(productIdFromHref("https://evil.example.com/good/x")).toBeNull();
+    // Подпись ссылки короткая, полное имя — в alt; как на странице товара: заголовок + фасовка.
+    expect(lavkaCardName("Хлеб тосто\u00adвый Аютин\u00adский хлеб 570 г", "Хлеб тостовый «Аютинский хлеб» в нарезке"))
+      .toBe("Хлеб тостовый «Аютинский хлеб» в нарезке 570 г");
+    expect(lavkaCardName("Вода Святой источник 6 × 1,5 л", "Вода «Святой источник» негазированная")).toBe("Вода «Святой источник» негазированная 6 × 1,5 л");
+    expect(lavkaCardName("Молоко 3,2% 1 л", "")).toBe("Молоко 3,2% 1 л");
+    expect(lavkaCardName("Набор без фасовки", "Набор «Полный»")).toBe("Набор без фасовки");
+    // Мини-корзина ссылается на hex-id: берём его из JSON-LD ровно по заголовку.
+    const hex = "9e915676cf1244f39f7b6bebb9dc364f000300010000";
+    const ld = [{ "@graph": [{ "@type": "BreadcrumbList", itemListElement: [{ name: "Хлеб" }] }, { "@type": "Product", "@id": hex, name: "Хлеб тостовый «Аютинский хлеб» в нарезке" }, { "@type": "Product", "@id": "a".repeat(44), name: "Батон" }] }];
+    expect(lavkaLdProductId(ld, "Хлеб  тостовый «Аютинский хлеб» в нарезке")).toBe(hex);
+    expect(lavkaLdProductId(ld, "Батон нарезной")).toBeNull();
+    expect(lavkaLdProductId([{ "@type": "Product", "@id": "not-hex", name: "Батон" }], "Батон")).toBeNull();
+    expect(lavkaLdProductId([{ "@type": "Product", "@id": hex, name: "Батон" }, { "@type": "Product", "@id": "b".repeat(44), name: "Батон" }], "Батон")).toBeNull();
+  });
+
+  test("lavka saved card and payment step texts", () => {
+    // Экран оформления показывает карту как «MIR · 0000» — с одной точкой.
+    expect(LAVKA_TEXT.savedCard.test("Способ оплаты MIR · 0000 Адрес доставки")).toBe(true);
+    expect(LAVKA_TEXT.savedCard.test("Visa ·1234")).toBe(true);
+    expect(LAVKA_TEXT.savedCard.test("Карта •• 1234")).toBe(true);
+    expect(LAVKA_TEXT.savedCard.test("Способ оплаты Добавить карту")).toBe(false);
+    expect(LAVKA_TEXT.savedCard.test("MIR · 00001")).toBe(false);
+    expect(LAVKA_TEXT.toPayment.test("Перейти к оплате")).toBe(true);
+    expect(LAVKA_TEXT.pay.test("Перейти к оплате")).toBe(false);
   });
 
   test("daemon frame is strict", () => {
@@ -1033,6 +1059,9 @@ describe("eda: parsing and page helpers", () => {
     expect(dishMatches("Картофель фри", "чизбургер")).toBe(false);
     expect(dishName(" Чизбургер ", "250 г")).toBe("Чизбургер 250 г");
     expect(dishName("Чизбургер", "")).toBe("Чизбургер");
+    // Карточка меню: «950 г · 2548 ккал», окно блюда: «950 г» — одно и то же блюдо.
+    expect(dishName("40 см Маргарита Пицца", "950 г · 2548 ккал")).toBe(dishName("40 см Маргарита Пицца", "950 г"));
+    expect(dishName("Морс", "320 ккал")).toBe("Морс");
   });
 
   test("router sends each call to the page of the opened service", async () => {
@@ -1048,6 +1077,25 @@ describe("eda: parsing and page helpers", () => {
     expect(await page.address()).toBe("Еда-адрес");
     expect(lavka.s.opened).toEqual(["home:lavka"]);
     expect(eda.s.opened).toEqual([`home:${PLACE.ref}`]);
+    // Необязательный метод роутер не теряет: иначе контакты не доходят до Еды.
+    const seen: unknown[] = [];
+    eda.page.fillContacts = async (c) => { seen.push(c); };
+    await page.fillContacts!({ name: "Имя", email: "a@b.c" });
+    expect(seen).toEqual([{ name: "Имя", email: "a@b.c" }]);
+    await page.openHome({ service: "lavka" });
+    await page.fillContacts!({ name: "Имя" });
+    expect(seen).toHaveLength(1);
+  });
+
+  test("checkout amounts and contact placeholders", () => {
+    const last = (t: string) => { const m = t.match(new RegExp(RUB_AMOUNT.source, "g")); return m ? parseShopRubles(m[m.length - 1]) : null; };
+    // Еда: разряды отбиты U+2009, у позиций — U+2006.
+    expect(last("\n1\u202f075\u2006₽\n189\u2006₽\nОплатить\n1\u2009\u2009317\u2009₽")).toBe(1317);
+    expect(last("К оплате 288 ₽")).toBe(288);
+    expect(last("Итого 2\u00a0450 ₽")).toBe(2450);
+    expect(isBlankContact("")).toBe(true);
+    expect(isBlankContact(" Пользователь ")).toBe(true);
+    expect(isBlankContact("Пользователь Иванов")).toBe(false);
   });
 });
 

@@ -111,6 +111,19 @@ export function playwrightDeliveryPage(page: any): DeliveryPage {
       await page.locator(`${DELIVERY_OFFER_INPUT}[value="${value}"]`).first().check({ force: true }).catch(() => {});
       await wait(700);
     },
+    async fillRecipientFromSender() {
+      const sender = page.getByRole("textbox", { name: DELIVERY_TEXT.senderPhone }).first();
+      const recipient = page.getByRole("textbox", { name: DELIVERY_TEXT.recipientPhone }).first();
+      if (!(await visible(sender))) return;
+      const phone = String(await sender.inputValue().catch(() => "")).trim();
+      if (!phone) return;
+      await recipient.scrollIntoViewIfNeeded({ timeout: UI_TIMEOUT_MS }).catch(() => {});
+      if (!(await visible(recipient, UI_TIMEOUT_MS))) return;
+      if (String(await recipient.inputValue().catch(() => "x")).trim()) return;
+      await recipient.click({ timeout: UI_TIMEOUT_MS }).catch(() => {});
+      await recipient.fill(phone, { timeout: UI_TIMEOUT_MS }).catch(() => {});
+      await wait(700);
+    },
     async contactRequired() {
       // Телефонов два — отправителя и получателя; пустой любой из них — стоп.
       for (const input of await page.getByRole("textbox", { name: DELIVERY_TEXT.contact }).all()) {
@@ -139,7 +152,9 @@ export function playwrightDeliveryPage(page: any): DeliveryPage {
       const button = orderLocator();
       if (!(await visible(button, UI_TIMEOUT_MS))) return null;
       const label = String(await button.innerText()).replace(/\s+/g, " ").trim().slice(0, 80);
-      return { label, ...parseTariffCard(label) };
+      const disabled = await button.isDisabled().catch(() => false);
+      const blocked = !disabled ? null : DELIVERY_TEXT.addPayment.test(label) ? "payment" as const : "disabled" as const;
+      return { label, ...parseTariffCard(label), blocked };
     },
     async clickOrder() {
       await orderLocator().click();
