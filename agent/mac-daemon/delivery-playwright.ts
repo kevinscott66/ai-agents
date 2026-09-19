@@ -150,7 +150,11 @@ export function playwrightDeliveryPage(page: any): DeliveryPage {
     },
     async orderButton() {
       const button = orderLocator();
-      if (!(await visible(button, UI_TIMEOUT_MS))) return null;
+      if (!(await visible(button, UI_TIMEOUT_MS))) {
+        const confirm = page.getByRole("button", { name: DELIVERY_TEXT.confirmData }).first();
+        if (!(await visible(confirm, 1_000))) return null;
+        return { label: "Подтвердите данные", price_rub: null, eta_min: null, blocked: "confirm_data" as const };
+      }
       const label = String(await button.innerText()).replace(/\s+/g, " ").trim().slice(0, 80);
       const disabled = await button.isDisabled().catch(() => false);
       const blocked = !disabled ? null : DELIVERY_TEXT.addPayment.test(label) ? "payment" as const : "disabled" as const;

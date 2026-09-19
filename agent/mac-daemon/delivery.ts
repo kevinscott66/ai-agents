@@ -14,6 +14,8 @@
  *     `contact_required`;
  *   - способ оплаты агент не добавляет: кнопка «Заказать» без него
  *     неактивна — отказ `payment_needs_owner`;
+ *   - данные аккаунта (имя, телефон, код из SMS) подтверждает владелец: пока
+ *     вместо «Заказать» кнопка «Подтвердите данные» — отказ `data_confirm_needs_owner`;
  *   - комментарий курьеру вписывается только подписанный.
  *
  * Выключено, пока владелец не поставит DELIVERY_ENABLED=true. Вход — только
@@ -75,8 +77,11 @@ export interface DeliveryPage {
   contactRequired(): Promise<boolean>;
   /** Вписать комментарий и прочитать обратно; false — поля нет или не вписалось. */
   setComment(comment: string): Promise<boolean>;
-  /** blocked: «payment» — кнопка неактивна и просит способ оплаты, «disabled» — неактивна по другой причине. */
-  orderButton(): Promise<{ label: string; price_rub: number | null; blocked?: "payment" | "disabled" | null } | null>;
+  /**
+   * blocked: «payment» — кнопка неактивна и просит способ оплаты, «confirm_data» — вместо
+   * «Заказать» просят подтвердить данные аккаунта, «disabled» — неактивна по другой причине.
+   */
+  orderButton(): Promise<{ label: string; price_rub: number | null; blocked?: "payment" | "confirm_data" | "disabled" | null } | null>;
   clickOrder(): Promise<void>;
   orderState(): Promise<{ state: DeliveryOrderState; eta_min: number | null }>;
   cancelOrder(): Promise<"clicked" | "unavailable">;
@@ -118,7 +123,7 @@ export function checkDeliveryProfile(env: DeliveryEnv, uid: number | undefined =
 
 const SCREENSHOT_CODES: readonly DeliveryFailCode[] = [
   "login_required", "captcha", "unexpected_page", "address_not_found", "tariff_unavailable",
-  "contact_required", "comment_unavailable", "price_unreadable", "price_changed", "order_button_missing",
+  "contact_required", "comment_unavailable", "price_unreadable", "price_changed", "order_button_missing", "data_confirm_needs_owner",
 ];
 
 const ENDED: readonly DeliveryOrderState[] = ["none", "delivered", "cancelled"];
@@ -336,6 +341,7 @@ export class DeliveryRunner {
     const button = await this.settledOrderButton(page);
     if (!button) throw new DeliveryError("order_button_missing");
     if (button.blocked === "payment") throw new DeliveryError("payment_needs_owner");
+    if (button.blocked === "confirm_data") throw new DeliveryError("data_confirm_needs_owner");
     if (button.blocked) throw new DeliveryError("order_button_missing");
     const prices = [row.price_rub, button.price_rub].filter((p): p is number => p !== null);
     if (!prices.length) throw new DeliveryError("price_unreadable");

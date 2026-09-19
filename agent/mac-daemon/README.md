@@ -231,6 +231,8 @@ Verification: local installed Claude accepted the readiness command and produced
    исполнитель заполняет тем же номером (из поля в поле, наружу не читается). Другое
    пустое обязательное поле — отказ `contact_required`. Способ оплаты привязывает
    владелец в Яндекс Go: без него кнопка «Заказать» неактивна — отказ `payment_needs_owner`.
+   Если вместо «Заказать» висит «Подтвердите данные» (имя, телефон, код из SMS) —
+   отказ `data_confirm_needs_owner`: подтверждает владелец в Яндекс Go, агент кодов не вводит.
 3. Сверка: `bun delivery.ts probe` печатает `guard`, `contact_required` и дерево
    доступности; `bun delivery.ts quote "откуда" "куда"` — расчёт без заказа. Сверь
    поле комментария, контакты, кнопку заказа и `DELIVERY_STATE_TEXT`. Правится только `delivery-selectors.ts`.
