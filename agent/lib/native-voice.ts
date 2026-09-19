@@ -24,6 +24,8 @@ export const SPEECH_VOICES=[
 ] as const;
 export const DEFAULT_SPEECH_VOICE='marin';
 const speechVoice=(value:unknown)=>value===undefined?DEFAULT_SPEECH_VOICE:SPEECH_VOICES.some(v=>v.id===value)?value as string:null;
+/** Для тестов: окна лимита живут на уровне модуля и иначе переходят из теста в тест. */
+export function _resetVoiceLimitsForTests():void{active.clear();windows.clear();}
 const json=(v:unknown,status=200)=>Response.json(v,{status,headers:{'Cache-Control':'no-store'}});
 export async function voiceApi(req:Request,owner:string,authorized:()=>boolean):Promise<Response>{
  const path=new URL(req.url).pathname, available=!!process.env.OPENAI_API_KEY?.trim();
