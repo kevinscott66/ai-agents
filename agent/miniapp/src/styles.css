@@ -755,3 +755,11 @@ button:focus:not(:focus-visible) { outline: none; }
 .mac-launch-form button { padding: 12px; border-radius: 10px; background: var(--text); color: var(--bg); border: 0; font: inherit; }
 .mac-launch-form button:disabled { opacity: .45; }
 .mac-launch-form p { font-size: 13px; margin: 0; }
+
+/* AUD-013: открытие карточки задачи — настоящая кнопка, внешне прежняя строка. */
+.task-open {
+  min-width: 0; flex: 1;
+  background: none; border: 0; padding: 0; margin: 0;
+  font: inherit; color: inherit; text-align: left; cursor: pointer;
+}
+label.section-title { display: block; }
