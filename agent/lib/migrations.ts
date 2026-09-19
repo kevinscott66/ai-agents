@@ -1765,6 +1765,39 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    // Контексты разговора в Telegram-чате (lib/chat-contexts.ts): /new
+    // начинает чистую историю, /chats показывает список, /switch возвращает
+    // к прежней. `messages.context_id IS NULL` — «Основной», то есть всё,
+    // что было до этой миграции. Архив получает ту же колонку, иначе
+    // db-maint остановит перенос: колонка источника не объявлена в архиве.
+    name: "068_chat_contexts",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS chat_contexts (
+          id TEXT PRIMARY KEY,
+          chat_id TEXT NOT NULL,
+          title TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_contexts_chat
+          ON chat_contexts(chat_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS chat_active_context (
+          chat_id TEXT PRIMARY KEY,
+          context_id TEXT,
+          updated_at INTEGER NOT NULL
+        );
+      `);
+      addColumn(db, "messages", "context_id TEXT");
+      addColumn(db, "messages_archive", "context_id TEXT");
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_messages_chat_context_ts
+          ON messages(chat_id, context_id, ts DESC);
+      `);
+    },
+  },
 ];
 
 /**

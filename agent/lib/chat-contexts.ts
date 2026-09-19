@@ -1,0 +1,152 @@
+/**
+ * Контексты разговора в Telegram-чате: /new, /chats, /switch.
+ *
+ * Модель видит последние сообщения чата (`getRecentMessages`). Раньше это была
+ * одна бесконечная лента: сменить тему можно было, только дождавшись, пока
+ * старое уйдёт за окно истории. Теперь у чата есть активный контекст, каждое
+ * записанное сообщение помечается им, а история для модели берётся только из
+ * активного.
+ *
+ * `context_id IS NULL` — «Основной»: всё, что было записано до миграции 068,
+ * и всё, что пишется, пока ничего другого не выбрано. Он всегда первый в
+ * списке и никуда не пропадает.
+ *
+ * Контекст сам по себе ничего не удаляет: переключение туда и обратно
+ * возвращает прежнюю историю целиком (в пределах того, что ещё не ушло в
+ * архив по MESSAGES_RETENTION_DAYS).
+ */
+import { randomBytes } from "node:crypto";
+import { db } from "./db.ts";
+
+export const MAIN_CONTEXT_TITLE = "Основной";
+/** Потолок контекстов на чат — список обязан помещаться в одно сообщение. */
+export const MAX_CONTEXTS_PER_CHAT = 30;
+const TITLE_MAX = 60;
+
+export interface ChatContext {
+  /** null — «Основной». */
+  id: string | null;
+  title: string;
+  /** Номер в списке /chats, с единицы; его же принимает /switch. */
+  number: number;
+  messages: number;
+  active: boolean;
+}
+
+export function cleanTitle(raw: string): string {
+  return raw.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, TITLE_MAX).trim();
+}
+
+export function activeContextId(chatId: string | number): string | null {
+  const row = db
+    .prepare(`SELECT context_id FROM chat_active_context WHERE chat_id = ?`)
+    .get(String(chatId)) as { context_id: string | null } | undefined;
+  return row?.context_id ?? null;
+}
+
+function setActive(chatId: string, contextId: string | null, now: number): void {
+  db.prepare(
+    `INSERT INTO chat_active_context(chat_id, context_id, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(chat_id) DO UPDATE SET context_id = excluded.context_id, updated_at = excluded.updated_at`,
+  ).run(chatId, contextId, now);
+}
+
+export type CreateResult =
+  | { ok: true; context: ChatContext }
+  | { ok: false; reason: "limit" };
+
+/** Новый контекст, сразу активный. Без названия он возьмёт его из первой реплики. */
+export function createContext(chatId: string | number, title?: string, now = Date.now()): CreateResult {
+  const chat = String(chatId);
+  const clean = title ? cleanTitle(title) : "";
+  const id = `ctx_${randomBytes(6).toString("hex")}`;
+  const created = db.transaction(() => {
+    const { n } = db
+      .prepare(`SELECT COUNT(*) AS n FROM chat_contexts WHERE chat_id = ?`)
+      .get(chat) as { n: number };
+    if (n >= MAX_CONTEXTS_PER_CHAT) return false;
+    db.prepare(
+      `INSERT INTO chat_contexts(id, chat_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+    ).run(id, chat, clean || null, now, now);
+    setActive(chat, id, now);
+    return true;
+  }).immediate();
+  if (!created) return { ok: false, reason: "limit" };
+  return { ok: true, context: listContexts(chat).find((c) => c.id === id)! };
+}
+
+/** «Основной» первым, дальше — в порядке создания. Номера стабильны. */
+export function listContexts(chatId: string | number): ChatContext[] {
+  const chat = String(chatId);
+  const active = activeContextId(chat);
+  const counts = new Map<string | null, number>();
+  for (const row of db
+    .prepare(`SELECT context_id, COUNT(*) AS n FROM messages WHERE chat_id = ? GROUP BY context_id`)
+    .all(chat) as { context_id: string | null; n: number }[]) counts.set(row.context_id, row.n);
+  const rows = db
+    .prepare(`SELECT id, title FROM chat_contexts WHERE chat_id = ? ORDER BY created_at, id`)
+    .all(chat) as { id: string; title: string | null }[];
+  return [
+    { id: null, title: MAIN_CONTEXT_TITLE, number: 1, messages: counts.get(null) ?? 0, active: active === null },
+    ...rows.map((r, i) => ({
+      id: r.id,
+      title: r.title ?? "Без названия",
+      number: i + 2,
+      messages: counts.get(r.id) ?? 0,
+      active: active === r.id,
+    })),
+  ];
+}
+
+/** По номеру из /chats или по id. `null` — такого контекста в этом чате нет. */
+export function switchContext(chatId: string | number, target: string, now = Date.now()): ChatContext | null {
+  const chat = String(chatId);
+  const t = target.trim();
+  const list = listContexts(chat);
+  const found = /^\d+$/.test(t) ? list.find((c) => c.number === Number(t)) : list.find((c) => c.id === t);
+  if (!found) return null;
+  setActive(chat, found.id, now);
+  return { ...found, active: true };
+}
+
+/**
+ * Безымянный контекст получает название из первой реплики человека. Команды
+ * (`/switch 2` и т. п.) названием не становятся.
+ */
+export function noteContextMessage(contextId: string, text: string, isBot: boolean, now = Date.now()): void {
+  db.prepare(`UPDATE chat_contexts SET updated_at = ? WHERE id = ?`).run(now, contextId);
+  if (isBot) return;
+  const title = cleanTitle(text);
+  if (!title || title.startsWith("/")) return;
+  db.prepare(`UPDATE chat_contexts SET title = ? WHERE id = ? AND title IS NULL`).run(title, contextId);
+}
+
+export type ContextCommand =
+  | { kind: "new"; title: string }
+  | { kind: "list" }
+  | { kind: "switch"; target: string };
+
+const CONTEXT_COMMAND = /^\/(new|chats|switch)(?:@[A-Za-z0-9_]+)?(?:\s+([\s\S]*))?$/i;
+
+/**
+ * Разбор без приведения к нижнему регистру: название из `/new` сохраняется
+ * как написано. В группе Telegram дописывает к команде `@имя_бота`.
+ */
+export function parseContextCommand(text: string): ContextCommand | null {
+  const m = text.trim().match(CONTEXT_COMMAND);
+  if (!m) return null;
+  const cmd = m[1]!.toLowerCase();
+  const arg = (m[2] ?? "").trim();
+  if (cmd === "new") return { kind: "new", title: arg };
+  if (cmd === "chats") return arg ? null : { kind: "list" };
+  return { kind: "switch", target: arg };
+}
+
+export function formatContextList(list: ChatContext[]): string {
+  return [
+    "Контексты этого чата:",
+    ...list.map((c) => `${c.active ? "▶" : "  "} ${c.number}. ${c.title} · сообщений: ${c.messages}`),
+    "",
+    "/new [название] — начать новый, /switch <номер> — переключиться.",
+  ].join("\n");
+}
