@@ -15,6 +15,7 @@ import { ruDateTime } from "./delabs-text.ts";
 import { formatMsk } from "./reminder-time.ts";
 import { describeMacControl, parseMacControl } from "./mac-control.ts";
 import { describeUserbotDm, parseUserbotDm } from "./userbot-dm.ts";
+import { describeCodeTask, parseCodeTask } from "./code-task.ts";
 import { describeDnsChange, parseDnsChange } from "./cloudflare-dns.ts";
 import { describeTaxiPayload } from "./taxi.ts";
 import { describeOrderFood } from "./shop.ts";
@@ -529,6 +530,11 @@ const PREVIEW_BY_ACTION: Record<
     ]);
   },
   // Кому и весь текст: владелец одобряет сообщение от своего имени.
+  // Весь текст задачи: он уходит исполнителю на Mac и в публичный PR.
+  CODE_TASK: (p) => {
+    const t = parseCodeTask(p);
+    return t ? describeCodeTask(t) : "некорректная задача на код";
+  },
   USERBOT_SEND_DM: (p) => {
     const dm = parseUserbotDm(p);
     return dm ? describeUserbotDm(dm) : "некорректное личное сообщение";
@@ -676,8 +682,8 @@ export function approvalPreview(
   if (!flat) return "";
   // Сообщение от имени владельца не обрезаем: одобрять половину текста нельзя.
   // Изменение DNS тоже: TXT до 2048 символов одобряется целиком.
-  // Заказ такси — тоже: адреса одобряются целиком.
-  if (actionType === "USERBOT_SEND_DM" || actionType === "CLOUDFLARE_DNS" || actionType === "ORDER_TAXI" || actionType === "ORDER_FOOD" ||
+  // Заказ такси — тоже: адреса одобряются целиком. Задача на код — тоже.
+  if (actionType === "USERBOT_SEND_DM" || actionType === "CODE_TASK" || actionType === "CLOUDFLARE_DNS" || actionType === "ORDER_TAXI" || actionType === "ORDER_FOOD" ||
     actionType === "MARKET_PURCHASE" || actionType === "ORDER_DELIVERY") return flat;
   return flat.length > limit ? `${flat.slice(0, limit - 1)}…` : flat;
 }

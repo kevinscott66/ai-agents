@@ -24,6 +24,7 @@ import { parseTaxiRequest, type TaxiRequest } from "../lib/taxi.ts";
 import { parseShopRequest, type ShopRequest } from "../lib/shop.ts";
 import { parseDeliveryRequest, type DeliveryRequest } from "../lib/delivery.ts";
 import { parseRepairRequest, type RepairRequest } from "../lib/selector-repair.ts";
+import { parseCodeTask, type CodeTask } from "../lib/code-task.ts";
 
 /** Режимы разрешений, которые понимает демон (их пять, у CLI — четыре). */
 export const RUN_MODES = [
@@ -129,9 +130,20 @@ export interface RepairMsg {
   request: RepairRequest;
 }
 
+/**
+ * Задача на код (mac-daemon/code-task.ts): {title, goal} — текст, который
+ * владелец одобрил в карточке CODE_TASK. Рамку задания демон собирает сам.
+ */
+export interface CodeTaskMsg {
+  type: "code_task";
+  id: string;
+  task: CodeTask;
+}
+
 export type BridgeMsg =
   | AssistantMsg
   | RepairMsg
+  | CodeTaskMsg
   | ControlMsg
   | TaxiMsg
   | ShopMsg
@@ -201,6 +213,11 @@ export function parseBridgeMsg(raw: unknown): ParsedMsg {
       if (!isNonEmptyString(m.id) || m.id.length > 100) return null;
       const request = parseRepairRequest(m.request);
       return request ? { type: "repair", id: m.id, request } : null;
+    }
+    case "code_task": {
+      if (!isNonEmptyString(m.id) || m.id.length > 100) return null;
+      const task = parseCodeTask(m.task);
+      return task ? { type: "code_task", id: m.id, task } : null;
     }
     case "ping":
       return { type: "ping" };

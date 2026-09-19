@@ -60,6 +60,8 @@ export const ACTION_TYPES = [
   // DELIVERY_QUOTE и DELIVERY_STATUS — инлайновые.
   "ORDER_DELIVERY",
   "DELIVERY_CANCEL",
+  // Самоулучшение: задача на код → PR с Mac (lib/code-tasks.ts).
+  "CODE_TASK",
   "SCHEDULE_POST",
   // Напоминания в чат-источник (lib/reminders.ts). LIST_REMINDERS — инлайновый.
   "CREATE_REMINDER",
@@ -157,6 +159,11 @@ export const ALWAYS_APPROVE_ACTIONS: Set<ActionType> = new Set<ActionType>([
   // что публикация «остаётся за PUBLISH_TO_CHANNEL под апрувом», — теперь это
   // наконец правда.
   "PUBLISH_TO_CHANNEL",
+  // Самоулучшение (lib/code-tasks.ts): свободный текст задачи уходит
+  // исполнителю на Mac владельца, тот запускает написанный им же код (тесты),
+  // а текст попадает в публичный PR. Владелец читает задачу целиком в любом
+  // режиме; MAC_AUTONOMOUS сюда не относится (macAuto — только MAC_RUN_CLAUDE).
+  "CODE_TASK",
 ]);
 
 /**
@@ -204,6 +211,8 @@ export const CALLER_RESTRICTED: Record<string, string> = {
   CANCEL_FOLLOWUP: "orchestrator",
   // Починка селекторов: PR от имени владельца, итог — ход в его личке.
   SHOP_REPAIR: "orchestrator",
+  // Задача на код: PR от имени владельца, итог — ход в его личке.
+  CODE_TASK: "orchestrator",
   // Создание канала от имени владельца + назначение админов — действие реального
   // аккаунта; только лид (orchestrator) как контролёр процесса.
   CREATE_TEAM_CHANNEL: "orchestrator",
