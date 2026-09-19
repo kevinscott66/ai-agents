@@ -17,7 +17,7 @@
 import { resolve as pathResolve, dirname } from "node:path";
 import { realpathSync, existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { bridgeSecretTransportError } from "./bridge-url.ts";
-import { cancelRun, killAll, killChild, registerChild, type KillableChild } from "./kill.ts";
+import { cancelRun, killAll, registerChild, stopChild, type KillableChild } from "./kill.ts";
 import { feedPrompt } from "./run-io.ts";
 import { parseBridgeMsg, toPermissionMode, type RepairMsg, type RunMsg } from "./protocol.ts";
 import { sanitizeChildEnv, resolveClaudeBin } from "./child-env.ts";
@@ -286,7 +286,7 @@ async function handleRun(ws: WebSocket, msg: RunMsg): Promise<void> {
   if (!registerChild(activeChildren, id, entry)) {
     // id уже занят живым прогоном. Убираем свежий процесс — он никому не
     // виден — и отвечаем мосту отказом вместо молчаливой потери первого.
-    void killChild(entry);
+    void stopChild(entry);
     sendResult(ws, id, false, undefined, "duplicate_run_id", metadata);
     return;
   }
@@ -295,7 +295,7 @@ async function handleRun(ws: WebSocket, msg: RunMsg): Promise<void> {
   const fed = await feedPrompt(child as { stdin: unknown }, prompt);
   if (!fed.ok) {
     activeChildren.delete(id);
-    void killChild(entry);
+    void stopChild(entry);
     sendResult(ws, id, false, undefined, fed.error, metadata);
     return;
   }
@@ -392,12 +392,12 @@ async function handleRepair(ws: WebSocket, msg: RepairMsg): Promise<void> {
     const child = Bun.spawn({ cmd: argv, cwd, env, detached: true, stdin: stdin === null ? "ignore" : "pipe", stdout: "pipe", stderr: "pipe" });
     const entry: KillableChild = { kill: (signal) => child.kill(signal), exited: child.exited, processGroupId: child.pid };
     activeChildren.set(msg.id, entry);
-    const timer = setTimeout(() => void killChild(entry), timeoutMs);
+    const timer = setTimeout(() => void stopChild(entry), timeoutMs);
     try {
       if (stdin !== null) {
         const fed = await feedPrompt(child as { stdin: unknown }, stdin);
         if (!fed.ok) {
-          void killChild(entry);
+          void stopChild(entry);
           return { code: 1, stdout: "", stderr: fed.error };
         }
       }
