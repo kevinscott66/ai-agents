@@ -9,6 +9,14 @@ import { dirname, resolve } from 'node:path';
 import type { NativeArtifactSink, NativeGeneration, NativeExecutionOutcome } from './native-context.ts';
 /** Ответ в приложении не режется на части, как в Telegram, поэтому потолок шире. */
 export const NATIVE_REPLY_MAX = 32_000;
+/** Весь список ответов хода в JSON: клиент читает не больше 4 МиБ, оставляем запас на медиа и роли. */
+export const NATIVE_TURN_REPLIES_BYTES = 3 * 1024 * 1024;
+/** Режет по UTF-16 (как считает iOS), не разрывая суррогатную пару эмодзи. */
+export function clipReply(text: string, max = NATIVE_REPLY_MAX): string {
+  if (text.length <= max) return text;
+  const code = text.charCodeAt(max - 1);
+  return text.slice(0, code >= 0xd800 && code <= 0xdbff ? max - 1 : max);
+}
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
 export class NativeAccess {
   readonly db: Database;
@@ -147,10 +155,16 @@ export class NativeAccess {
     if(!row) return;
     const replies = JSON.parse(row.replies) as string[];
     if (replies.length >= 80) return;
-    replies.push(text.slice(0, NATIVE_REPLY_MAX));
+    // Список ответов целиком обязан влезать в ответ сервера, иначе iPhone не заберёт результат хода.
+    const used = Buffer.byteLength(JSON.stringify(replies));
+    let reply = clipReply(text);
+    while (reply && used + Buffer.byteLength(JSON.stringify(reply)) + 1 > NATIVE_TURN_REPLIES_BYTES) reply = clipReply(reply, Math.floor(reply.length / 2));
+    if (!reply && text) return;
+    text = reply;
+    replies.push(text);
     const link = this.db.query('SELECT conversation_id FROM conversation_turns WHERE turn_id=?').get(id) as {conversation_id:string}|null;
     if (link) {
-      this.db.query('INSERT OR IGNORE INTO conversation_messages(id,conversation_id,role,text) VALUES(?,?,?,?)').run(id+':reply:'+replies.length,link.conversation_id,'assistant',text.slice(0,NATIVE_REPLY_MAX));
+      this.db.query('INSERT OR IGNORE INTO conversation_messages(id,conversation_id,role,text) VALUES(?,?,?,?)').run(id+':reply:'+replies.length,link.conversation_id,'assistant',text);
       this.db.query('INSERT OR REPLACE INTO native_message_authors(message_id,agent_key) VALUES(?,?)').run(id+':reply:'+replies.length,agentKey);
       this.db.query('UPDATE conversations SET updated=? WHERE id=?').run(Date.now(),link.conversation_id);
     }
@@ -161,7 +175,7 @@ export class NativeAccess {
     if(!/^[a-z][a-z0-9_]{0,31}$/.test(agentKey)||!this.conversation(conversationId,userId))throw new Error('native_owner_mismatch');
     return this.db.transaction(()=>{
       const messageId='team:'+randomBytes(16).toString('hex');
-      const row=this.db.query('INSERT INTO conversation_messages(id,conversation_id,role,text) VALUES(?,?,?,?) RETURNING seq').get(messageId,conversationId,'assistant',text.slice(0,NATIVE_REPLY_MAX)) as {seq:number};
+      const row=this.db.query('INSERT INTO conversation_messages(id,conversation_id,role,text) VALUES(?,?,?,?) RETURNING seq').get(messageId,conversationId,'assistant',clipReply(text)) as {seq:number};
       this.db.query('INSERT INTO native_message_authors VALUES(?,?)').run(messageId,agentKey);
       this.db.query('UPDATE conversations SET updated=? WHERE id=?').run(Date.now(),conversationId);
       return {messageId,seq:row.seq};

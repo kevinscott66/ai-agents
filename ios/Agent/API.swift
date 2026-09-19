@@ -83,9 +83,11 @@ struct Turn: Codable {
     var replyDetails: [NativeReplyDetail]? = nil
     var outputMedia: [NativeOutputMedia]? = nil
     var generations: [NativeGeneration]? = nil
+    /// Совпадает с NATIVE_REPLY_MAX сервера (agent/lib/native-access.ts): длина в UTF-16, как String.length в JS.
+    static let maximumReplyUnits = 32_000
     func validated(for requestedID: String) throws -> Turn {
         guard id == requestedID, ["running", "done", "error", "interrupted"].contains(status),
-              replies.count <= 80, replies.allSatisfy({ $0.utf16.count <= 8_000 }) else {
+              replies.count <= 80, replies.allSatisfy({ $0.utf16.count <= Turn.maximumReplyUnits }) else {
             throw AgentError.message("Некорректный ответ сервера. Ожидание запроса сохранено.")
         }
         if let details = replyDetails {
