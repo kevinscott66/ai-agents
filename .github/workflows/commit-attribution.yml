@@ -60,8 +60,18 @@ jobs:
             committer_name="$(git show -s --format='%cn' "$commit")"
             committer_email="$(git show -s --format='%ce' "$commit")"
 
+            # Commits GitHub writes itself (merge, squash, web edit) carry the
+            # account's profile display name instead of the login. The owner's
+            # ID-bound noreply email identifies the account, so there the name is
+            # not checked; local commits must still use the login.
+            made_by_github=0
+            if [[ "$committer_name" == "$WEB_NAME" && "$committer_email" == "$WEB_EMAIL" ]]; then
+              made_by_github=1
+            fi
+
             # The author is what GitHub counts as a contributor.
-            if [[ "$author_name" != "$OWNER_NAME" || "$author_email" != "$OWNER_EMAIL" ]]; then
+            if [[ "$author_email" != "$OWNER_EMAIL" ]] \
+               || [[ "$author_name" != "$OWNER_NAME" && "$made_by_github" -ne 1 ]]; then
               printf 'ERROR: %s author is %q <%s>; expected %q <%s> (%s)\n' \
                 "$commit" "$author_name" "$author_email" \
                 "$OWNER_NAME" "$OWNER_EMAIL" "$subject" >&2
