@@ -32,7 +32,7 @@ import {
   type TaxiTariff,
 } from "../lib/taxi.ts";
 import { TAXI_ETA_TEXT, TAXI_PRICE_TEXT, TAXI_STATE_POLL } from "./taxi-selectors.ts";
-import { ensureLoginProfileDir, printOutcome, profileDirProblem, runCli, runnerErrorCode, waitForEnter, settleOrRelease } from "./runner-kit.ts";
+import { CAPTCHA_HOLD_MS, ensureLoginProfileDir, printOutcome, profileDirProblem, runCli, runnerErrorCode, waitForEnter, settleOrRelease } from "./runner-kit.ts";
 
 export interface TaxiEnv {
   TAXI_ENABLED?: string;
@@ -66,6 +66,8 @@ export interface TaxiPage {
   orderState(): Promise<{ state: TaxiOrderState; driver: TaxiDriver | null }>;
   cancelOrder(): Promise<"clicked" | "unavailable">;
   screenshot(): Promise<string | null>;
+  /** Вывести окно наверх: на капче его ждёт владелец. */
+  front?(): Promise<void>;
   probe(): Promise<string>;
 }
 
@@ -130,6 +132,8 @@ export interface TaxiRunnerOptions {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   idleMs?: number;
+  /** Сколько окно с капчей ждёт владельца, прежде чем закрыться по простою. */
+  captchaHoldMs?: number;
   deadlineMs?: number;
   /** Только для тестов: сколько ждать, что зависший шаг закончится сам. */
   selfSettleMs?: number;
@@ -145,6 +149,9 @@ export class TaxiRunner {
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly idleMs: number;
+  private readonly captchaHoldMs: number;
+  /** Последний запуск встал на капче: окно держим открытым дольше обычного. */
+  private captchaHold = false;
   private readonly deadlineMs: number;
   private readonly selfSettleMs: number | undefined;
   /** Растёт на каждом close(): запуск, закончившийся после закрытия, — сирота. */
@@ -156,6 +163,7 @@ export class TaxiRunner {
     this.now = opts.now ?? Date.now;
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.idleMs = opts.idleMs ?? 5 * 60_000;
+    this.captchaHoldMs = opts.captchaHoldMs ?? CAPTCHA_HOLD_MS;
     this.deadlineMs = opts.deadlineMs ?? TAXI_RUN_DEADLINE_MS;
     this.selfSettleMs = opts.selfSettleMs;
   }
@@ -164,6 +172,7 @@ export class TaxiRunner {
     if (this.env.TAXI_ENABLED !== "true") return { ok: false, code: "taxi_disabled" };
     if (this.busy) return { ok: false, code: "taxi_busy" };
     this.busy = true;
+    this.captchaHold = false;
     if (this.idleTimer) clearTimeout(this.idleTimer);
     // Присваивается внутри work — без приведения TS сузил бы до null.
     let page = null as TaxiPage | null;
@@ -181,6 +190,11 @@ export class TaxiRunner {
       if (page && SCREENSHOT_CODES.includes(e.code)) {
         const shot = await page.screenshot().catch(() => null);
         if (shot) out.screenshot = shot;
+      }
+      if (page && e.code === "captcha") {
+        // Капчу проходит владелец в этом же окне; исполнитель её не трогает.
+        this.captchaHold = true;
+        await page.front?.().catch(() => {});
       }
       return out;
     } finally {
@@ -201,7 +215,7 @@ export class TaxiRunner {
 
   private scheduleIdleClose() {
     if (!this.browser) return;
-    this.idleTimer = setTimeout(() => { if (!this.busy) void this.close(); }, this.idleMs);
+    this.idleTimer = setTimeout(() => { if (!this.busy) void this.close(); }, this.captchaHold ? this.captchaHoldMs : this.idleMs);
     this.idleTimer.unref?.();
   }
 

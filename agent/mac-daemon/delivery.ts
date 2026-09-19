@@ -39,7 +39,7 @@ import {
   type DeliveryTariff,
 } from "../lib/delivery.ts";
 import { DELIVERY_BUTTON_POLL, DELIVERY_STATE_POLL } from "./delivery-selectors.ts";
-import { ensureLoginProfileDir, printOutcome, profileDirProblem, runCli, runnerErrorCode, waitForEnter, settleOrRelease } from "./runner-kit.ts";
+import { CAPTCHA_HOLD_MS, ensureLoginProfileDir, printOutcome, profileDirProblem, runCli, runnerErrorCode, waitForEnter, settleOrRelease } from "./runner-kit.ts";
 
 export interface DeliveryEnv {
   DELIVERY_ENABLED?: string;
@@ -86,6 +86,8 @@ export interface DeliveryPage {
   orderState(): Promise<{ state: DeliveryOrderState; eta_min: number | null }>;
   cancelOrder(): Promise<"clicked" | "unavailable">;
   screenshot(): Promise<string | null>;
+  /** Вывести окно наверх: на капче его ждёт владелец. */
+  front?(): Promise<void>;
   probe(): Promise<string>;
 }
 
@@ -148,6 +150,8 @@ export interface DeliveryRunnerOptions {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   idleMs?: number;
+  /** Сколько окно с капчей ждёт владельца, прежде чем закрыться по простою. */
+  captchaHoldMs?: number;
   deadlineMs?: number;
   /** Только для тестов: сколько ждать, что зависший шаг закончится сам. */
   selfSettleMs?: number;
@@ -163,6 +167,9 @@ export class DeliveryRunner {
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly idleMs: number;
+  private readonly captchaHoldMs: number;
+  /** Последний запуск встал на капче: окно держим открытым дольше обычного. */
+  private captchaHold = false;
   private readonly deadlineMs: number;
   private readonly selfSettleMs: number | undefined;
   /** Растёт на каждом close(): запуск, закончившийся после закрытия, — сирота. */
@@ -174,6 +181,7 @@ export class DeliveryRunner {
     this.now = opts.now ?? Date.now;
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.idleMs = opts.idleMs ?? 5 * 60_000;
+    this.captchaHoldMs = opts.captchaHoldMs ?? CAPTCHA_HOLD_MS;
     this.deadlineMs = opts.deadlineMs ?? DELIVERY_RUN_DEADLINE_MS;
     this.selfSettleMs = opts.selfSettleMs;
   }
@@ -182,6 +190,7 @@ export class DeliveryRunner {
     if (this.env.DELIVERY_ENABLED !== "true") return { ok: false, code: "delivery_disabled" };
     if (this.busy) return { ok: false, code: "delivery_busy" };
     this.busy = true;
+    this.captchaHold = false;
     if (this.idleTimer) clearTimeout(this.idleTimer);
     // Присваивается внутри work — без приведения TS сузил бы до null.
     let page = null as DeliveryPage | null;
@@ -199,6 +208,11 @@ export class DeliveryRunner {
       if (page && SCREENSHOT_CODES.includes(e.code)) {
         const shot = await page.screenshot().catch(() => null);
         if (shot) out.screenshot = shot;
+      }
+      if (page && e.code === "captcha") {
+        // Капчу проходит владелец в этом же окне; исполнитель её не трогает.
+        this.captchaHold = true;
+        await page.front?.().catch(() => {});
       }
       return out;
     } finally {
@@ -219,7 +233,7 @@ export class DeliveryRunner {
 
   private scheduleIdleClose() {
     if (!this.browser) return;
-    this.idleTimer = setTimeout(() => { if (!this.busy) void this.close(); }, this.idleMs);
+    this.idleTimer = setTimeout(() => { if (!this.busy) void this.close(); }, this.captchaHold ? this.captchaHoldMs : this.idleMs);
     this.idleTimer.unref?.();
   }
 

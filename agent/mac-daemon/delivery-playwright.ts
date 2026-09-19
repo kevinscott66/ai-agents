@@ -45,7 +45,8 @@ export async function launchPlaywrightDelivery(env: DeliveryEnv, profileDir: str
     viewport: { width: 1024, height: 720 },
   });
   const page = playwrightDeliveryPage(raw);
-  return { page: () => page, close: () => context.close() };
+  const fronted = { ...page, front: () => raw.bringToFront() };
+  return { page: () => fronted, close: () => context.close() };
 }
 
 export function playwrightDeliveryPage(page: any): DeliveryPage {
