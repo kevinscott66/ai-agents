@@ -212,7 +212,7 @@ export const DELIVERY_FAIL_LABEL: Record<DeliveryFailCode, string> = {
   profile_shared: "DELIVERY_PROFILE_DIR совпадает с TAXI_PROFILE_DIR — нужен отдельный профиль",
   browser_unavailable: "не удалось запустить Chrome для доставки",
   login_required: "в Яндекс Go не выполнен вход — владелец входит сам: bun mac-daemon/delivery.ts login",
-  captcha: "Яндекс показал капчу — агент её не решает, нужен владелец",
+  captcha: "Яндекс показал капчу — агент её не решает: владелец проходит её сам в окне Chrome агента на Mac (окно ждёт 15 минут), потом вызов повторяют",
   unexpected_page: "открылась неожиданная страница — остановился",
   address_not_found: "адрес не найден",
   tariff_unavailable: "тариф доставки сейчас недоступен",

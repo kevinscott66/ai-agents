@@ -301,6 +301,48 @@ describe("mac runner", () => {
     await r.close();
   });
 
+  test("captcha mid-cart: window stays on the captcha, in front; own items cleared on the next prepare", async () => {
+    const { s, page } = fakePage();
+    let captcha = true;
+    let fronted = 0;
+    page.guard = async () => (captcha && s.current === BREAD.id ? "captcha" : "ok");
+    page.front = async () => { fronted++; };
+    const r = runner(page);
+    expect(await r.run(prepare)).toEqual({ ok: false, code: "captcha", screenshot: "U0NSRUVO" });
+    expect(fronted).toBe(1);
+    // Страницу не уводили: уборка отложена, молоко в корзине.
+    expect(s.current).toBe(BREAD.id);
+    expect([...s.cart]).toEqual([[MILK.id, 2]]);
+    captcha = false;
+    expect(await r.run(prepare)).toMatchObject({ ok: true, op: "prepare", total_rub: 2 * MILK.price_rub + BREAD.price_rub });
+    expect(s.clicks).toEqual([`qty:${MILK.id}:2`, `qty:${MILK.id}:0`, `qty:${MILK.id}:2`, `qty:${BREAD.id}:1`]);
+    expect(fronted).toBe(1);
+    await r.close();
+  });
+
+  test("captcha keeps the browser open for the hold, other refusals only for the idle time", async () => {
+    const { s, page } = fakePage();
+    let closed = 0;
+    const r = new ShopRunner({ SHOP_ENABLED: "true", SHOP_PROFILE_DIR: "/profile" }, {
+      launch: async () => ({ page: () => page, close: async () => { closed++; } }),
+      checkProfile: (dir) => dir ?? "",
+      now: () => T0,
+      sleep: async () => {},
+      idleMs: 10,
+      captchaHoldMs: 150,
+    });
+    s.guard = "captcha";
+    await r.run({ op: "status", service: "lavka" });
+    await Bun.sleep(50);
+    expect(closed).toBe(0);
+    await Bun.sleep(150);
+    expect(closed).toBe(1);
+    s.guard = "login_required";
+    await r.run({ op: "status", service: "lavka" });
+    await Bun.sleep(50);
+    expect(closed).toBe(2);
+  });
+
   test("a cart with someone else's items is refused as is", async () => {
     const { s, page } = fakePage();
     s.cart.set("chuzhoe", 1);
