@@ -25,6 +25,7 @@ import { readFileSync } from "node:fs";
 import {
   budgetChanges,
   overrideMap,
+  keepUnsavedDrafts,
 } from "../miniapp/src/pages/Settings.tsx";
 
 function row(agentKey: string, dailyInputTokens: number) {
@@ -91,13 +92,15 @@ describe("проводка Settings.tsx", () => {
   });
 
   test("форма заполняется ими, а не итоговым лимитом", () => {
-    expect(SRC).toMatch(/setEditingBudgets\(\s*next\.overrides\s*\)/);
+    // С AUD-015 после частичного сбоя поверх них кладутся недоехавшие черновики.
+    expect(SRC).toMatch(/setEditingBudgets\(keep \? keepUnsavedDrafts\(next\.overrides, keep\.budgets, keep\.saved\) : next\.overrides\)/);
     expect(SRC).not.toMatch(/setEditingBudgets\(budgetMap\(/);
   });
 
   test("и отправляется диф против них же", () => {
     // Диф против итогового лимита и порождал фантомные правки.
-    expect(SRC.match(/budgetChanges\(editingBudgets, settings\.overrides\)/g) ?? [])
+    expect(SRC).toContain("const drafts = editingBudgets;");
+    expect(SRC.match(/budgetChanges\((editingBudgets|drafts), settings\.overrides\)/g) ?? [])
       .toHaveLength(2);
     expect(SRC).not.toMatch(/budgetChanges\(editingBudgets, budgetMap\(/);
   });
@@ -126,5 +129,28 @@ describe("effectiveHint", () => {
   test("нет ни своего, ни общего — так и говорим", async () => {
     const { effectiveHint } = await import("../miniapp/src/pages/Settings.tsx");
     expect(effectiveHint(null, null)).toBe("без лимита");
+  });
+});
+
+describe("AUD-015: частичное сохранение не стирает черновики", () => {
+  test("подтверждённое — с сервера, не отправленное — из черновика", () => {
+    const server = { a: 100, b: 200, c: null };
+    const drafts = { a: 150, b: 250, c: 300 };
+    // a записался, b упал, c не отправлялся.
+    expect(keepUnsavedDrafts(server, drafts, new Set(["a"]))).toEqual({ a: 100, b: 250, c: 300 });
+  });
+  test("без сохранённого — форма как у владельца", () => {
+    expect(keepUnsavedDrafts({ a: 1 }, { a: 2, b: null }, new Set())).toEqual({ a: 2, b: null });
+  });
+  test("повтор отправляет только недоехавшее", () => {
+    const server = { a: 150, b: 200 };
+    const form = keepUnsavedDrafts(server, { a: 150, b: 250 }, new Set(["a"]));
+    expect(budgetChanges(form, server)).toEqual([{ agentKey: "b", dailyInputTokens: 250 }]);
+  });
+  test("поля заблокированы на время отправки, заголовки — из темы", () => {
+    const src = readFileSync(new URL("../miniapp/src/pages/Settings.tsx", import.meta.url), "utf8");
+    expect(src.match(/disabled=\{readonly \|\| saving\}/g)?.length).toBe(2);
+    expect(src).not.toContain("#2c3e50");
+    expect(src).not.toContain("onRetry={load}");
   });
 });

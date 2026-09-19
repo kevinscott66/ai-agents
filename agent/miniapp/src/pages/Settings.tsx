@@ -126,6 +126,25 @@ export function budgetChanges(
 }
 
 /**
+ * Форма после частичного сохранения: то, что сервер подтвердил, — с сервера,
+ * остальные правки владельца — как он их ввёл.
+ *
+ * Аудит 2026-09-19 (AUD-015): после сбоя на втором из трёх лимитов форма
+ * перечитывалась целиком, и третий, ещё не отправленный, лимит пропадал.
+ */
+export function keepUnsavedDrafts(
+  server: Record<string, number | null>,
+  drafts: Record<string, number | null>,
+  saved: ReadonlySet<string>,
+): Record<string, number | null> {
+  const out = { ...server };
+  for (const [agentKey, value] of Object.entries(drafts)) {
+    if (!saved.has(agentKey)) out[agentKey] = value ?? null;
+  }
+  return out;
+}
+
+/**
  * Ключи с лимитом, который сервер отвергнет (положительное число или null).
  *
  * Ноль и минус — не «без лимита», а ошибка ввода: пустое поле уже значит «без
@@ -162,7 +181,11 @@ export default function Settings() {
   const [overridesKnown, setOverridesKnown] = useState(true);
   const [editingAutonomyMode, setEditingAutonomyMode] = useState<AutonomyMode>("manual");
 
-  async function load() {
+  async function load(keep?: {
+    budgets: Record<string, number | null>;
+    saved: ReadonlySet<string>;
+    autonomyMode?: AutonomyMode;
+  }) {
     setLoading(true);
     setErr(null);
     try {
@@ -210,8 +233,8 @@ export default function Settings() {
       setSettings(next);
 
       // Initialize editing state
-      setEditingBudgets(next.overrides);
-      setEditingAutonomyMode(next.defaultAutonomyMode);
+      setEditingBudgets(keep ? keepUnsavedDrafts(next.overrides, keep.budgets, keep.saved) : next.overrides);
+      setEditingAutonomyMode(keep?.autonomyMode ?? next.defaultAutonomyMode);
     } catch (e: any) {
       setErr(formatApiError(e));
     } finally {
@@ -237,12 +260,20 @@ export default function Settings() {
 
     setSaving(true);
     setSaveErr(null);
+    const drafts = editingBudgets;
+    const modeDraft = editingAutonomyMode;
+    const changes = budgetChanges(drafts, settings.overrides);
+    const saved = new Set<string>();
+    const modeChanged = modeDraft !== settings.defaultAutonomyMode;
+    let modeSaved = false;
     try {
-      for (const change of budgetChanges(editingBudgets, settings.overrides)) {
+      for (const change of changes) {
         await api.updateBudget(change);
+        saved.add(change.agentKey);
       }
-      if (editingAutonomyMode !== settings.defaultAutonomyMode) {
-        await api.setAutonomy({ mode: editingAutonomyMode });
+      if (modeChanged) {
+        await api.setAutonomy({ mode: modeDraft });
+        modeSaved = true;
       }
 
       haptic("success");
@@ -250,11 +281,21 @@ export default function Settings() {
       // Перечитываем: сервер округляет лимит и мог отвергнуть часть правок.
       await load();
     } catch (e: any) {
-      // Часть ключей могла записаться до отказа — перечитываем, чтобы форма
-      // показывала то, что на сервере, а не то, что не доехало.
-      setSaveErr(formatApiError(e));
-      toast("Ошибка сохранения", "error");
-      await load();
+      // Часть ключей могла записаться до отказа — перечитываем подтверждённое,
+      // а не доехавшие правки оставляем в форме, чтобы их можно было повторить.
+      const total = changes.length + (modeChanged ? 1 : 0);
+      const done = saved.size + (modeSaved ? 1 : 0);
+      setSaveErr(
+        done > 0
+          ? `Сохранено ${done} из ${total}. Остальное осталось в форме — ${formatApiError(e)}`
+          : formatApiError(e),
+      );
+      toast(done > 0 ? "Сохранено частично" : "Ошибка сохранения", "error");
+      await load({
+        budgets: drafts,
+        saved,
+        autonomyMode: modeChanged && !modeSaved ? modeDraft : undefined,
+      });
     } finally {
       setSaving(false);
     }
@@ -269,7 +310,7 @@ export default function Settings() {
       <ErrorBox
         message={err}
         hint="Не удалось загрузить настройки. Проверь интернет и попробуй ещё раз."
-        onRetry={load}
+        onRetry={() => load()}
       />
     );
   }
@@ -305,13 +346,13 @@ export default function Settings() {
         <ErrorBox
           message={overridesErr}
           hint="Свои лимиты ролей не загрузились. Пустые поля ниже не значат, что переопределений нет."
-          onRetry={load}
+          onRetry={() => load()}
         />
       )}
 
       {/* Token Budgets Section */}
       <section style={{ marginBottom: 32 }}>
-        <h2 style={{ fontSize: 18, marginBottom: 16, color: "#2c3e50" }}>
+        <h2 style={{ fontSize: 18, marginBottom: 16, color: "var(--text)" }}>
           Дневной лимит входных токенов
         </h2>
 
@@ -339,7 +380,7 @@ export default function Settings() {
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                   <span style={{ fontWeight: 500, fontSize: 14 }}>{agent.title}</span>
                   {budget && (
-                    <span style={{ fontSize: 12, color: "#7f8c8d" }}>
+                    <span style={{ fontSize: 12, color: "var(--hint)" }}>
                       {budget.usedTokens.toLocaleString()} / {budget.limit?.toLocaleString() ?? '∞'} tokens
                     </span>
                   )}
@@ -356,7 +397,7 @@ export default function Settings() {
                       style={{
                         width: "100%",
                         height: 6,
-                        background: "#ecf0f1",
+                        background: "var(--secondary-bg)",
                         borderRadius: 3,
                         overflow: "hidden",
                       }}
@@ -382,20 +423,22 @@ export default function Settings() {
                     [agent.key]: e.currentTarget.value ? parseInt(e.currentTarget.value) : null
                   }))}
                   placeholder="Общий лимит"
-                  disabled={readonly}
+                  disabled={readonly || saving}
                   aria-label={`Дневной лимит токенов: ${agent.title}`}
                   style={{
                     width: "100%",
                     padding: "6px 10px",
-                    border: "1px solid #bdc3c7",
+                    border: "1px solid var(--border)",
                     borderRadius: 4,
                     fontSize: 13,
+                    background: "var(--bg)",
+                    color: "var(--text)",
                   }}
                 />
                 {/* Пустое поле значит «своего лимита нет» — а не «лимита нет
                     вовсе». Какой тогда работает, видно здесь. */}
                 {hint && (
-                  <div style={{ fontSize: 11, color: "#7f8c8d", marginTop: 4 }}>
+                  <div style={{ fontSize: 11, color: "var(--hint)", marginTop: 4 }}>
                     {hint}
                   </div>
                 )}
@@ -407,13 +450,13 @@ export default function Settings() {
 
       {/* Autonomy Mode Section */}
       <section style={{ marginBottom: 32 }}>
-        <h2 style={{ fontSize: 18, marginBottom: 16, color: "#2c3e50" }}>
+        <h2 style={{ fontSize: 18, marginBottom: 16, color: "var(--text)" }}>
           Режим автономии по умолчанию
         </h2>
         <select
           value={editingAutonomyMode}
           onChange={(e) => setEditingAutonomyMode(e.currentTarget.value as AutonomyMode)}
-          disabled={readonly}
+          disabled={readonly || saving}
           aria-label="Глобальный режим автономии"
           style={{
             width: "100%",
@@ -434,14 +477,14 @@ export default function Settings() {
             </option>
           ))}
         </select>
-        <div style={{ marginTop: 8, fontSize: 12, color: "#7f8c8d" }}>
+        <div style={{ marginTop: 8, fontSize: 12, color: "var(--hint)" }}>
           Глобальное правило. Режим отдельного чата или агента перекрывает его.
         </div>
       </section>
 
       {/* Server-side settings — read-only by design */}
       <section style={{ marginBottom: 32 }}>
-        <h2 style={{ fontSize: 18, marginBottom: 16, color: "#2c3e50" }}>
+        <h2 style={{ fontSize: 18, marginBottom: 16, color: "var(--text)" }}>
           Настройки сервера
         </h2>
         <div

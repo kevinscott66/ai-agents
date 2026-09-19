@@ -94,7 +94,8 @@ describe("настройки пишутся настоящими ручками"
     expect(from).toBeGreaterThan(-1);
     const body = SRC.slice(from, SRC.indexOf("if (loading)", from));
     expect(body).toContain("api.updateBudget(");
-    expect(body).toContain("api.setAutonomy({ mode: editingAutonomyMode })");
+    expect(body).toContain("const modeDraft = editingAutonomyMode;");
+    expect(body).toContain("api.setAutonomy({ mode: modeDraft })");
   });
 
   test("режим автономии читается с сервера, а не из константы", () => {
