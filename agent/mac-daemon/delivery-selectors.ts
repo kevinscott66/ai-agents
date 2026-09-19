@@ -62,5 +62,11 @@ export const DELIVERY_ETA_TEXT = /\d+\s*(?:ч\s*\d+\s*)?мин/;
 export const DELIVERY_OFFER_ETA = /за\s+(?:(\d+)\s*час\S*\s*)?(?:(\d+)\s*мин)?/;
 
 export const DELIVERY_STATE_POLL = { attempts: 15, intervalMs: 1_000 };
+/**
+ * Сколько перечитывать кнопку «Заказать», пока она не устоялась: сразу после
+ * выбора тарифа её ещё нет или она неактивна без причины в подписи, а через
+ * секунду появляется «Добавьте способ оплаты» или цена.
+ */
+export const DELIVERY_BUTTON_POLL = { attempts: 4, intervalMs: 1_000 };
 /** Сколько ждать цен после выбора адресов. */
 export const DELIVERY_PRICE_POLL = { attempts: 30, intervalMs: 500 };
