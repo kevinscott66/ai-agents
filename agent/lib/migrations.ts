@@ -1798,6 +1798,40 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    // Самоулучшение, пункт 9 (lib/code-tasks.ts): CODE_TASK — задача на код,
+    // Mac открывает PR. Только оркестратор и только с подтверждением (то же
+    // держит ALWAYS_APPROVE_ACTIONS, строка — второй рубеж). Таблица — учёт
+    // запусков для потолков: одна одновременно, пять за сутки; застрявший
+    // 'running' (рестарт посреди задачи) становится 'failed'.
+    name: "069_code_tasks",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS code_tasks (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          goal TEXT NOT NULL,
+          chat_id INTEGER NOT NULL,
+          user_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'running'
+            CHECK (status IN ('running','done','failed','no_change')),
+          branch TEXT,
+          pr_url TEXT,
+          error TEXT,
+          created_at INTEGER NOT NULL,
+          finished_at INTEGER
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_code_tasks_created
+          ON code_tasks(created_at);
+      `);
+      const ins = db.prepare(
+        `INSERT OR IGNORE INTO permissions(agent_key, action_type, allowed, requires_approval)
+         VALUES (?, 'CODE_TASK', ?, 1)`,
+      );
+      for (const c of CHARACTERS) ins.run(c.key, c.key === "orchestrator" ? 1 : 0);
+    },
+  },
 ];
 
 /**

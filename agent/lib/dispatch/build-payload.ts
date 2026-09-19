@@ -20,6 +20,7 @@ import {
   REMINDER_TEXT_MAX,
 } from "../reminder-time.ts";
 import { dmTextError, normalizeDmUsername } from "../userbot-dm.ts";
+import { codeTaskGoalError, codeTaskTitleError } from "../code-task.ts";
 import { buildDnsChange, parseDnsProtected, parseDnsZones } from "../cloudflare-dns.ts";
 import { normalizeTaxiAddress, normalizeTaxiTariff, TAXI_ADDRESS_MAX, TAXI_TARIFF_KEYS } from "../taxi.ts";
 import {
@@ -1050,6 +1051,16 @@ export function buildPayload<T extends ActionType>(
     }
     case "DELIVERY_CANCEL": {
       const payload: PayloadFor<"DELIVERY_CANCEL"> = {};
+      return { ok: true, payload: payload as PayloadFor<T> };
+    }
+    case "CODE_TASK": {
+      // Без триммирования и proseField: владелец одобряет ровно тот текст,
+      // что уйдёт исполнителю и в PR; невидимые символы — отказ.
+      const titleError = codeTaskTitleError(i.title);
+      if (titleError) return { ok: false, error: titleError };
+      const goalError = codeTaskGoalError(i.goal);
+      if (goalError) return { ok: false, error: goalError };
+      const payload: PayloadFor<"CODE_TASK"> = { title: i.title as string, goal: i.goal as string };
       return { ok: true, payload: payload as PayloadFor<T> };
     }
     case "MAC_STOP": {
