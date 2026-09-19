@@ -30,7 +30,9 @@ import {
   parseOrderFood,
   shopNeedsPlace,
   SHOP_ITEMS_MAX,
+  SHOP_OPTION_PICKS_MAX,
   SHOP_QTY_MAX,
+  shopOrderLinesInput,
   SHOP_SERVICE_KEYS,
 } from "../shop.ts";
 import { DELIVERY_COMMENT_MAX, DELIVERY_TARIFF_KEYS, normalizeDeliveryAddress, normalizeDeliveryComment, normalizeDeliveryTariff } from "../delivery.ts";
@@ -905,6 +907,15 @@ export function buildPayload<T extends ActionType>(
       };
       return { ok: true, payload: payload as PayloadFor<T> };
     }
+    case "CANCEL_ORDER_WATCH": {
+      const id = typeof i.id === "string" ? i.id.trim() : "";
+      if (!id) return { ok: false, error: "id is required (see LIST_ORDER_WATCH)" };
+      const payload: PayloadFor<"CANCEL_ORDER_WATCH"> = {
+        chatId,
+        id,
+      };
+      return { ok: true, payload: payload as PayloadFor<T> };
+    }
     case "MAC_CONTROL": {
       // Время приходит строкой, как у CREATE_REMINDER (без смещения — МСК), и
       // превращается в мс здесь; дальше команду сверяет строгий parseMacControl.
@@ -989,18 +1000,19 @@ export function buildPayload<T extends ActionType>(
       if (!Array.isArray(i.lines) || i.lines.length < 1 || i.lines.length > SHOP_ITEMS_MAX) {
         return { ok: false, error: `lines — от 1 до ${SHOP_ITEMS_MAX} товаров из SHOP_QUOTE` };
       }
-      const lines = i.lines.map((l) => {
-        const o = (l && typeof l === "object" ? l : {}) as Record<string, unknown>;
-        return { id: o.id, name: normalizeShopName(o.name), qty: o.qty, price_rub: o.price_rub };
-      });
-      const parsed = parseOrderFood({ service, ...(place ? { place } : {}), lines, delivery_rub: i.delivery_rub ?? 0 });
+      // Итог оформления — только из SHOP_CHECKOUT: без него подпись не видит сборов.
+      if (!Number.isSafeInteger(i.total_rub) || (i.total_rub as number) <= 0) {
+        return { ok: false, error: "total_rub — итог к оплате из SHOP_CHECKOUT с этими же позициями: сначала SHOP_CHECKOUT" };
+      }
+      const lines = shopOrderLinesInput(i.lines);
+      const parsed = parseOrderFood({ service, ...(place ? { place } : {}), lines, delivery_rub: i.delivery_rub ?? 0, total_rub: i.total_rub });
       if (!parsed) {
         return {
           ok: false,
-          error: `каждый товар — {id, name, price_rub} ровно из SHOP_QUOTE и qty 1..${SHOP_QTY_MAX}, без повторов; delivery_rub — целые рубли из расчёта`,
+          error: `каждый товар — {id, name, price_rub} ровно из SHOP_QUOTE и qty 1..${SHOP_QTY_MAX}, для блюд Еды options — [{group, name}] из расчёта (до ${SHOP_OPTION_PICKS_MAX}), без повторов; delivery_rub — целые рубли из расчёта`,
         };
       }
-      const payload: PayloadFor<"ORDER_FOOD"> = parsed;
+      const payload: PayloadFor<"ORDER_FOOD"> = { ...parsed, total_rub: i.total_rub as number };
       return { ok: true, payload: payload as PayloadFor<T> };
     }
     case "MARKET_PURCHASE": {

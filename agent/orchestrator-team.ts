@@ -48,6 +48,8 @@ import { useAgentSdk } from "./lib/agent-sdk-runtime.ts";
 // backward compat with tests/t322-orchestrator-team.test.ts.
 export { tailLines, isMentioned } from "./orchestrator/helpers.ts";
 import { parseHistoryLimit } from "./orchestrator/helpers.ts";
+import { configureFollowupRunner } from "./lib/followups.ts";
+import { recordMessage } from "./lib/memory.ts";
 
 const anthropicApiKey = process.env["ANTHROPIC_API_KEY"]?.trim();
 const subscriptionMode = useAgentSdk();
@@ -172,6 +174,31 @@ export async function buildBot(def: CharacterDef): Promise<RunningBot | null> {
         },
       } as unknown as import("telegraf").Context;
       await processVoice(ctx, { text, native: true, ...media, history: history?.map((m,i) => ({id:i,chat_id:userId,from_user_id:userId,ts:Date.now(),is_bot:m.role === "assistant" ? 1 : 0,agent_key:m.role === "assistant" ? (m.agentKey ?? "orchestrator") : null,from_name:"Owner",text:m.text})) });
+    });
+    // Отложенные проверки (lib/followups.ts): вступление владельцу — настоящее
+    // сообщение, ход агента идёт ответом на него тем же путём, что и голосовое
+    // (без повторной записи входа и без лимита ingest). Отправитель — владелец:
+    // проверку ставили в его личном чате, и инструменты владельца доступны.
+    configureFollowupRunner({
+      notify: async (row, text) => {
+        const sent = await bot.telegram.sendMessage(row.chat_id, text);
+        recordMessage({
+          chatId: String(row.chat_id), agentKey: def.key, isBot: true, fromUserId: String(running.id),
+          fromName: running.username, text, ts: sent.date * 1000, tgMessageId: sent.message_id, transport: "bot_api",
+        });
+        return sent.message_id;
+      },
+      run: async (row, text, noticeId) => {
+        const chat = { id: row.chat_id, type: "private" as const };
+        const from = { id: Number(row.user_id), is_bot: false, first_name: "Отложенная проверка" };
+        const ctx = {
+          chat, from, message: { message_id: noticeId, date: Math.floor(Date.now() / 1000), chat, from, text },
+          telegram: bot.telegram, botInfo: { id: running.id, username: running.username },
+          sendChatAction: (action: "typing") => bot.telegram.sendChatAction(row.chat_id, action),
+          reply: (answer: string, extra?: object) => bot.telegram.sendMessage(row.chat_id, answer, extra as never),
+        } as unknown as import("telegraf").Context;
+        await processVoice(ctx, { text });
+      },
     });
   }
   return running;

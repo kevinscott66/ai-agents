@@ -17,9 +17,9 @@
 import { resolve as pathResolve, dirname } from "node:path";
 import { realpathSync, existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { bridgeSecretTransportError } from "./bridge-url.ts";
-import { cancelRun, killAll, killChild, registerChild, type KillableChild } from "./kill.ts";
+import { cancelRun, killAll, registerChild, stopChild, type KillableChild } from "./kill.ts";
 import { feedPrompt } from "./run-io.ts";
-import { parseBridgeMsg, toPermissionMode, type RunMsg } from "./protocol.ts";
+import { parseBridgeMsg, toPermissionMode, type RepairMsg, type RunMsg } from "./protocol.ts";
 import { sanitizeChildEnv, resolveClaudeBin } from "./child-env.ts";
 import { isolatedClaudeProbeEnv } from "./readiness-config.ts";
 import { tmpdir } from "node:os";
@@ -30,7 +30,8 @@ import { codexCommand } from "./codex-command.ts";
 import { runAssistantOperation, assistantErrorCode } from "./assistant.ts";
 import { runMacControl, controlErrorCode } from "./macctl.ts";
 import { runTaxiRequest, taxiErrorCode, closeTaxiRunner } from "./taxi.ts";
-import { runShopRequest, shopErrorCode, closeShopRunner } from "./shop.ts";
+import { runShopRequest, shopErrorCode, closeShopRunner, holdShopRunner } from "./shop.ts";
+import { runSelectorRepair, type CmdResult } from "./selector-repair.ts";
 import { runDeliveryRequest, deliveryErrorCode, closeDeliveryRunner } from "./delivery.ts";
 import { createDaemonHandshake } from "./auth-handshake.ts";
 import { createAuthGate } from "./auth-gate.ts";
@@ -285,7 +286,7 @@ async function handleRun(ws: WebSocket, msg: RunMsg): Promise<void> {
   if (!registerChild(activeChildren, id, entry)) {
     // id уже занят живым прогоном. Убираем свежий процесс — он никому не
     // виден — и отвечаем мосту отказом вместо молчаливой потери первого.
-    void killChild(entry);
+    void stopChild(entry);
     sendResult(ws, id, false, undefined, "duplicate_run_id", metadata);
     return;
   }
@@ -294,7 +295,7 @@ async function handleRun(ws: WebSocket, msg: RunMsg): Promise<void> {
   const fed = await feedPrompt(child as { stdin: unknown }, prompt);
   if (!fed.ok) {
     activeChildren.delete(id);
-    void killChild(entry);
+    void stopChild(entry);
     sendResult(ws, id, false, undefined, fed.error, metadata);
     return;
   }
@@ -344,6 +345,85 @@ async function handleRun(ws: WebSocket, msg: RunMsg): Promise<void> {
       e instanceof Error ? e.message : String(e),
       metadata,
     );
+  }
+}
+
+/**
+ * Починка селекторов (этап 4). SELECTOR_REPAIR_REPO — клон репозитория с
+ * доступом к GitHub; вне MAC_PROJECT_ROOTS он не принимается. Команды демона
+ * (git, gh, bun) и сам починщик получают отфильтрованное окружение: секрет моста
+ * им не нужен. Починщику дополнительно — переменные профиля покупок, иначе
+ * selfcheck не найдёт браузер.
+ */
+const REPAIR_ENV_EXTRA = ["SSH_AUTH_SOCK"];
+const REPAIR_SHOP_ENV = ["SHOP_PROFILE_DIR", "SHOP_BROWSER_CHANNEL", "SHOP_HEADLESS"];
+
+function repairEnv(cwd: string, extra: readonly string[]): Record<string, string> {
+  const env = sanitizeChildEnv(process.env, cwd);
+  for (const key of extra) {
+    const v = process.env[key];
+    if (v) env[key] = v;
+  }
+  return env;
+}
+
+async function collect(stream: ReadableStream<Uint8Array> | null, onText?: (t: string) => void): Promise<string> {
+  if (!stream) return "";
+  let out = "";
+  const dec = new TextDecoder();
+  const reader = stream.getReader();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const t = dec.decode(value, { stream: true });
+    out = (out + t).slice(-20_000);
+    onText?.(t);
+  }
+  return out;
+}
+
+async function handleRepair(ws: WebSocket, msg: RepairMsg): Promise<void> {
+  const raw = process.env.SELECTOR_REPAIR_REPO?.trim();
+  const repo = raw && existsSync(raw) ? resolveAllowedProject(raw) : null;
+  const controller = new AbortController();
+  runControllers.set(msg.id, controller);
+  const spawnTracked = async (argv: string[], cwd: string, env: Record<string, string>, timeoutMs: number, stdin: string | null, onOut?: (t: string) => void): Promise<CmdResult> => {
+    if (controller.signal.aborted) return { code: 130, stdout: "", stderr: "cancelled" };
+    const child = Bun.spawn({ cmd: argv, cwd, env, detached: true, stdin: stdin === null ? "ignore" : "pipe", stdout: "pipe", stderr: "pipe" });
+    const entry: KillableChild = { kill: (signal) => child.kill(signal), exited: child.exited, processGroupId: child.pid };
+    activeChildren.set(msg.id, entry);
+    const timer = setTimeout(() => void stopChild(entry), timeoutMs);
+    try {
+      if (stdin !== null) {
+        const fed = await feedPrompt(child as { stdin: unknown }, stdin);
+        if (!fed.ok) {
+          void stopChild(entry);
+          return { code: 1, stdout: "", stderr: fed.error };
+        }
+      }
+      const [stdout, stderr] = await Promise.all([collect(child.stdout as any, onOut), collect(child.stderr as any)]);
+      return { code: await child.exited, stdout, stderr };
+    } finally {
+      clearTimeout(timer);
+      if (activeChildren.get(msg.id) === entry) activeChildren.delete(msg.id);
+    }
+  };
+  try {
+    const out = await runSelectorRepair(msg.request, {
+      repo,
+      claudeBin: CLAUDE_BIN,
+      hold: holdShopRunner,
+      runCmd: (argv, cwd, timeoutMs) => spawnTracked(argv, cwd, repairEnv(cwd, [...REPAIR_ENV_EXTRA, ...REPAIR_SHOP_ENV]), timeoutMs, null),
+      runClaude: (argv, cwd, prompt, timeoutMs) =>
+        // Вывод починщика мосту не уходит: в ответе только RepairOutcome.
+        spawnTracked(argv, cwd, repairEnv(cwd, REPAIR_SHOP_ENV), timeoutMs, prompt),
+      now: () => new Date(),
+      log: (line) => console.log(line),
+    });
+    sendChunk(ws, msg.id, "stdout", JSON.stringify(out));
+    sendResult(ws, msg.id, true, 0);
+  } finally {
+    runControllers.delete(msg.id);
   }
 }
 
@@ -550,6 +630,13 @@ function connect(): void {
         }).finally(() => { assistantControllers.delete(msg.id); });
         return;
       }
+      case "repair":
+        // Свой замок — замок покупок (holdShopRunner); отмена — cancel по id.
+        handleRepair(ws, msg).catch((e) => {
+          console.error("[daemon] handleRepair error:", e);
+          sendResult(ws, msg.id, false, undefined, `handler_failed: ${e instanceof Error ? e.message : String(e)}`);
+        });
+        return;
       case "run":
         handleRun(ws, msg).catch((e) => {
           console.error("[daemon] handleRun error:", e);

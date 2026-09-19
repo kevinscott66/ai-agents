@@ -16,8 +16,6 @@
  * Ожидающие подписи заявки живут в памяти процесса: рестарт их теряет, а
  * строка `approved` занимает слот дневного лимита до конца дня — как у такси.
  */
-import { randomBytes } from "node:crypto";
-import { parseUserIdList } from "../allowlist.ts";
 import type { PayloadByType } from "../action-payload.ts";
 import {
   DELIVERY_FAIL_LABEL,
@@ -34,10 +32,24 @@ import {
   type DeliveryTariff,
 } from "../delivery.ts";
 import { sendDeliveryToMac } from "../mac-bridge.ts";
+import { watchPlacedOrder } from "../order-watch.ts";
 import { signedActions } from "../native-signing.ts";
-import { limitsFromEnv, maxRubFor, SignedActionRefusal, type SignedActions } from "../signed-actions.ts";
+import { limitsFromEnv, maxRubFor, type SignedActions } from "../signed-actions.ts";
 import { log } from "../log.ts";
 import type { HandlerResult } from "./helpers.ts";
+import {
+  askYandexMac,
+  errorText,
+  gateIssueError,
+  inlineDelegated,
+  newYandexSession,
+  refusalCode,
+  serialQueue,
+  yandexOwnerRefusal,
+  yandexTeller,
+  type MacReply,
+  type YandexNotifier,
+} from "./yandex-common.ts";
 
 export const DELIVERY_SERVICE = "yandex_delivery";
 export const DELIVERY_ACTION = "order_delivery";
@@ -45,13 +57,10 @@ export const DELIVERY_ACTION = "order_delivery";
 export type DeliveryHandlerContext = { agentKey: string; chatId: number };
 export type DeliveryInlineContext = { agentKey: string; chatId: number; triggerUserId?: string; delegationChain?: string[] };
 
-export type DeliveryNotifier = {
-  text: (userId: string, text: string) => Promise<void>;
-  photo: (userId: string, jpegBase64: string, caption: string) => Promise<void>;
-};
+export type DeliveryNotifier = YandexNotifier;
 
 export type DeliveryDeps = {
-  send: (request: DeliveryRequest, userId: string, chatId: number) => Promise<{ ok: boolean; stdout: string; error?: string }>;
+  send: (request: DeliveryRequest, userId: string, chatId: number) => Promise<MacReply>;
   gate: () => SignedActions;
   notify?: DeliveryNotifier;
   now: () => number;
@@ -62,7 +71,7 @@ const defaults: DeliveryDeps = {
   send: sendDeliveryToMac,
   gate: signedActions,
   now: Date.now,
-  session: () => randomBytes(24).toString("base64url"),
+  session: newYandexSession,
 };
 let deps: DeliveryDeps = { ...defaults };
 
@@ -80,6 +89,7 @@ interface PendingOrder {
   payload: string;
   userId: string;
   chatId: number;
+  agentKey: string;
   from: string;
   to: string;
   tariff: DeliveryTariff;
@@ -92,39 +102,29 @@ const quotes = new Map<string, Quote>();
 /** nonce → заявка, ждущая подписи. */
 const pendingOrders = new Map<string, PendingOrder>();
 /** Исполнитель один: второй заказ ждёт, пока первый не закончится. */
-let queue: Promise<void> = Promise.resolve();
+const executor = serialQueue();
 
 export function resetDeliveryState() {
   quotes.clear();
   pendingOrders.clear();
-  queue = Promise.resolve();
+  executor.reset();
 }
 
+const OWNER_POLICY = { enabled: deliveryEnabled, disabledText: "доставка выключена (DELIVERY_ENABLED)", scope: "delivery", ownerNoun: "доставка" };
+
 function ownerRefusal(agentKey: string, chatId: number, userId: string | undefined, delegated: boolean): string | null {
-  if (!deliveryEnabled()) return "доставка выключена (DELIVERY_ENABLED)";
-  if (agentKey !== "orchestrator") return `forbidden: delivery is restricted to orchestrator (caller: ${agentKey})`;
-  const owners = parseUserIdList(process.env.MINIAPP_ADMIN_USER_IDS);
-  if (delegated || !userId || !owners.includes(Number(userId)) || String(chatId) !== userId) {
-    return "forbidden: доставка — только по просьбе владельца в его личном чате";
-  }
-  return null;
+  return yandexOwnerRefusal(OWNER_POLICY, agentKey, chatId, userId, delegated);
 }
 
 export type DeliveryToolResult = { ok: boolean } & Record<string, unknown>;
 
-const inlineDelegated = (ctx: DeliveryInlineContext) => (ctx.delegationChain ?? []).some((k) => k !== ctx.agentKey);
-
 /** Запрос к Mac → проверенный ответ. Ошибка моста — исключение с её кодом. */
-async function askMac(request: DeliveryRequest, userId: string, chatId: number): Promise<DeliveryOutcome> {
-  const res = await deps.send(request, userId, chatId);
-  if (!res.ok) throw new Error(res.error ?? "delivery_failed");
-  return parseDeliveryOutcome(res.stdout, request.op);
+function askMac(request: DeliveryRequest, userId: string, chatId: number): Promise<DeliveryOutcome> {
+  return askYandexMac<DeliveryRequest, DeliveryOutcome>(deps.send, parseDeliveryOutcome, "delivery_failed", request, userId, chatId);
 }
 
 const failText = (o: Extract<DeliveryOutcome, { ok: false }>) =>
   `${DELIVERY_FAIL_LABEL[o.code]}${o.price_rub ? ` (на странице ${o.price_rub} ₽)` : ""}`;
-
-const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /** DELIVERY_QUOTE: цены по тарифам доставки. Ничего не заказывает. */
 export async function quoteDelivery(input: Record<string, unknown>, ctx: DeliveryInlineContext): Promise<DeliveryToolResult> {
@@ -167,11 +167,9 @@ export async function deliveryStatus(ctx: DeliveryInlineContext): Promise<Delive
   }
 }
 
-const GATE_TEXT: Partial<Record<string, string>> = {
-  no_active_key: "на телефоне нет активного ключа подписи — владелец регистрирует его в приложении",
+/** Отказы гейта — общие тексты (yandex-common.ts); лимит на заказ у доставки свой. */
+const GATE_TEXT_OVERRIDES: Partial<Record<string, string>> = {
   limit_amount: "сумма выше лимита на один заказ (PAID_ACTION_MAX_RUB_YANDEX_DELIVERY)",
-  limit_daily: "дневной лимит платных действий исчерпан",
-  payload_invalid: "заявка не проходит проверку гейта",
 };
 
 /**
@@ -201,7 +199,7 @@ export async function handleOrderDelivery(payload: PayloadByType["ORDER_DELIVERY
       now,
     );
     for (const [key, order] of pendingOrders) if (now - order.at > DELIVERY_QUOTE_TTL_MS) pendingOrders.delete(key);
-    pendingOrders.set(nonce, { payload: signed, userId, chatId: ctx.chatId, from, to, tariff, comment, at: now });
+    pendingOrders.set(nonce, { payload: signed, userId, chatId: ctx.chatId, agentKey: ctx.agentKey, from, to, tariff, comment, at: now });
     return {
       ok: true,
       result: {
@@ -212,8 +210,7 @@ export async function handleOrderDelivery(payload: PayloadByType["ORDER_DELIVERY
       },
     };
   } catch (e) {
-    if (e instanceof SignedActionRefusal) return { ok: false, error: GATE_TEXT[e.code] ?? e.code };
-    return { ok: false, error: errorText(e) };
+    return { ok: false, error: gateIssueError(e, GATE_TEXT_OVERRIDES) };
   }
 }
 
@@ -232,27 +229,13 @@ export async function handleDeliveryCancel(payload: PayloadByType["DELIVERY_CANC
   }
 }
 
-async function tell(userId: string, text: string, screenshot?: string) {
-  const notify = deps.notify;
-  if (!notify) {
-    log.warn("[delivery] notifier is not configured", { text });
-    return;
-  }
-  try {
-    if (screenshot) await notify.photo(userId, screenshot, text);
-    else await notify.text(userId, text);
-  } catch (error) {
-    log.error("[delivery] notify failed", { error: String(error) });
-  }
-}
+const tell = yandexTeller("delivery", () => deps.notify);
 
 const PRE_ORDER: readonly string[] = DELIVERY_PRE_ORDER_CODES;
 
 /** Исполнитель подписанного заказа. Зовётся из native-signing после approve. */
 export function executeSignedDelivery(nonce: string): Promise<void> {
-  const run = queue.then(() => runSignedDelivery(nonce));
-  queue = run.catch(() => {});
-  return run;
+  return executor.run(() => runSignedDelivery(nonce));
 }
 
 async function runSignedDelivery(nonce: string): Promise<void> {
@@ -271,7 +254,7 @@ async function runSignedDelivery(nonce: string): Promise<void> {
     }
     maxFinal = claimed.maxFinalRub;
   } catch (e) {
-    await tell(userId, `Доставка не заказана: подпись не принята (${e instanceof SignedActionRefusal ? e.code : errorText(e)}).`);
+    await tell(userId, `Доставка не заказана: подпись не принята (${refusalCode(e)}).`);
     return;
   }
 
@@ -296,7 +279,7 @@ async function runSignedDelivery(nonce: string): Promise<void> {
     gate.checkFinal(nonce, prepared.price_rub, deps.now());
   } catch (e) {
     await deps.send({ op: "abandon", session }, userId, chatId).catch(() => {});
-    const code = e instanceof SignedActionRefusal ? e.code : errorText(e);
+    const code = refusalCode(e);
     await tell(userId, code === "price_deviation"
       ? `Доставка не заказана: цена выросла до ${prepared.price_rub} ₽, подписано не больше ${maxFinal} ₽. Пересчитай и подпиши заново.`
       : `Доставка не заказана: сверка цены не прошла (${code}).`);
@@ -329,6 +312,9 @@ async function runSignedDelivery(nonce: string): Promise<void> {
   try { gate.complete(nonce, true, deps.now()); } catch (e) {
     log.error("[delivery] complete failed", { error: errorText(e) });
   }
+  // Дальше за доставкой следит lib/order-watch.ts — владельцу не придётся
+  // спрашивать DELIVERY_STATUS, чтобы узнать, когда курьер будет у двери.
+  watchPlacedOrder({ kind: "delivery", chatId: order.chatId, userId, agentKey: order.agentKey, state: confirmed.state });
   await tell(userId, `Курьер ${DELIVERY_TARIFFS[order.tariff]} заказан: ${order.from} → ${order.to}, ${prepared.price_rub} ₽. Сейчас: ${DELIVERY_STATE_LABEL[confirmed.state]}.`);
 }
 

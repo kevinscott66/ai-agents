@@ -11,12 +11,17 @@
  * отказ `captcha` и скриншот владельцу.
  */
 
+/** Порядок — как на странице Яндекс Go. */
 export const TAXI_TARIFFS = {
   econom: "Эконом",
   comfort: "Комфорт",
   comfortplus: "Комфорт+",
   business: "Бизнес",
+  premier: "Премьер",
+  elite: "Элит",
+  child: "Детский",
   minivan: "Минивэн",
+  cruise: "Круиз",
 } as const;
 export type TaxiTariff = keyof typeof TAXI_TARIFFS;
 export const TAXI_TARIFF_KEYS = Object.keys(TAXI_TARIFFS) as TaxiTariff[];
@@ -43,6 +48,7 @@ export const TAXI_PRE_ORDER_CODES = [
   "unexpected_page",
   "address_not_found",
   "tariff_unavailable",
+  "tariff_needs_choice",
   "price_unreadable",
   "price_changed",
   "session_unknown",
@@ -113,14 +119,33 @@ export function normalizeTaxiAddress(v: unknown): string | null {
   return taxiAddressError(v) ? null : (v as string).trim().replace(/\s+/g, " ");
 }
 
-/** Ввод модели → тариф. Понимает и ключ, и русское название. */
+const tariffWord = (v: string) =>
+  v.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/ё/g, "е")
+    .replace(/(?<![\p{L}\d])(?:тариф|tariff|класс)(?![\p{L}\d])/gu, "").replace(/[\s._-]+/g, "");
+
+/** Как тариф называют голосом: транскрипция, латиница, разговорные формы. */
+const TARIFF_ALIASES: Record<string, TaxiTariff> = Object.fromEntries(
+  ([
+    ["econom", ["эконом", "economy", "эконом класс", "эконому"]],
+    ["comfort", ["комфорт", "комфортный"]],
+    ["comfortplus", ["комфорт+", "комфорт плюс", "comfort+", "comfort plus"]],
+    ["business", ["бизнес", "business", "бизнесс"]],
+    ["premier", ["премьер", "premier", "премьера"]],
+    ["elite", ["элит", "элита", "elite", "élite"]],
+    ["child", ["детский", "детское", "с детским креслом", "детское кресло", "kids"]],
+    ["minivan", ["минивэн", "минивен", "minivan"]],
+    ["cruise", ["круиз", "cruise"]],
+  ] as Array<[TaxiTariff, string[]]>).flatMap(([key, words]) => [key, TAXI_TARIFFS[key], ...words].map((w) => [tariffWord(w), key])),
+);
+
+/**
+ * Ввод модели → тариф. Понимает ключ, русское название и то, как тариф
+ * произносят голосом («комфорт плюс», «элит», «с детским креслом»).
+ */
 export function normalizeTaxiTariff(v: unknown): TaxiTariff | null {
-  if (typeof v !== "string") return null;
-  const s = v.trim().toLowerCase().replace(/\s+/g, "");
-  if (isTariff(s)) return s;
-  const byLabel = TAXI_TARIFF_KEYS.find((k) => TAXI_TARIFFS[k].toLowerCase().replace(/\s+/g, "") === s);
-  if (byLabel) return byLabel;
-  return s === "comfort+" || s === "комфортплюс" ? "comfortplus" : null;
+  if (typeof v !== "string" || v.length > 60) return null;
+  const key = tariffWord(v.trim());
+  return Object.hasOwn(TARIFF_ALIASES, key) ? TARIFF_ALIASES[key] : null;
 }
 
 /** Строгий разбор кадра: лишние поля и ненормализованные адреса — отказ. */
@@ -244,6 +269,7 @@ export const TAXI_FAIL_LABEL: Record<TaxiFailCode, string> = {
   unexpected_page: "открылась неожиданная страница — остановился",
   address_not_found: "адрес не найден",
   tariff_unavailable: "тариф сейчас недоступен",
+  tariff_needs_choice: "у тарифа обязательный выбор на странице (например, детское кресло) — закажи его сам",
   price_unreadable: "не удалось прочитать цену",
   price_changed: "цена изменилась сверх подписанной",
   session_unknown: "подготовленный заказ не найден или устарел",

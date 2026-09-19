@@ -22,7 +22,7 @@ import { encryptSession, writeEncryptedSession } from "./tools/userbot-login.ts"
 
 const { apiId: API_ID, apiHash: API_HASH } = requireTelegramApiCredentials();
 // Аудит 2026-08-28: здесь стоял номер владельца литералом, и `??` вдобавок
-// ломал объявленный контракт (.env.example:145 — «пусто = юзербот не
+// ломал объявленный контракт (.env.example:149 — «пусто = юзербот не
 // поднимается вообще»): пустая строка из EnvironmentFile проходила насквозь.
 const PHONE_RAW = process.env.TELEGRAM_USERBOT_PHONE?.trim();
 if (!PHONE_RAW) throw new Error("TELEGRAM_USERBOT_PHONE не задан — логиниться некуда");

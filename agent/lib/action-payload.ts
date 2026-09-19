@@ -11,7 +11,7 @@ import type { MacControl } from "./mac-control.ts";
 import type { UserbotDm } from "./userbot-dm.ts";
 import type { DnsChange } from "./cloudflare-dns.ts";
 import type { TaxiTariff } from "./taxi.ts";
-import type { ShopService } from "./shop.ts";
+import type { ShopOptionPick, ShopService } from "./shop.ts";
 import type { DeliveryTariff } from "./delivery.ts";
 
 export interface SendMessagePayload {
@@ -289,8 +289,11 @@ export interface OrderFoodPayload {
   service: ShopService;
   /** Ресторан Еды — название ровно как в SHOP_QUOTE; у Лавки поля нет. */
   place?: string;
-  lines: Array<{ id: string; name: string; qty: number; price_rub: number }>;
+  /** price_rub — за штуку с доплатами за опции; options — только у блюд Еды, как в SHOP_QUOTE. */
+  lines: Array<{ id: string; name: string; qty: number; price_rub: number; options?: ShopOptionPick[] }>;
   delivery_rub: number;
+  /** Итог к оплате из SHOP_CHECKOUT: доставка и сборы уже внутри. Он и подписывается. */
+  total_rub: number;
   _userId?: string;
   _delegated?: boolean;
 }
@@ -401,6 +404,12 @@ export interface CancelReminderPayload {
   id: string;
 }
 
+/** Снять слежение за заказом. Пиннится к чату вызова, как и напоминание. */
+export interface CancelOrderWatchPayload {
+  chatId?: number;
+  id: string;
+}
+
 /**
  * T-702: aieng proposes a new system-prompt for any agent. Mandatory
  * approval; on approval the agent_prompts row's applied_at is set. Actual
@@ -504,6 +513,7 @@ export type PayloadByType = {
   SCHEDULE_POST: SchedulePostPayload;
   CREATE_REMINDER: CreateReminderPayload;
   CANCEL_REMINDER: CancelReminderPayload;
+  CANCEL_ORDER_WATCH: CancelOrderWatchPayload;
   GRANT_PERMISSION: GrantPermissionPayload;
   UPDATE_AGENT_PROMPT: UpdateAgentPromptPayload;
   CHANGE_AGENT_STATUS: ChangeAgentStatusPayload;

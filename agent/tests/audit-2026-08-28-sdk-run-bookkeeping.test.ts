@@ -103,12 +103,14 @@ describe("набор безопасных тулзов", () => {
         "SEARCH_WIKI",
         "TAXI_QUOTE",
         "TAXI_STATUS",
+        "SHOP_PLACES",
         "SHOP_QUOTE",
         "SHOP_STATUS",
         "DELIVERY_QUOTE",
         "DELIVERY_STATUS",
         "LIST_SCHEDULED_POSTS",
         "LIST_REMINDERS",
+        "LIST_ORDER_WATCH",
       ].sort(),
     );
   });

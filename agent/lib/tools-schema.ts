@@ -3,9 +3,9 @@ import { nativeTurnContext } from "./native-context.ts";
  * C5/R-A: Anthropic tool_use схема + диспатчер.
  *
  * Аудит 2026-09-11: здесь было написано «все 12 инструментов идут через единый
- * `gateOrDispatch`». Неверно дважды. Инструментов в `TOOL_NAMES` тридцать шесть
+ * `gateOrDispatch`». Неверно дважды. Инструментов в `TOOL_NAMES` тридцать семь
  * (число сверяется тестом audit-2026-09-11-tool-counts: в круге 29 оно уже
- * успело протухнуть на два, пока список рос); двадцать — это
+ * успело протухнуть на два, пока список рос); двадцать семь — это
  * `INLINE_TOOL_NAMES` из `constants.ts`, то есть ровно тот набор, который через
  * `gateOrDispatch` как раз НЕ идёт: ни CALLER_RESTRICTED, ни строка permissions
  * к ним не применяются (см. разбор инлайновой ветки в `executeTool` ниже).
@@ -27,7 +27,7 @@ import { getErrorMessage } from "./errors.ts";
 import { INLINE_TOOL_NAMES } from "./constants.ts";
 import { listCloudflareDns } from "./dispatch/cloudflare.ts";
 import { quoteTaxi, taxiStatus } from "./dispatch/taxi.ts";
-import { quoteShop, shopStatus } from "./dispatch/shop.ts";
+import { checkoutShop, listShopPlaces, quoteShop, setShopAddress, shopStatus } from "./dispatch/shop.ts";
 import { deliveryStatus, quoteDelivery } from "./dispatch/delivery.ts";
 import Anthropic from "@anthropic-ai/sdk";
 import type { Telegram } from "telegraf";
@@ -68,6 +68,9 @@ import { parseChannelId, fetchChannelStats, tgstatConfigured } from "./tgstat.ts
 import { fetchGithubStatus, githubConfigured } from "./github.ts";
 import { log } from "./log.ts";
 import { formatMsk, isoMsk, listReminders } from "./reminders.ts";
+import { cancelFollowupTool, scheduleFollowupTool } from "./followups.ts";
+import { shopRepairTool } from "./shop-repair.ts";
+import { ORDER_WATCH_KINDS, listOrderWatches } from "./order-watch.ts";
 
 const ROLE_KEYS = CHARACTERS.map((c) => c.key);
 
@@ -553,7 +556,7 @@ export const TOOLS: Anthropic.Tool[] = [
   {
     name: "GET_LOGS",
     description:
-      "Read-only: последние действия агентов из audit-лога (agent/action/status/error). Для диагностики «что реально происходило / какие были ошибки». Фильтры: agentKey, status (напр. 'error'), limit (1..50, дефолт 20). Без payload/переписки.",
+      "Read-only: последние действия агентов из audit-лога (agent/action/status/error), включая каждый вызов инлайновых инструментов (TAXI_*, SHOP_*, DELIVERY_* и др.) с кодом отказа. Для диагностики «что реально происходило / какие были ошибки»: при сбое сначала посмотри сюда сам, а не проси владельца. Фильтры: agentKey, status (напр. 'error'), limit (1..50, дефолт 20). Без payload/переписки.",
     input_schema: {
       type: "object",
       properties: {
@@ -723,13 +726,17 @@ export const TOOLS: Anthropic.Tool[] = [
   {
     name: "ORDER_TAXI",
     description:
-      "Заказать такси по свежему расчёту TAXI_QUOTE: те же from и to, выбранный владельцем tariff и price_rub этого тарифа из расчёта. Тариф и цену называет владелец — сам не выбирай. Заказ ждёт подтверждения в чате, затем подписи Face ID на телефоне; результат придёт отдельным сообщением. Пока он не пришёл, не говори «заказано». Лимиты: сумма и число заказов в день ограничены сервером, цена на странице не может вырасти больше чем на 15%.",
+      "Заказать такси по свежему расчёту TAXI_QUOTE: те же from и to, выбранный владельцем tariff и price_rub этого тарифа из расчёта. Тариф называет владелец, в том числе голосом («комфорт плюс», «бизнес», «элит», «детский», «минивэн»): переведи названное в ключ tariff и возьми его цену из расчёта. Сам тариф не выбирай; если названного тарифа нет в расчёте или название неоднозначно — скажи владельцу, какие тарифы есть, и спроси. Заказ ждёт подтверждения в чате, затем подписи Face ID на телефоне; результат придёт отдельным сообщением. Пока он не пришёл, не говори «заказано». Лимиты: сумма и число заказов в день ограничены сервером, цена на странице не может вырасти больше чем на 15%.",
     input_schema: {
       type: "object",
       properties: {
         from: { type: "string", description: "Откуда — ровно как в TAXI_QUOTE." },
         to: { type: "string", description: "Куда — ровно как в TAXI_QUOTE." },
-        tariff: { type: "string", enum: ["econom", "comfort", "comfortplus", "business", "minivan"] },
+        tariff: {
+          type: "string",
+          enum: ["econom", "comfort", "comfortplus", "business", "premier", "elite", "child", "minivan", "cruise"],
+          description: "Эконом, Комфорт, Комфорт+, Бизнес (Business), Премьер (Premier), Элит (Élite), Детский, Минивэн, Круиз (Cruise).",
+        },
         price_rub: { type: "number", description: "Цена выбранного тарифа из TAXI_QUOTE, целые рубли." },
       },
       required: ["from", "to", "tariff", "price_rub"],
@@ -750,12 +757,17 @@ export const TOOLS: Anthropic.Tool[] = [
   {
     name: "SHOP_QUOTE",
     description:
-      "Поиск в Яндекс Лавке (продукты), Яндекс Еде (блюда одного ресторана) или Яндекс Маркете (покупки) через браузер на Mac владельца: адрес доставки из профиля, стоимость доставки (у Маркета — null, она видна только на оформлении) и до трёх подходящих товаров с ценой на каждый запрос. Для Еды нужен place — ресторан; в ответе будет найденный ресторан, покажи его владельцу. Ничего не кладёт в корзину и не заказывает. Только когда владелец сам попросил в своём личном чате. Расчёт действует 15 минут.",
+      "Поиск в Яндекс Лавке (продукты), Яндекс Еде (блюда одного ресторана) или Яндекс Маркете (покупки) через браузер на Mac владельца: адрес доставки из профиля, стоимость доставки (у Маркета — null, она видна только на оформлении) и до трёх подходящих товаров с ценой на каждый запрос. Для Еды нужен place — ресторан; в ответе будет найденный ресторан, покажи его владельцу. У блюд Еды с выбором (размер, тесто, соус, состав) в кандидате есть options: группы {name, min, max, choices[{name, price_rub — доплата}]}, price_rub кандидата — без доплат. Ничего не кладёт в корзину и не заказывает. Только когда владелец сам попросил в своём личном чате. Расчёт действует 15 минут.",
     input_schema: {
       type: "object",
       properties: {
         service: { type: "string", enum: ["lavka", "eda", "market"], description: "lavka — продукты (по умолчанию), eda — ресторан, market — Маркет." },
         place: { type: "string", description: "Только для eda: название ресторана, как сказал владелец («Жарицца Пицца»)." },
+        max_eta_min: {
+          type: "integer",
+          description:
+            "Только для eda и только если владелец назвал срок: за сколько минут ресторан должен довезти («за 45 минут», «35–45 минут» → 45). Ресторан, который сейчас обещает дольше, не подойдёт — будет отказ place_too_slow.",
+        },
         queries: {
           type: "array",
           items: { type: "string" },
@@ -766,9 +778,56 @@ export const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "SHOP_PLACES",
+    description:
+      "Рестораны Яндекс Еды по запросу («шаверма», «пицца», «суши» или название) через браузер на Mac владельца: название и сколько ресторан сейчас обещает везти (eta, например «20–25 мин»). Нужен, когда владелец не назвал ресторан или поставил срок доставки. С max_eta_min — только успевающие, быстрые первыми. Ничего не кладёт в корзину и не заказывает. Только когда владелец сам попросил в своём личном чате.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Что искать, как сказал владелец: блюдо, кухня или ресторан." },
+        max_eta_min: {
+          type: "integer",
+          description: "Только если владелец назвал срок: за сколько минут надо довезти («за 45 минут», «35–45 минут» → 45), от 10 до 180.",
+        },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "SHOP_CHECKOUT",
+    description:
+      "Узнать настоящий итог заказа в Яндекс Лавке или Еде перед ORDER_FOOD: Mac кладёт выбранные позиции в пустую корзину, читает сумму к оплате со страницы оформления — с доставкой, сервисным сбором и доплатой за маленький заказ, которых нет в SHOP_QUOTE, — и сразу очищает корзину. Ничего не заказывает и не платит. Позиции — ровно те, что пойдут в ORDER_FOOD (id, name, qty, price_rub, options из свежего SHOP_QUOTE). Только когда владелец сам попросил в своём личном чате.",
+    input_schema: {
+      type: "object",
+      properties: {
+        service: { type: "string", enum: ["lavka", "eda"] },
+        place: { type: "string", description: "Только для eda: название ресторана ровно как в SHOP_QUOTE." },
+        lines: {
+          type: "array",
+          description: "Позиции как в ORDER_FOOD: {id, name, qty, price_rub, options?}.",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              name: { type: "string" },
+              qty: { type: "number" },
+              price_rub: { type: "number" },
+              options: {
+                type: "array",
+                items: { type: "object", properties: { group: { type: "string" }, name: { type: "string" } }, required: ["group", "name"] },
+              },
+            },
+            required: ["id", "name", "qty", "price_rub"],
+          },
+        },
+      },
+      required: ["service", "lines"],
+    },
+  },
+  {
     name: "ORDER_FOOD",
     description:
-      "Заказать продукты в Яндекс Лавке или блюда одного ресторана в Яндекс Еде по свежему расчёту SHOP_QUOTE: id, name и price_rub каждого товара — ровно из расчёта, для Еды place — ресторан ровно из расчёта, qty — сколько просил владелец, delivery_rub — доставка из расчёта. Если по запросу несколько вариантов и владелец не назвал конкретный — спроси. Заказ ждёт подтверждения в чате, затем подписи Face ID на телефоне; результат придёт отдельным сообщением. Пока он не пришёл, не говори «заказано». Лимиты: сумма и число заказов в день ограничены сервером, итог на странице не может вырасти больше чем на 15%.",
+      "Заказать продукты в Яндекс Лавке или блюда одного ресторана в Яндекс Еде по свежему расчёту SHOP_QUOTE: id и name каждого товара — ровно из расчёта, price_rub — цена из расчёта плюс доплаты выбранных опций, для Еды place — ресторан ровно из расчёта; у блюда с options — выбор владельца в options [{group, name}] (в каждой группе от min до max; обязательный выбор не угадывай — спроси), qty — сколько просил владелец, delivery_rub — доставка из расчёта, total_rub — итог из SHOP_CHECKOUT ровно с этими позициями (его и подписывают). Если по запросу несколько вариантов и владелец не назвал конкретный — спроси. Заказ ждёт подтверждения в чате, затем подписи Face ID на телефоне; после подписи Mac сам собирает корзину, заполняет контакты и жмёт «Оплатить» — владельцу ничего нажимать не надо; результат придёт отдельным сообщением. Пока он не пришёл, не говори «заказано». Лимиты: сумма и число заказов в день ограничены сервером, итог на странице не может вырасти больше чем на 15%.",
     input_schema: {
       type: "object",
       properties: {
@@ -782,21 +841,47 @@ export const TOOLS: Anthropic.Tool[] = [
               id: { type: "string", description: "id товара из SHOP_QUOTE." },
               name: { type: "string", description: "Название ровно как в SHOP_QUOTE." },
               qty: { type: "number", description: "Количество, 1..20." },
-              price_rub: { type: "number", description: "Цена за штуку из SHOP_QUOTE, целые рубли." },
+              price_rub: { type: "number", description: "Цена за штуку из SHOP_QUOTE плюс доплаты выбранных опций, целые рубли." },
+              options: {
+                type: "array",
+                description: "Только для блюд Еды с options в SHOP_QUOTE: выбранные варианты, group и name ровно из расчёта. Одно блюдо с разным выбором — разные строки.",
+                items: {
+                  type: "object",
+                  properties: {
+                    group: { type: "string", description: "Название группы опций из расчёта («Выберите тесто»)." },
+                    name: { type: "string", description: "Вариант из этой группы («Тонкое тесто»)." },
+                  },
+                  required: ["group", "name"],
+                },
+              },
             },
             required: ["id", "name", "qty", "price_rub"],
           },
         },
         delivery_rub: { type: "number", description: "Доставка из SHOP_QUOTE, целые рубли." },
+        total_rub: { type: "number", description: "Итог к оплате из SHOP_CHECKOUT с этими же позициями, целые рубли." },
       },
-      required: ["service", "lines", "delivery_rub"],
+      required: ["service", "lines", "delivery_rub", "total_rub"],
     },
   },
   {
     name: "SHOP_STATUS",
     description:
-      "Read-only: состояние последнего заказа в Яндекс Лавке, Яндекс Еде или Яндекс Маркете на Mac владельца — принят, готовится или собирается, курьер в пути, доставлен, отменён. Только для владельца в его личном чате.",
+      "Read-only: состояние последнего заказа в Яндекс Лавке, Яндекс Еде или Яндекс Маркете на Mac владельца — принят, готовится или собирается, курьер в пути, приехал в пункт выдачи (Маркет), доставлен, отменён; eta_min — сколько минут обещает страница, если обещает. Только для владельца в его личном чате.",
     input_schema: { type: "object", properties: { service: { type: "string", enum: ["lavka", "eda", "market"] } } },
+  },
+  {
+    name: "SHOP_SET_ADDRESS",
+    description:
+      "Переключить доставку Яндекс Лавки или Яндекс Еды на другой адрес владельца — только когда он сам об этом попросил. Выбирается ровно один уже сохранённый в сервисе адрес: новых агент не заводит и сам не решает, какой имелся в виду. Если адрес не нашёлся или подходит сразу нескольким — скажи владельцу, адрес останется прежним. После смены прошлый SHOP_QUOTE недействителен: посчитай заново. У Яндекс Маркета адрес — пункт выдачи, его не меняем. Только для владельца в его личном чате.",
+    input_schema: {
+      type: "object",
+      properties: {
+        service: { type: "string", enum: ["lavka", "eda"], description: "Сервис, где меняем адрес доставки." },
+        address: { type: "string", description: "Адрес словами владельца — по нему ищется сохранённый («на Ленина 5», «домой на дачу»)." },
+      },
+      required: ["address"],
+    },
   },
   {
     name: "MARKET_PURCHASE",
@@ -918,6 +1003,41 @@ export const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "SCHEDULE_FOLLOWUP",
+    description:
+      "Поставить себе отложенную проверку: через in_min минут сервер сам разбудит тебя с этой задачей, ты её сделаешь и напишешь владельцу итог в его личный Telegram. Для «доделать позже» — Mac не на связи, заказ ещё не собран, статус не обновился. Вместо того чтобы просить владельца напомнить или повторить. Не для напоминаний владельцу (это CREATE_REMINDER). Только в личном чате владельца; не больше 5 активных и 20 за сутки.",
+    input_schema: {
+      type: "object",
+      properties: {
+        task: { type: "string", description: "Что сделать в срок — коротко и конкретно, чтобы понять без истории (до 300 символов). Без адресов и телефонов." },
+        in_min: { type: "integer", description: "Через сколько минут, 1..1440." },
+      },
+      required: ["task", "in_min"],
+    },
+  },
+  {
+    name: "SHOP_REPAIR",
+    description:
+      "Запустить на Mac починку селекторов покупок, когда SHOP_* второй раз подряд ответил unexpected_page или price_unreadable: вёрстка Яндекса изменилась. Mac правит только файлы вёрстки в отдельной ветке и открывает PR; мерж и выкатка — за владельцем. Отвечает сразу, итог (ссылка на PR или причина) придёт сам через несколько минут — не повторяй вызов. Только в личном чате владельца; один сервис — не чаще раза в 12 часов.",
+    input_schema: {
+      type: "object",
+      properties: {
+        service: { type: "string", enum: ["lavka", "eda", "market"], description: "Сервис, где сломалось." },
+        code: { type: "string", enum: ["unexpected_page", "price_unreadable"], description: "Код отказа SHOP_*." },
+      },
+      required: ["service", "code"],
+    },
+  },
+  {
+    name: "CANCEL_FOLLOWUP",
+    description: "Снять свою отложенную проверку по id (из ответа SCHEDULE_FOLLOWUP) — когда дело уже сделано или владелец передумал.",
+    input_schema: {
+      type: "object",
+      properties: { id: { type: "string", description: "id проверки." } },
+      required: ["id"],
+    },
+  },
+  {
     name: "LIST_REMINDERS",
     description:
       "Read-only: напоминания этого чата — ожидающие и неудавшиеся за неделю: id, at (МСК), status, overdue, text.",
@@ -931,6 +1051,24 @@ export const TOOLS: Anthropic.Tool[] = [
       type: "object",
       properties: {
         id: { type: "string", description: "id напоминания." },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "LIST_ORDER_WATCH",
+    description:
+      "Read-only: активные слежения за заказами этого чата — id, kind (taxi/delivery/lavka/eda/market), state, eta_min, started_at (МСК). Слежение заводится само при оформлении заказа.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "CANCEL_ORDER_WATCH",
+    description:
+      "Перестать следить за заказом этого чата по id (id — из LIST_ORDER_WATCH). Сам заказ это не отменяет — только уведомления о нём.",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "id слежения." },
       },
       required: ["id"],
     },
@@ -1041,6 +1179,7 @@ export const TOOL_NAMES = new Set<string>([
   "SCHEDULE_POST",
   "CREATE_REMINDER",
   "CANCEL_REMINDER",
+  "CANCEL_ORDER_WATCH",
 ]);
 
 /**
@@ -1056,10 +1195,76 @@ export { INLINE_TOOL_NAMES };
 
 const ROLE_KEYS_SET = new Set<string>(ROLE_KEYS);
 
+/** Инлайновые тулзы, которые пишут свою строку аудита сами. */
+const SELF_AUDITED_INLINE_TOOLS = new Set<string>(["QUERY_DB", "CANCEL_SCHEDULED_POST"]);
+
+/** Короткий код отказа попадает в журнал сервиса, свободный текст — нет: в нём бывают адреса. */
+const LOG_CODE = /^[a-z][a-z0-9_]{0,40}$/;
+
+/** Итог инлайновой тулзы из её JSON: ok или код/текст отказа. */
+export function inlineOutcome(text: string): { ok: boolean; error: string | null } {
+  let r: unknown;
+  try {
+    r = JSON.parse(text);
+  } catch {
+    return { ok: true, error: null };
+  }
+  if (!r || typeof r !== "object") return { ok: true, error: null };
+  const o = r as Record<string, unknown>;
+  if (o.ok !== false && o.error === undefined) return { ok: true, error: null };
+  const why = typeof o.code === "string" ? o.code : typeof o.error === "string" ? o.error : "error";
+  return { ok: false, error: why.slice(0, 300) };
+}
+
 /**
  * Диспатчер tool_use. Возвращает короткий JSON-текст для tool_result.
+ *
+ * Каждый вызов инлайновой тулзы — строка в agent_actions (ok/error, код отказа,
+ * длительность) и строка `[inline] tool` в журнале сервиса. Раньше их не было
+ * нигде: инцидент shop_busy 2026-09-18 было не восстановить, а агент не мог
+ * через GET_LOGS посмотреть собственные сбои. Вход не пишется — в нём адреса
+ * и запросы владельца.
  */
 export async function executeTool(
+  name: string,
+  input: unknown,
+  ctx: ExecCtx,
+): Promise<string> {
+  if (!INLINE_TOOL_NAMES.has(name)) return dispatchTool(name, input, ctx);
+  const started = Date.now();
+  let text: string;
+  try {
+    text = await dispatchTool(name, input, ctx);
+  } catch (e) {
+    auditInline(name, ctx, { ok: false, error: getErrorMessage(e).slice(0, 300) }, Date.now() - started);
+    throw e;
+  }
+  const outcome = inlineOutcome(text);
+  // Отказ лимитера уже записан в своей ветке.
+  if (!outcome.error?.startsWith("rate_limited")) auditInline(name, ctx, outcome, Date.now() - started);
+  return text;
+}
+
+function auditInline(name: string, ctx: ExecCtx, outcome: { ok: boolean; error: string | null }, ms: number): void {
+  const code = outcome.error === null ? undefined : LOG_CODE.test(outcome.error) ? outcome.error : "text";
+  log.info("[inline] tool", { tool: name, agentKey: ctx.agentKey, ok: outcome.ok, ...(code ? { code } : {}), ms });
+  if (SELF_AUDITED_INLINE_TOOLS.has(name)) return;
+  try {
+    logToolCall(name, {
+      agentKey: ctx.agentKey,
+      chatId: ctx.chatId ?? null,
+      payload: {},
+      status: outcome.ok ? "ok" : "error",
+      result: { ms },
+      error: outcome.error,
+      requestId: ctx.requestId ?? null,
+    });
+  } catch (e) {
+    log.warn("[inline] не удалось записать аудит", { tool: name, error: getErrorMessage(e) });
+  }
+}
+
+async function dispatchTool(
   name: string,
   input: unknown,
   ctx: ExecCtx,
@@ -1703,14 +1908,32 @@ export async function executeTool(
   if (name === "SHOP_QUOTE") {
     return fmt(await quoteShop(i, ctx));
   }
+  if (name === "SHOP_PLACES") {
+    return fmt(await listShopPlaces(i, ctx));
+  }
+  if (name === "SHOP_CHECKOUT") {
+    return fmt(await checkoutShop(i, ctx));
+  }
   if (name === "SHOP_STATUS") {
     return fmt(await shopStatus(i, ctx));
+  }
+  if (name === "SHOP_SET_ADDRESS") {
+    return fmt(await setShopAddress(i, ctx));
   }
   if (name === "DELIVERY_QUOTE") {
     return fmt(await quoteDelivery(i, ctx));
   }
   if (name === "DELIVERY_STATUS") {
     return fmt(await deliveryStatus(ctx));
+  }
+  if (name === "SCHEDULE_FOLLOWUP") {
+    return fmt(scheduleFollowupTool(i, ctx));
+  }
+  if (name === "CANCEL_FOLLOWUP") {
+    return fmt(cancelFollowupTool(i, ctx));
+  }
+  if (name === "SHOP_REPAIR") {
+    return fmt(shopRepairTool(i, ctx));
   }
   if (name === "LIST_REMINDERS") {
     // Нативный клиент — не Telegram-чат, напоминаний у него нет.
@@ -1737,6 +1960,28 @@ export async function executeTool(
         truncated: total > rows.length,
         reminders,
       });
+    } catch (e) {
+      return fmt({ ok: false, error: getErrorMessage(e) });
+    }
+  }
+  if (name === "LIST_ORDER_WATCH") {
+    // Как и напоминания: слежение живёт в Telegram-чате, у нативного его нет.
+    if (nativeTurnContext.getStore()) {
+      return fmt({ ok: false, error: "order watches are available only in Telegram chats" });
+    }
+    try {
+      // Только чат вызова: чужие заказы не перечисляются.
+      const watches = listOrderWatches(ctx.chatId).map((w) => ({
+        id: w.id,
+        kind: w.kind,
+        title: ORDER_WATCH_KINDS[w.kind],
+        status: w.status,
+        state: w.state,
+        eta_min: w.eta_min,
+        started_at: isoMsk(w.started_at),
+        started_at_msk: formatMsk(w.started_at),
+      }));
+      return fmt({ ok: true, count: watches.length, watches });
     } catch (e) {
       return fmt({ ok: false, error: getErrorMessage(e) });
     }

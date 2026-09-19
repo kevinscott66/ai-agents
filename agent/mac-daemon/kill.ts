@@ -42,19 +42,30 @@ export async function killChild(
   if (child.processGroupId !== undefined) {
     const pgid = child.processGroupId;
     if (!Number.isSafeInteger(pgid) || pgid <= 1 || pgid === process.pid) throw new Error('invalid child process group');
+    // ESRCH — группы нет. EPERM на macOS — в группе остались одни зомби:
+    // лидер вышел, а Bun ещё не забрал его статус. Сигнал своему же прогону
+    // иначе EPERM не даёт, так что для нас это тоже «группы нет».
+    //
+    // 2026-09-18: EPERM пробрасывался, а все вызовы тут `void killChild(...)`,
+    // так что отказ уходил в unhandled rejection и ронял демон на отмене
+    // прогона (релиз a9385e69, `cancel id=… → killing` и сразу SystemError).
+    const dead = (error: unknown) => {
+      const code = (error as NodeJS.ErrnoException).code;
+      return code === 'ESRCH' || code === 'EPERM';
+    };
     const exists = () => {
       try { process.kill(-pgid,0); return true; }
-      catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false; throw error; }
+      catch (error) { if (dead(error)) return false; throw error; }
     };
     try { process.kill(-pgid,'SIGINT'); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return 'gone'; throw error; }
+    catch (error) { if (dead(error)) return 'gone'; throw error; }
     // The leader exiting is insufficient: a shell/tool may ignore SIGINT and
     // keep running in its group after the CLI has exited.
     const deadline = Date.now()+Math.max(0,graceMs);
     while (exists()) {
       if (Date.now() >= deadline) {
         try { process.kill(-pgid,'SIGKILL'); }
-        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+        catch (error) { if (!dead(error)) throw error; }
         return 'killed';
       }
       await Bun.sleep(Math.min(20,Math.max(1,deadline-Date.now())));
@@ -84,6 +95,27 @@ export async function killChild(
 }
 
 /**
+ * Остановка «выстрелил и забыл» — единственный разрешённый способ позвать
+ * `killChild` без `await`.
+ *
+ * 2026-09-18: все вызовы были `void killChild(...)`. Отклонение (неожиданный
+ * errno, битый pgid) уходило в unhandled rejection, а в Bun это падение всего
+ * демона — вместе с чужими живыми прогонами и исполнителями покупок. EPERM
+ * от зомби-группы закрыт в самом `killChild`; здесь закрыт весь класс:
+ * отказ остановки логируется и возвращается как `failed`, процесс демона живёт.
+ */
+export function stopChild(
+  child: KillableChild,
+  graceMs: number = KILL_GRACE_MS,
+  onError: (error: unknown) => void = (error) => console.error(`[kill] остановка не удалась: ${String((error as Error)?.message ?? error).slice(0, 200)}`),
+): Promise<KillOutcome | "failed"> {
+  return killChild(child, graceMs).catch((error) => {
+    try { onError(error); } catch { /* логгер не должен ронять демон */ }
+    return "failed" as const;
+  });
+}
+
+/**
  * Остановить один прогон по его id. Возвращает `false`, если такого прогона
  * нет — например, он уже завершился сам, пока кадр отмены летел по сети.
  */
@@ -95,7 +127,7 @@ export function cancelRun(
   const child = children.get(id);
   if (!child) return false;
   children.delete(id);
-  void killChild(child, graceMs);
+  void stopChild(child, graceMs);
   return true;
 }
 
@@ -135,6 +167,6 @@ export function killAll(
 ): number {
   const all = [...children.values()];
   children.clear();
-  for (const child of all) void killChild(child, graceMs);
+  for (const child of all) void stopChild(child, graceMs);
   return all.length;
 }

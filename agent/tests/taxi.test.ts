@@ -21,6 +21,7 @@ import {
   taxiStatus,
 } from "../lib/dispatch/taxi.ts";
 import { signingApi } from "../lib/native-signing.ts";
+import { TOOLS } from "../lib/tools-schema.ts";
 import { SignedActionRefusal, SignedActions } from "../lib/signed-actions.ts";
 import {
   describeTaxiPayload,
@@ -29,12 +30,15 @@ import {
   parseRubles,
   parseTaxiOutcome,
   parseTaxiRequest,
+  TAXI_TARIFF_KEYS,
+  TAXI_TARIFFS,
   type TaxiOrderState,
   type TaxiOutcome,
   type TaxiRequest,
   type TaxiTariff,
 } from "../lib/taxi.ts";
 import { checkTaxiProfile, TaxiRunner, type TaxiGuard, type TaxiPage, type TariffRow } from "../mac-daemon/taxi.ts";
+import { TAXI_PAGE_TARIFFS } from "../mac-daemon/taxi-selectors.ts";
 
 const T0 = Date.UTC(2026, 8, 17, 9, 0, 0);
 const OWNER = 777_000_333;
@@ -67,6 +71,28 @@ describe("parsing", () => {
     expect(normalizeTaxiTariff("Комфорт+")).toBe("comfortplus");
     expect(normalizeTaxiTariff("эконом")).toBe("econom");
     expect(normalizeTaxiTariff("vip")).toBeNull();
+  });
+
+  test("tariffs named by voice", () => {
+    const cases: Array<[string, string | null]> = [
+      ["комфорт плюс", "comfortplus"], ["Комфорт-плюс", "comfortplus"], ["comfort+", "comfortplus"],
+      ["тариф бизнес", "business"], ["Business", "business"], ["эконом класс", "econom"],
+      ["премьер", "premier"], ["Premier", "premier"], ["элит", "elite"], ["Élite", "elite"],
+      ["детский", "child"], ["с детским креслом", "child"], ["минивен", "minivan"], ["круиз", "cruise"],
+      ["премиум", null], ["классик", null], ["", null], ["эконом".repeat(20), null],
+    ];
+    for (const [said, key] of cases) expect([said, normalizeTaxiTariff(said)]).toEqual([said, key]);
+    for (const key of TAXI_TARIFF_KEYS) {
+      expect(normalizeTaxiTariff(key)).toBe(key);
+      expect(normalizeTaxiTariff(TAXI_TARIFFS[key])).toBe(key);
+    }
+  });
+
+  test("ORDER_TAXI schema lists every tariff", () => {
+    const tool = TOOLS.find((t) => t.name === "ORDER_TAXI")!;
+    const tariff = (tool.input_schema.properties as Record<string, { enum: string[] }>).tariff;
+    expect(tariff.enum).toEqual([...TAXI_TARIFF_KEYS]);
+    expect(Object.keys(TAXI_PAGE_TARIFFS)).toEqual([...TAXI_TARIFF_KEYS]);
   });
 
   test("daemon frame is strict", () => {
@@ -108,6 +134,7 @@ function fakePage(init: Partial<{ guard: TaxiGuard; rows: TariffRow[]; button: n
     route: init.route ?? true,
     stateAfterClick: "searching" as TaxiOrderState,
     clicks: [] as string[],
+    choice: false,
   };
   const page: TaxiPage = {
     open: async () => {},
@@ -120,6 +147,7 @@ function fakePage(init: Partial<{ guard: TaxiGuard; rows: TariffRow[]; button: n
       s.rows = s.rows.map((r) => ({ ...r, selected: r.tariff === t }));
     },
     orderButton: async () => (s.button === null ? null : { label: `Заказать ${s.button} ₽`, price_rub: s.button }),
+    choiceRequired: async () => s.choice,
     clickOrder: async () => { s.clicks.push("order"); s.state = s.stateAfterClick; },
     orderState: async () => ({ state: s.state, driver: null }),
     cancelOrder: async () => { s.clicks.push("cancel"); s.state = "cancelled"; return "clicked"; },
@@ -228,6 +256,18 @@ describe("mac runner", () => {
     page.orderButton = async () => ({ label: "Заказать", price_rub: null });
     expect((await r.run({ ...prepare, tariff: "econom" }) as { code: string }).code).toBe("price_unreadable");
     expect(s.clicks).toEqual([]);
+    await r.close();
+  });
+
+  test("a tariff that demands a seat is named as such, not as a missing button", async () => {
+    const { s, page } = fakePage({
+      button: null,
+      rows: [{ tariff: "child" as TaxiTariff, price_rub: 900, eta_min: 6, selected: false }],
+    });
+    s.choice = true;
+    const r = runner(page);
+    expect((await r.run({ ...prepare, tariff: "child" }) as { code: string }).code).toBe("tariff_needs_choice");
+    expect(s.clicks).toEqual(["tariff:child"]);
     await r.close();
   });
 

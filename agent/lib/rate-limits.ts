@@ -70,7 +70,15 @@ const RULES: Record<string, { perAgent?: BucketRule; global?: BucketRule }> = {
   ORDER_FOOD: { perAgent: { windowMs: HOUR_MS, max: 10 } },
   MARKET_PURCHASE: { perAgent: { windowMs: HOUR_MS, max: 10 } },
   SHOP_QUOTE: { perAgent: { windowMs: MINUTE_MS, max: 4 } },
+  SHOP_PLACES: { perAgent: { windowMs: MINUTE_MS, max: 4 } },
+  // Собирает и очищает корзину — минута с лишним на вызов, чаще не нужно.
+  SHOP_CHECKOUT: { perAgent: { windowMs: MINUTE_MS, max: 3 } },
   SHOP_STATUS: { perAgent: { windowMs: MINUTE_MS, max: 6 } },
+  SHOP_SET_ADDRESS: { perAgent: { windowMs: MINUTE_MS, max: 3 } },
+  SCHEDULE_FOLLOWUP: { perAgent: { windowMs: MINUTE_MS, max: 3 } },
+  CANCEL_FOLLOWUP: { perAgent: { windowMs: MINUTE_MS, max: 6 } },
+  // Свои потолки в lib/shop-repair.ts (одна одновременно, 3 в сутки).
+  SHOP_REPAIR: { perAgent: { windowMs: HOUR_MS, max: 2 } },
   ORDER_DELIVERY: { perAgent: { windowMs: HOUR_MS, max: 10 } },
   DELIVERY_CANCEL: { perAgent: { windowMs: HOUR_MS, max: 10 } },
   DELIVERY_QUOTE: { perAgent: { windowMs: MINUTE_MS, max: 4 } },

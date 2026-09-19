@@ -10,8 +10,8 @@
  * Запуск вручную: `bun macctl.ts '{"command":"volume","level":30}'`.
  */
 import { execFile } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { sanitizeChildEnv } from "./child-env.ts";
+import { calendarHelperPath } from "./calendar-helper.ts";
 import { parseMacControl, parseMacReminders, type MacControl } from "../lib/mac-control.ts";
 import type { NativeExec } from "./assistant.ts";
 
@@ -32,6 +32,8 @@ export const controlExec: NativeExec = (file, args, signal) => new Promise((reso
 export interface ControlEnv {
   MAC_CONTROL_ENABLED?: string;
   MAC_CALENDAR_ENABLED?: string;
+  /** Постоянная папка помощника EventKit вне релиза — см. calendar-helper.ts. */
+  MAC_CALENDAR_BIN_DIR?: string;
   MAC_APPS?: string;
 }
 
@@ -55,7 +57,7 @@ const sec = (ms: number) => String(Math.floor(ms / 1000));
 /** Напоминания и календарь идут через тот же помощник EventKit и тот же выключатель. */
 function calendarHelper(env: ControlEnv): string {
   if (env.MAC_CALENDAR_ENABLED !== "true") throw new Error("calendar_disabled");
-  return fileURLToPath(new URL("./bin/agent-calendar", import.meta.url));
+  return calendarHelperPath(env.MAC_CALENDAR_BIN_DIR);
 }
 
 /** argv для команды. Отдельно от исполнения, чтобы тест видел ровно то, что запустится. */
@@ -103,6 +105,7 @@ export function controlErrorCode(error: unknown): string {
   return [
     "control_disabled", "invalid_control", "app_not_allowed", "apps_not_configured", "calendar_disabled",
     "calendar_access_required", "reminders_access_required", "automation_access_required", "invalid_arguments",
+    "calendar_bin_dir_invalid",
     "assistant_cancelled",
   ].includes(code) ? code : "control_failed";
 }

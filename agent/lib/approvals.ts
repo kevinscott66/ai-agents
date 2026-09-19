@@ -576,6 +576,7 @@ const PREVIEW_BY_ACTION: Record<
       str(p, "text"),
     ]),
   CANCEL_REMINDER: (p) => join([`отменить напоминание ${str(p, "id")}`]),
+  CANCEL_ORDER_WATCH: (p) => join([`перестать следить за заказом ${str(p, "id")}`]),
   // Аудит 2026-08-29: у DELETE/PIN/FORWARD в payload'е строк нет вовсе —
   // только числа и boolean'ы, а общий путь ниже берёт лишь строковые поля. То
   // есть карточка печаталась одной головой: «<uuid> orchestrator

@@ -17,8 +17,6 @@
  *   bun mac-daemon/taxi.ts probe               — дерево доступности страницы
  *   bun mac-daemon/taxi.ts quote "откуда" "куда"
  */
-import { isAbsolute } from "node:path";
-import { lstatSync, mkdirSync } from "node:fs";
 import {
   TAXI_SESSION_TTL_MS,
   normalizeTaxiAddress,
@@ -34,6 +32,7 @@ import {
   type TaxiTariff,
 } from "../lib/taxi.ts";
 import { TAXI_ETA_TEXT, TAXI_PRICE_TEXT, TAXI_STATE_POLL } from "./taxi-selectors.ts";
+import { ensureLoginProfileDir, printOutcome, profileDirProblem, runCli, runnerErrorCode, waitForEnter, settleOrRelease } from "./runner-kit.ts";
 
 export interface TaxiEnv {
   TAXI_ENABLED?: string;
@@ -61,6 +60,8 @@ export interface TaxiPage {
   tariffs(): Promise<TariffRow[]>;
   selectTariff(tariff: TaxiTariff): Promise<void>;
   orderButton(): Promise<{ label: string; price_rub: number | null } | null>;
+  /** Вместо «Заказать» страница просит доуточнить заказ — например выбрать кресло. */
+  choiceRequired(): Promise<boolean>;
   clickOrder(): Promise<void>;
   orderState(): Promise<{ state: TaxiOrderState; driver: TaxiDriver | null }>;
   cancelOrder(): Promise<"clicked" | "unavailable">;
@@ -95,22 +96,15 @@ export function parseTariffCard(text: string): { price_rub: number | null; eta_m
  * и остальных.
  */
 export function checkTaxiProfile(dir: string | undefined, uid: number | undefined = process.getuid?.()): string {
-  if (!dir || !isAbsolute(dir)) throw new TaxiError("profile_missing");
-  let st;
-  try {
-    st = lstatSync(dir);
-  } catch {
-    throw new TaxiError("profile_missing");
-  }
-  if (!st.isDirectory()) throw new TaxiError("profile_missing");
-  if ((uid !== undefined && st.uid !== uid) || (st.mode & 0o077) !== 0) throw new TaxiError("profile_insecure");
-  return dir;
+  const problem = profileDirProblem(dir, uid);
+  if (problem) throw new TaxiError(problem);
+  return dir!;
 }
 
 /** Отказы, к которым полезен скриншот: владелец видит, на чём встали. */
 const SCREENSHOT_CODES: readonly TaxiFailCode[] = [
   "login_required", "captcha", "unexpected_page", "address_not_found", "tariff_unavailable",
-  "price_unreadable", "price_changed", "order_button_missing",
+  "tariff_needs_choice", "price_unreadable", "price_changed", "order_button_missing",
 ];
 
 const ENDED: readonly TaxiOrderState[] = ["none", "finished", "cancelled"];
@@ -122,12 +116,23 @@ interface Session {
   expires: number;
 }
 
+/**
+ * Жёсткий срок одного запроса к исполнителю. Мост ждёт MAC_TAXI_TIMEOUT_MS (90 с) и
+ * по таймауту шлёт отмену; срок нужен на случай, когда отмена не дошла
+ * (сокет порвался). Больше мостового — чтобы сервер никогда не получил от демона
+ * отказ раньше собственного таймаута.
+ */
+export const TAXI_RUN_DEADLINE_MS = 120_000;
+
 export interface TaxiRunnerOptions {
   launch?: TaxiLauncher;
   checkProfile?: (dir: string | undefined) => string;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   idleMs?: number;
+  deadlineMs?: number;
+  /** Только для тестов: сколько ждать, что зависший шаг закончится сам. */
+  selfSettleMs?: number;
 }
 
 export class TaxiRunner {
@@ -140,6 +145,10 @@ export class TaxiRunner {
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly idleMs: number;
+  private readonly deadlineMs: number;
+  private readonly selfSettleMs: number | undefined;
+  /** Растёт на каждом close(): запуск, закончившийся после закрытия, — сирота. */
+  private generation = 0;
 
   constructor(private readonly env: TaxiEnv, opts: TaxiRunnerOptions = {}) {
     this.launch = opts.launch ?? (async (e, dir) => (await import("./taxi-playwright.ts")).launchPlaywrightTaxi(e, dir));
@@ -147,6 +156,8 @@ export class TaxiRunner {
     this.now = opts.now ?? Date.now;
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.idleMs = opts.idleMs ?? 5 * 60_000;
+    this.deadlineMs = opts.deadlineMs ?? TAXI_RUN_DEADLINE_MS;
+    this.selfSettleMs = opts.selfSettleMs;
   }
 
   async run(request: TaxiRequest, signal?: AbortSignal): Promise<TaxiOutcome> {
@@ -154,10 +165,15 @@ export class TaxiRunner {
     if (this.busy) return { ok: false, code: "taxi_busy" };
     this.busy = true;
     if (this.idleTimer) clearTimeout(this.idleTimer);
-    let page: TaxiPage | null = null;
-    try {
+    // Присваивается внутри work — без приведения TS сузил бы до null.
+    let page = null as TaxiPage | null;
+    const work = (async () => {
       page = await this.page();
-      return await this.dispatch(page, request, signal);
+      return this.dispatch(page, request, signal);
+    })();
+    try {
+      // Зависший шаг не держит замок вечно: см. settleOrRelease.
+      return await settleOrRelease(work, { signal, deadlineMs: this.deadlineMs, selfSettleMs: this.selfSettleMs, release: () => this.close() });
     } catch (e) {
       if (!(e instanceof TaxiError)) throw e;
       if (e.code === "session_unknown" || e.code === "taxi_busy") return { ok: false, code: e.code };
@@ -177,6 +193,7 @@ export class TaxiRunner {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = null;
     this.session = null;
+    this.generation++;
     const browser = this.browser;
     this.browser = null;
     await browser?.close().catch(() => {});
@@ -191,12 +208,21 @@ export class TaxiRunner {
   private async page(): Promise<TaxiPage> {
     if (!this.browser) {
       const dir = this.checkProfile(this.env.TAXI_PROFILE_DIR);
+      const generation = this.generation;
+      let browser: TaxiBrowser;
       try {
-        this.browser = await this.launch(this.env, dir);
+        browser = await this.launch(this.env, dir);
       } catch (e) {
         if (e instanceof TaxiError) throw e;
         throw new TaxiError("browser_unavailable");
       }
+      // Запуск завис, исполнитель тем временем закрыли и отпустили замок —
+      // поздний браузер никому не нужен, а профиль он держал бы.
+      if (generation !== this.generation) {
+        await browser.close().catch(() => {});
+        throw new TaxiError("browser_unavailable");
+      }
+      this.browser = browser;
     }
     return this.browser.page();
   }
@@ -295,7 +321,8 @@ export class TaxiRunner {
     const row = (await page.tariffs()).find((r) => r.tariff === tariff);
     if (!row?.selected) throw new TaxiError("tariff_unavailable");
     const button = await page.orderButton();
-    if (!button) throw new TaxiError("order_button_missing");
+    // «Детский» требует выбрать кресло: заказать одним нажатием нельзя, и это не поломка.
+    if (!button) throw new TaxiError(await page.choiceRequired() ? "tariff_needs_choice" : "order_button_missing");
     const prices = [row.price_rub, button.price_rub].filter((p): p is number => p !== null);
     if (!prices.length) throw new TaxiError("price_unreadable");
     return Math.max(...prices);
@@ -323,10 +350,7 @@ class PriceChanged extends TaxiError {
 }
 
 export function taxiErrorCode(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  if (message === "invalid_taxi_request") return message;
-  if (message === "assistant_cancelled" || (error instanceof Error && error.name === "AbortError")) return "assistant_cancelled";
-  return "taxi_failed";
+  return runnerErrorCode(error, "invalid_taxi_request", "taxi_failed");
 }
 
 let runner: TaxiRunner | null = null;
@@ -348,7 +372,7 @@ async function cli(args: string[]) {
   const [command, ...rest] = args;
   if (command === "login" || command === "probe") {
     const dir = env.TAXI_PROFILE_DIR;
-    if (command === "login" && dir && isAbsolute(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+    ensureLoginProfileDir(command, dir);
     const profile = checkTaxiProfile(dir);
     const { launchPlaywrightTaxi } = await import("./taxi-playwright.ts");
     const browser = await launchPlaywrightTaxi(env, profile, { headless: false });
@@ -356,7 +380,7 @@ async function cli(args: string[]) {
     await page.open();
     if (command === "login") {
       console.log("Войди в Яндекс Go в открывшемся окне сам. Когда закончишь — нажми Enter здесь.");
-      await new Promise<void>((resolve) => process.stdin.once("data", () => resolve()));
+      await waitForEnter();
     } else {
       console.log(`guard: ${await page.guard()}`);
       console.log(await page.probe());
@@ -370,15 +394,12 @@ async function cli(args: string[]) {
     const local = new TaxiRunner({ ...env, TAXI_ENABLED: "true" }, { launch: async (e, d) => (await import("./taxi-playwright.ts")).launchPlaywrightTaxi(e, d, { headless: false }) });
     const out = await local.run({ op: "quote", from, to });
     await local.close();
-    console.log(JSON.stringify(out.ok ? out : { ...out, screenshot: out.screenshot ? `<${out.screenshot.length} base64>` : undefined }, null, 2));
+    printOutcome(out);
     return;
   }
   throw new Error("usage: bun mac-daemon/taxi.ts login | probe | quote \"откуда\" \"куда\"");
 }
 
 if (import.meta.main) {
-  cli(process.argv.slice(2)).then(() => process.exit(0)).catch((e) => {
-    console.error(e instanceof TaxiError ? e.code : e instanceof Error ? e.message : String(e));
-    process.exit(1);
-  });
+  runCli(() => cli(process.argv.slice(2)), (e) => (e instanceof TaxiError ? e.code : null));
 }

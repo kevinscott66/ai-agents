@@ -14,7 +14,7 @@
  * «страница вики» от «служебный текст».
  *
  * Вход недоверенный целиком: тело любой вытянутой WEB_FETCH страницы
- * (sdk-web-guard.ts:523), содержимое страницы вики (tools-schema.ts:1189),
+ * (sdk-web-guard.ts:523), содержимое страницы вики (tools-schema.ts:1277),
  * реплики чата у компактора (compactor.ts:174,177).
  */
 import { describe, expect, test } from "bun:test";

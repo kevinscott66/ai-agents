@@ -1647,6 +1647,124 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    // Слежение за оформленным заказом (lib/order-watch.ts): агент сам говорит,
+    // через сколько приедет такси или курьер и что посылка доехала до ПВЗ.
+    // Время в мс, как у `reminders`.
+    //
+    // 'polling' — промежуточный статус атомарного захвата, как 'sending' у
+    // напоминаний. Отличие в том, что зависшую строку здесь можно вернуть в
+    // очередь: опрос ничего не меняет на стороне Яндекса, а повторное
+    // сообщение отсекается сравнением с `state`/`eta_step`.
+    //
+    // Права: CANCEL_ORDER_WATCH без апрува — он только гасит собственное
+    // слежение этого же чата. LIST_ORDER_WATCH инлайновый, строки прав ему не
+    // нужно. Заводится слежение не инструментом, а самим оформлением заказа,
+    // которое уже прошло подписанный гейт.
+    name: "065_order_watch",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS order_watch (
+          id TEXT PRIMARY KEY,
+          kind TEXT NOT NULL
+            CHECK (kind IN ('taxi','delivery','lavka','eda','market')),
+          chat_id INTEGER NOT NULL,
+          user_id TEXT NOT NULL,
+          agent_key TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'watching'
+            CHECK (status IN ('watching','polling','done','failed','cancelled')),
+          state TEXT NOT NULL DEFAULT 'unknown',
+          eta_min INTEGER,
+          eta_step INTEGER,
+          driver TEXT,
+          started_at INTEGER NOT NULL,
+          next_poll_at INTEGER NOT NULL,
+          polled_at INTEGER,
+          notified_at INTEGER,
+          misses INTEGER NOT NULL DEFAULT 0,
+          error TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_order_watch_due
+          ON order_watch(status, next_poll_at);
+        CREATE INDEX IF NOT EXISTS idx_order_watch_chat
+          ON order_watch(chat_id, status);
+        -- У сервиса на Mac одна вкладка и один текущий заказ: второе активное
+        -- слежение за тем же сервисом писало бы владельцу дважды.
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_order_watch_one_per_kind
+          ON order_watch(kind) WHERE status IN ('watching','polling');
+      `);
+      const ins = db.prepare(
+        `INSERT OR IGNORE INTO permissions(agent_key, action_type, allowed, requires_approval)
+         VALUES (?, ?, 1, 0)`,
+      );
+      for (const c of CHARACTERS) ins.run(c.key, "CANCEL_ORDER_WATCH");
+    },
+  },
+  {
+    // Отложенные проверки (SCHEDULE_FOLLOWUP / CANCEL_FOLLOWUP, таймер —
+    // lib/followups.ts). В отличие от напоминаний, в срок будится сам агент:
+    // сервер запускает его ход с задачей из строки, итог уходит владельцу.
+    //
+    // 'running' — атомарный захват, как 'sending' у напоминаний. Ход мог
+    // что-то сделать до рестарта, поэтому застрявший 'running' не
+    // перезапускается, а честно становится 'failed'.
+    //
+    // Инструменты инлайновые и только у оркестратора в личном чате владельца
+    // (CALLER_RESTRICTED + проверка в хендлере), строк прав им не нужно.
+    name: "066_followups",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS followups (
+          id TEXT PRIMARY KEY,
+          chat_id INTEGER NOT NULL,
+          user_id TEXT NOT NULL,
+          agent_key TEXT NOT NULL,
+          task TEXT NOT NULL,
+          due_at INTEGER NOT NULL,
+          status TEXT NOT NULL DEFAULT 'scheduled'
+            CHECK (status IN ('scheduled','running','done','cancelled','failed')),
+          attempts INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          claimed_at INTEGER,
+          finished_at INTEGER,
+          error TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_followups_due
+          ON followups(status, due_at);
+        CREATE INDEX IF NOT EXISTS idx_followups_chat
+          ON followups(chat_id, status, created_at);
+      `);
+    },
+  },
+  {
+    // Починка селекторов покупок (SHOP_REPAIR, lib/shop-repair.ts): журнал
+    // запусков для потолков — одна одновременно, сервис раз в 12 часов, три
+    // за сутки. Итог владельцу приходит отложенной проверкой (followups).
+    // Застрявший 'running' (рестарт посреди починки) становится 'failed'.
+    name: "067_selector_repairs",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS selector_repairs (
+          id TEXT PRIMARY KEY,
+          service TEXT NOT NULL,
+          code TEXT NOT NULL,
+          chat_id INTEGER NOT NULL,
+          user_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'running'
+            CHECK (status IN ('running','done','failed','no_change')),
+          pr_url TEXT,
+          error TEXT,
+          created_at INTEGER NOT NULL,
+          finished_at INTEGER
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_selector_repairs_created
+          ON selector_repairs(created_at);
+      `);
+    },
+  },
 ];
 
 /**

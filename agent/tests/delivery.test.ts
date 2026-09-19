@@ -99,7 +99,7 @@ describe("parsing", () => {
 });
 
 /** Страница-заглушка: журнал нажатий и ввода, цена и состояние меняются по ходу. */
-function fakePage(init: Partial<{ guard: DeliveryGuard; rows: DeliveryTariffRow[]; button: number | null; contact: boolean; commentField: boolean }> = {}) {
+function fakePage(init: Partial<{ guard: DeliveryGuard; rows: DeliveryTariffRow[]; button: number | null; blocked: "payment" | "confirm_data" | "disabled" | null; contact: boolean; commentField: boolean }> = {}) {
   const s = {
     guard: init.guard ?? ("ok" as DeliveryGuard),
     rows: init.rows ?? [
@@ -107,6 +107,7 @@ function fakePage(init: Partial<{ guard: DeliveryGuard; rows: DeliveryTariffRow[
       { tariff: "express" as DeliveryTariff, price_rub: 450, eta_min: 10, selected: false },
     ],
     button: init.button === undefined ? 320 : init.button,
+    blocked: init.blocked ?? null,
     contact: init.contact ?? false,
     commentField: init.commentField ?? true,
     state: "none" as DeliveryOrderState,
@@ -125,7 +126,7 @@ function fakePage(init: Partial<{ guard: DeliveryGuard; rows: DeliveryTariffRow[
     },
     contactRequired: async () => s.contact,
     setComment: async (c) => { s.clicks.push(`comment:${c}`); return s.commentField; },
-    orderButton: async () => (s.button === null ? null : { label: `Заказать ${s.button} ₽`, price_rub: s.button }),
+    orderButton: async () => (s.button === null ? null : { label: `Заказать ${s.button} ₽`, price_rub: s.button, blocked: s.blocked }),
     clickOrder: async () => { s.clicks.push("order"); s.state = s.stateAfterClick; },
     orderState: async () => ({ state: s.state, eta_min: null }),
     cancelOrder: async () => { s.clicks.push("cancel"); s.state = "cancelled"; return "clicked"; },
@@ -181,6 +182,54 @@ describe("mac runner", () => {
     await r.run(prepare);
     s.contact = true;
     expect((await r.run({ op: "confirm", session: SESSION, maxRub: 517 }) as { code: string }).code).toBe("contact_required");
+    expect(s.clicks).not.toContain("order");
+    await r.close();
+  });
+
+  test("recipient phone is copied from the sender before the contact check", async () => {
+    const { s, page } = fakePage({ contact: true, button: 450 });
+    page.fillRecipientFromSender = async () => { s.clicks.push("recipient"); s.contact = false; };
+    const r = runner(page);
+    expect(await r.run(prepare)).toMatchObject({ ok: true, op: "prepare", price_rub: 450 });
+    expect(s.clicks).toContain("recipient");
+    expect(s.clicks).not.toContain("order");
+    await r.close();
+  });
+
+  test("inactive order button: no payment method is the owner's, other reasons refuse too", async () => {
+    const { s, page } = fakePage({ button: 450, blocked: "payment" });
+    const r = runner(page);
+    expect(await r.run(prepare)).toEqual({ ok: false, code: "payment_needs_owner" });
+    s.blocked = "disabled";
+    expect((await r.run(prepare) as { code: string }).code).toBe("order_button_missing");
+    expect(s.clicks).not.toContain("order");
+    await r.close();
+  });
+
+  test("«Подтвердите данные» instead of the order button is the owner's, with no click", async () => {
+    const { s, page } = fakePage({ button: 450, blocked: "confirm_data" });
+    const r = runner(page);
+    expect(await r.run(prepare)).toMatchObject({ ok: false, code: "data_confirm_needs_owner", screenshot: expect.any(String) });
+    expect(s.clicks).not.toContain("order");
+    await r.close();
+  });
+
+  test("order button that is late or silently inactive is re-read before refusing", async () => {
+    const { s, page } = fakePage({ button: 450, blocked: "disabled" });
+    const read = page.orderButton;
+    let calls = 0;
+    page.orderButton = async () => {
+      calls++;
+      if (calls === 1) return null;
+      if (calls === 3) s.blocked = "payment";
+      return read();
+    };
+    const r = runner(page);
+    expect(await r.run(prepare)).toEqual({ ok: false, code: "payment_needs_owner" });
+    expect(calls).toBe(3);
+    calls = 10;
+    s.blocked = "disabled";
+    expect((await r.run(prepare) as { code: string }).code).toBe("order_button_missing");
     expect(s.clicks).not.toContain("order");
     await r.close();
   });

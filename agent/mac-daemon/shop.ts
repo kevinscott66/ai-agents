@@ -10,10 +10,11 @@
  *
  * В Еде заказ собирается в одном ресторане: сервер присылает его ref, у блюд
  * нет своих страниц, и блюдо находится в меню ресторана по точному названию.
- * Блюдо с обязательным выбором опций агент не заказывает: `options_required`.
+ * Опции блюда (размер, соус, состав) отмечаются ровно по подписи; в корзине
+ * вариант блюда узнаётся по названию и опциям (edaVariantId).
  *
- * В Маркете товар — `<modelId>-<sku>`: заказывается ровно подписанный вариант,
- * карточки без sku в расчёт не попадают. Доставка Маркета видна только на
+ * В Маркете товар — номер карточки `/card/<slug>/<номер>`: заказывается ровно
+ * подписанная карточка, сниппеты без неё в расчёт не попадают. Доставка Маркета видна только на
  * оформлении, поэтому расчёт возвращает её как null, а потолок итога
  * подписывается с доставкой, которую владелец готов заплатить.
  *
@@ -30,26 +31,35 @@
  *   bun mac-daemon/shop.ts probe [eda|market]  — дерево доступности страницы
  *   bun mac-daemon/shop.ts quote "молоко" "хлеб"
  *   bun mac-daemon/shop.ts eda-quote "ресторан" "блюдо" …
+ *   bun mac-daemon/shop.ts eda-places "шаверма" [45]  — рестораны и время доставки
  *   bun mac-daemon/shop.ts market-quote "зарядка usb-c" …
+ *   bun mac-daemon/shop.ts selfcheck [eda|market]  — селекторы на публичном поиске, JSON без текста страницы
  */
-import { isAbsolute } from "node:path";
-import { lstatSync, mkdirSync } from "node:fs";
 import {
   MARKET_PRODUCT_ID,
   SHOP_CANDIDATES_MAX,
   SHOP_PLACED_STATES,
   SHOP_PLACE_REF,
+  SHOP_QUOTE_CHOICES_MAX,
   SHOP_SESSION_TTL_MS,
   edaDishId,
+  edaVariantId,
+  matchSavedAddress,
   normalizeShopName,
   normalizeShopPlaceName,
   normalizeShopQuery,
   parseShopRequest,
+  isShopMaxEta,
+  pickShopPlace,
+  rankShopPlaces,
+  shopAddressHas,
   shopNeedsPlace,
   type ShopCandidate,
   type ShopQuoteResult,
   type ShopFailCode,
   type ShopLine,
+  type ShopOptionGroup,
+  type ShopOptionPick,
   type ShopOrderState,
   type ShopOutcome,
   type ShopPlace,
@@ -57,6 +67,7 @@ import {
   type ShopRequest,
   type ShopService,
 } from "../lib/shop.ts";
+import { ensureLoginProfileDir, printOutcome, profileDirProblem, runCli, runnerErrorCode, waitForEnter, settleOrRelease } from "./runner-kit.ts";
 import { SHOP_STATE_POLL } from "./shop-selectors.ts";
 
 export interface ShopEnv {
@@ -64,6 +75,9 @@ export interface ShopEnv {
   SHOP_PROFILE_DIR?: string;
   SHOP_HEADLESS?: string;
   SHOP_BROWSER_CHANNEL?: string;
+  /** Как подписывать заказ, если страница спрашивает. Значения живут в пускаче, не в репозитории. */
+  SHOP_CONTACT_NAME?: string;
+  SHOP_CONTACT_EMAIL?: string;
   [key: string]: string | undefined;
 }
 
@@ -74,6 +88,8 @@ export interface SearchCard {
   name: string;
   price_rub: number | null;
   available: boolean;
+  /** Еда: группы опций блюда; price_rub — без доплат. */
+  options?: ShopOptionGroup[];
 }
 
 export interface ProductInfo {
@@ -108,14 +124,17 @@ export interface ShopItemRef {
 }
 
 /** Итог нажатия «в корзину»: блюдо просит выбрать опции или страница спросила что-то своё. */
-export type QtyResult = "ok" | "options_required" | "blocked";
+export type QtyResult = "ok" | "options_required" | "options_mismatch" | "blocked";
 
 /** Всё, что исполнитель делает со страницей. Тесты подставляют свою. */
 export interface ShopPage {
   /** Лавка — главная; Еда без place — главная, с place — страница ресторана. */
   openHome(target: ShopTarget): Promise<void>;
-  /** Еда: найти ресторан по названию. Без навигации в него. */
-  findPlace(query: string): Promise<ShopPlace | null>;
+  /**
+   * Еда: рестораны из поиска по запросу (null — с главной) с временем
+   * доставки с карточки. Без навигации в них.
+   */
+  places(query: string | null): Promise<ShopPlace[]>;
   openSearch(target: ShopTarget, query: string): Promise<void>;
   openProduct(target: ShopTarget, item: ShopItemRef): Promise<void>;
   openCart(target: ShopTarget): Promise<void>;
@@ -128,12 +147,28 @@ export interface ShopPage {
   product(): Promise<ProductInfo>;
   /** На странице товара: довести количество в корзине до qty (0 — убрать). */
   setProductQty(qty: number): Promise<QtyResult>;
+  /** Еда: окно блюда, отметить ровно picks, qty штук, «Добавить». */
+  addWithOptions?(qty: number, picks: ShopOptionPick[]): Promise<QtyResult>;
+  /** Еда: убрать из корзины строки этих вариантов. */
+  removeCartRows?(ids: string[]): Promise<void>;
+  /** Лавка и Еда: подписи сохранённых адресов из окна выбора (окно остаётся открытым). */
+  savedAddresses?(): Promise<string[]>;
+  /** Выбрать сохранённый адрес по номеру из savedAddresses. */
+  chooseAddress?(index: number): Promise<void>;
+  /** Закрыть окно выбора адреса, ничего не меняя. */
+  closeAddresses?(): Promise<void>;
   cart(): Promise<CartRow[]>;
   /** Открыть оформление из корзины; false — кнопки нет. */
   openCheckout(): Promise<boolean>;
+  /**
+   * На оформлении: подписать заказ, если поле пустое. Заполненное не трогаем —
+   * своё владелец вводил руками. Значения приходят из окружения и никуда не пишутся.
+   */
+  fillContacts?(contacts: { name?: string; email?: string }): Promise<void>;
   checkout(): Promise<CheckoutInfo>;
   clickPay(): Promise<void>;
-  orderState(): Promise<ShopOrderState>;
+  /** Состояние заказа и, если страница его пишет, сколько ждать в минутах. */
+  orderState(): Promise<{ state: ShopOrderState; eta_min: number | null }>;
   screenshot(): Promise<string | null>;
   probe(): Promise<string>;
 }
@@ -166,22 +201,15 @@ class PriceChanged extends ShopError {
  * и остальных.
  */
 export function checkShopProfile(dir: string | undefined, uid: number | undefined = process.getuid?.()): string {
-  if (!dir || !isAbsolute(dir)) throw new ShopError("profile_missing");
-  let st;
-  try {
-    st = lstatSync(dir);
-  } catch {
-    throw new ShopError("profile_missing");
-  }
-  if (!st.isDirectory()) throw new ShopError("profile_missing");
-  if ((uid !== undefined && st.uid !== uid) || (st.mode & 0o077) !== 0) throw new ShopError("profile_insecure");
-  return dir;
+  const problem = profileDirProblem(dir, uid);
+  if (problem) throw new ShopError(problem);
+  return dir!;
 }
 
 /** Отказы, к которым полезен скриншот: владелец видит, на чём встали. */
 const SCREENSHOT_CODES: readonly ShopFailCode[] = [
-  "login_required", "address_required", "captcha", "unexpected_page", "place_not_found", "product_not_found", "product_mismatch",
-  "out_of_stock", "options_required", "cart_not_empty", "cart_mismatch", "price_unreadable", "price_changed", "checkout_unavailable",
+  "login_required", "address_required", "captcha", "unexpected_page", "place_not_found", "place_too_slow", "product_not_found", "product_mismatch",
+  "out_of_stock", "options_required", "options_mismatch", "cart_not_empty", "cart_mismatch", "price_unreadable", "price_changed", "checkout_unavailable",
   "payment_needs_owner", "pay_button_missing",
 ];
 
@@ -193,17 +221,30 @@ interface Session {
   expires: number;
 }
 
+/**
+ * Жёсткий срок одного запроса к исполнителю. Мост ждёт MAC_SHOP_TIMEOUT_MS (180 с) и
+ * по таймауту шлёт отмену; срок нужен на случай, когда отмена не дошла
+ * (сокет порвался). Больше мостового — чтобы сервер никогда не получил от демона
+ * отказ раньше собственного таймаута.
+ */
+export const SHOP_RUN_DEADLINE_MS = 210_000;
+
 export interface ShopRunnerOptions {
   launch?: ShopLauncher;
   checkProfile?: (dir: string | undefined) => string;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   idleMs?: number;
+  deadlineMs?: number;
+  /** Только для тестов: сколько ждать, что зависший шаг закончится сам. */
+  selfSettleMs?: number;
 }
 
 export class ShopRunner {
   private browser: ShopBrowser | null = null;
   private busy = false;
+  /** Что держит замок и с какого момента — для ответа shop_busy и для reset. */
+  private current: { op: ShopRequest["op"]; since: number } | null = null;
   private session: Session | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly launch: ShopLauncher;
@@ -211,6 +252,10 @@ export class ShopRunner {
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly idleMs: number;
+  private readonly deadlineMs: number;
+  private readonly selfSettleMs: number | undefined;
+  /** Растёт на каждом close(): запуск, закончившийся после закрытия, — сирота. */
+  private generation = 0;
 
   constructor(private readonly env: ShopEnv, opts: ShopRunnerOptions = {}) {
     this.launch = opts.launch ?? (async (e, d) => (await import("./shop-playwright.ts")).launchPlaywrightShop(e, d));
@@ -218,17 +263,29 @@ export class ShopRunner {
     this.now = opts.now ?? Date.now;
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.idleMs = opts.idleMs ?? 5 * 60_000;
+    this.deadlineMs = opts.deadlineMs ?? SHOP_RUN_DEADLINE_MS;
+    this.selfSettleMs = opts.selfSettleMs;
   }
 
   async run(request: ShopRequest, signal?: AbortSignal): Promise<ShopOutcome> {
     if (this.env.SHOP_ENABLED !== "true") return { ok: false, code: "shop_disabled" };
-    if (this.busy) return { ok: false, code: "shop_busy" };
+    if (request.op === "reset") return this.reset();
+    if (this.busy) {
+      const held = this.current;
+      return { ok: false, code: "shop_busy", ...(held ? { busy_op: held.op, busy_ms: Math.max(0, this.now() - held.since) } : {}) };
+    }
     this.busy = true;
+    this.current = { op: request.op, since: this.now() };
     if (this.idleTimer) clearTimeout(this.idleTimer);
-    let page: ShopPage | null = null;
-    try {
+    // Присваивается внутри work — без приведения TS сузил бы до null.
+    let page = null as ShopPage | null;
+    const work = (async () => {
       page = await this.page();
-      return await this.dispatch(page, request, signal);
+      return this.dispatch(page, request, signal);
+    })();
+    try {
+      // Зависший шаг не держит замок вечно: см. settleOrRelease.
+      return await settleOrRelease(work, { signal, deadlineMs: this.deadlineMs, selfSettleMs: this.selfSettleMs, release: () => this.close() });
     } catch (e) {
       if (!(e instanceof ShopError)) throw e;
       if (e.code === "session_unknown" || e.code === "shop_busy") return { ok: false, code: e.code };
@@ -240,14 +297,50 @@ export class ShopRunner {
       return out;
     } finally {
       this.busy = false;
+      this.current = null;
       this.scheduleIdleClose();
     }
+  }
+
+  /**
+   * Брошенный запуск держит замок до своего дедлайна (до ~4 минут), и всё это
+   * время любой запрос получает shop_busy. Сервер шлёт запросы по одному, так что
+   * занятость, которую он видит, — чужой хвост: браузер закрывается, запуск падает
+   * на закрытой странице и отпускает замок. Оформление с «Оплатить» не рвётся —
+   * деньги могли уже уйти, и его итог нужен.
+   */
+  private async reset(): Promise<ShopOutcome> {
+    const held = this.current;
+    if (!this.busy || !held) return { ok: true, op: "reset", reset: false };
+    if (held.op === "confirm") return { ok: false, code: "shop_paying", busy_op: held.op, busy_ms: Math.max(0, this.now() - held.since) };
+    await this.close();
+    return { ok: true, op: "reset", reset: true };
+  }
+
+  /**
+   * Замок на время починки селекторов: починщик открывает тот же профиль своим
+   * Chrome, и два браузера на одном профиле не живут. Браузер исполнителя
+   * закрывается, покупки до release получают shop_busy (без busy_op — это не
+   * операция покупки, и reset её не рвёт). Подготовленный заказ ждёт подписи —
+   * его не теряем: отказ.
+   */
+  async hold(): Promise<(() => void) | null> {
+    if (this.busy || this.activeSession()) return null;
+    this.busy = true;
+    await this.close();
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.busy = false;
+    };
   }
 
   async close(): Promise<void> {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = null;
     this.session = null;
+    this.generation++;
     const browser = this.browser;
     this.browser = null;
     await browser?.close().catch(() => {});
@@ -262,14 +355,36 @@ export class ShopRunner {
   private async page(): Promise<ShopPage> {
     if (!this.browser) {
       const dir = this.checkProfile(this.env.SHOP_PROFILE_DIR);
+      const generation = this.generation;
+      let browser: ShopBrowser;
       try {
-        this.browser = await this.launch(this.env, dir);
+        browser = await this.launch(this.env, dir);
       } catch (e) {
         if (e instanceof ShopError) throw e;
         throw new ShopError("browser_unavailable");
       }
+      // Запуск завис, исполнитель тем временем закрыли и отпустили замок —
+      // поздний браузер никому не нужен, а профиль он держал бы.
+      if (generation !== this.generation) {
+        await browser.close().catch(() => {});
+        throw new ShopError("browser_unavailable");
+      }
+      this.browser = browser;
     }
     return this.browser.page();
+  }
+
+  /** Рестораны со страницы, проверенные: чужие ссылки и пустые названия отбрасываются. */
+  private async readPlaces(page: ShopPage, query: string | null): Promise<ShopPlace[]> {
+    const raw = await page.places(query);
+    await this.guard(page);
+    const out: ShopPlace[] = [];
+    for (const p of raw) {
+      const name = normalizeShopPlaceName(p.name);
+      if (!name || !SHOP_PLACE_REF.test(p.ref)) continue;
+      out.push({ ref: p.ref, name, ...(p.eta ? { eta: { from_min: p.eta.from_min, to_min: p.eta.to_min } } : {}) });
+    }
+    return out;
   }
 
   private activeSession(): Session | null {
@@ -287,36 +402,50 @@ export class ShopRunner {
         const address = await this.openAt(page, () => page.openHome(target));
         let place: ShopPlace | undefined;
         if (shopNeedsPlace(request.service)) {
-          const found = request.place ? await page.findPlace(request.place) : null;
-          await this.guard(page);
-          const name = found ? normalizeShopPlaceName(found.name) : null;
-          if (!found || !SHOP_PLACE_REF.test(found.ref) || !name) throw new ShopError("place_not_found");
-          place = { ref: found.ref, name };
-          target = { service: request.service, place: found.ref };
+          if (!request.place) throw new ShopError("place_not_found");
+          const query = request.place;
+          // Поиск, а если в нём ресторана с таким названием нет — главная.
+          let pick = pickShopPlace(query, await this.readPlaces(page, query), request.max_eta_min);
+          if (!pick) pick = pickShopPlace(query, await this.readPlaces(page, null), request.max_eta_min);
+          if (!pick) throw new ShopError("place_not_found");
+          if ("too_slow" in pick) throw new ShopError("place_too_slow");
+          place = pick.place;
+          target = { service: request.service, place: place.ref };
           await page.openHome(target);
           await this.guard(page);
         }
         const delivery = await page.deliveryFee();
         const results: ShopQuoteResult[] = [];
+        let optionBudget = 0;
         for (const query of request.queries) {
           checkAborted();
           await page.openSearch(target, query);
           await this.guard(page);
           const candidates: ShopCandidate[] = [];
           for (const card of await page.searchCards()) {
+            const choices = (card.options ?? []).reduce((n, g) => n + g.choices.length, 0);
+            // Опции — только у блюд Еды, и ответ должен уместиться в хвост потока.
+            if (card.options && (!place || choices === 0 || optionBudget + choices > SHOP_QUOTE_CHOICES_MAX)) continue;
             const name = normalizeShopName(card.name);
             if (!card.available || card.price_rub === null || !name) continue;
             // id блюда Еды — производная ресторана и названия: другое — чужая карточка.
             if (place && card.id !== edaDishId(place.ref, name)) continue;
-            // Товар Маркета без sku — не конкретный вариант, заказывать его нечем.
+            // Сниппет Маркета без номера карточки — заказывать нечем.
             if (request.service === "market" && !MARKET_PRODUCT_ID.test(card.id)) continue;
             if (candidates.some((c) => c.id === card.id)) continue;
-            candidates.push({ id: card.id, name, price_rub: card.price_rub });
+            candidates.push({ id: card.id, name, price_rub: card.price_rub, ...(card.options ? { options: card.options } : {}) });
+            optionBudget += choices;
             if (candidates.length === SHOP_CANDIDATES_MAX) break;
           }
           results.push({ query, candidates });
         }
         return { ok: true, op: "quote", address, ...(place ? { place } : {}), delivery_rub: delivery, results };
+      }
+      case "places": {
+        if (this.activeSession()) throw new ShopError("shop_busy");
+        const address = await this.openAt(page, () => page.openHome({ service: request.service }));
+        const places = rankShopPlaces(await this.readPlaces(page, request.query), request.max_eta_min);
+        return { ok: true, op: "places", address, places };
       }
       case "prepare": {
         const active = this.activeSession();
@@ -359,6 +488,9 @@ export class ShopRunner {
         // С этого места деньги могли уйти: отказов «до заказа» больше нет.
         return { ok: true, op: "confirm", state: await this.pollState(page) };
       }
+      case "reset":
+        // run() обслуживает reset до замка; сюда он не доходит.
+        return { ok: true, op: "reset", reset: false };
       case "abandon": {
         const session = this.activeSession();
         if (session?.id === request.session) {
@@ -370,7 +502,28 @@ export class ShopRunner {
       case "status": {
         await page.openOrders(request.service);
         await this.guard(page);
-        return { ok: true, op: "status", state: await page.orderState() };
+        const { state, eta_min } = await page.orderState();
+        return { ok: true, op: "status", state, eta_min };
+      }
+      case "set_address": {
+        // Пока идёт заказ, адрес не трогаем: подписан старый.
+        if (this.activeSession()) throw new ShopError("shop_busy");
+        if (!page.savedAddresses || !page.chooseAddress) throw new ShopError("address_required");
+        const target: ShopTarget = { service: request.service };
+        await page.openHome(target);
+        await this.guard(page);
+        const saved = await page.savedAddresses();
+        const index = matchSavedAddress(request.address, saved);
+        if (index === null) {
+          await page.closeAddresses?.();
+          return { ok: true, op: "set_address", matched: false, address: await page.address(), saved_count: saved.length };
+        }
+        await page.chooseAddress(index);
+        await this.guard(page);
+        const now = await page.address();
+        // Сверяем шапку: выбралось не то или не выбралось — говорим об этом, а не молчим.
+        const matched = now !== null && shopAddressHas(now, request.address);
+        return { ok: true, op: "set_address", matched, address: now, saved_count: saved.length };
       }
     }
   }
@@ -402,10 +555,13 @@ export class ShopRunner {
       if (!info.name) throw new ShopError("product_not_found");
       if (normalizeShopName(info.name) !== line.name) throw new ShopError("product_mismatch");
       if (!info.available) throw new ShopError("out_of_stock");
-      if (info.price_rub === null) throw new ShopError("price_unreadable");
+      // У блюда с опциями на карточке «от N ₽»: цену сверит корзина и итог.
+      if (info.price_rub === null && !target.place) throw new ShopError("price_unreadable");
+      if (line.options && !target.place) throw new ShopError("product_mismatch");
       added.push(line);
-      const result = await page.setProductQty(line.qty);
-      if (result === "options_required") throw new ShopError("options_required");
+      // В Еде всегда через окно блюда: оно же скажет, что у блюда обязательный выбор.
+      const result = target.place ? await page.addWithOptions!(line.qty, line.options ?? []) : await page.setProductQty(line.qty);
+      if (result === "options_required" || result === "options_mismatch") throw new ShopError(result);
       if (result === "blocked") throw new ShopError("unexpected_page");
     }
     await page.openCart(target);
@@ -413,10 +569,11 @@ export class ShopRunner {
     const rows = await page.cart();
     const prepared: ShopPreparedLine[] = [];
     for (const line of lines) {
-      const row = rows.find((r) => r.id === line.id);
+      const id = cartId(target, line);
+      const row = rows.find((r) => r.id === id);
       if (!row || row.qty !== line.qty) throw new ShopError("cart_mismatch");
       if (row.price_rub === null) throw new ShopError("price_unreadable");
-      prepared.push({ id: line.id, qty: line.qty, price_rub: row.price_rub });
+      prepared.push({ id, qty: line.qty, price_rub: row.price_rub });
     }
     if (rows.length !== lines.length) throw new ShopError("cart_mismatch");
     return prepared;
@@ -432,6 +589,9 @@ export class ShopRunner {
     if (!same) throw new ShopError("cart_mismatch");
     if (!(await page.openCheckout())) throw new ShopError("checkout_unavailable");
     await this.guard(page);
+    // Еда спрашивает имя и почту «для уточнения по заказу». Пустые поля
+    // заполняем из окружения; ошибка здесь не повод ронять заказ.
+    await page.fillContacts?.({ name: this.env.SHOP_CONTACT_NAME, email: this.env.SHOP_CONTACT_EMAIL }).catch(() => {});
     const info = await page.checkout();
     if (info.blocked) throw new ShopError("checkout_unavailable");
     if (info.total_rub === null) throw new ShopError("price_unreadable");
@@ -447,7 +607,18 @@ export class ShopRunner {
   }
 
   /** Убрать то, что положил сам. Лучшее усилие: ошибки не перекрывают исходный отказ. */
-  private async clearLines(page: ShopPage, target: ShopTarget, lines: ReadonlyArray<ShopItemRef>) {
+  private async clearLines(page: ShopPage, target: ShopTarget, lines: ReadonlyArray<ShopLine>) {
+    if (target.place && lines.length) {
+      // В Еде блюдо с разными опциями — разные строки корзины: убираем строки своих вариантов.
+      try {
+        await page.openCart(target);
+        if ((await page.guard()) !== "ok") return;
+        await page.removeCartRows?.(lines.map((l) => cartId(target, l)));
+      } catch {
+        // лучшее усилие
+      }
+      return;
+    }
     for (const line of lines) {
       try {
         await page.openProduct(target, line);
@@ -463,7 +634,7 @@ export class ShopRunner {
     let state: ShopOrderState = "unknown";
     for (let i = 0; i < SHOP_STATE_POLL.attempts; i++) {
       try {
-        state = await page.orderState();
+        state = (await page.orderState()).state;
       } catch {
         state = "unknown";
       }
@@ -474,11 +645,12 @@ export class ShopRunner {
   }
 }
 
+/** id строки корзины: в Еде — вариант блюда с опциями, иначе id товара. */
+export const cartId = (target: ShopTarget, line: ShopLine): string =>
+  target.place ? edaVariantId(target.place, line.name, (line.options ?? []).map((o) => o.name)) : line.id;
+
 export function shopErrorCode(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  if (message === "invalid_shop_request") return message;
-  if (message === "assistant_cancelled" || (error instanceof Error && error.name === "AbortError")) return "assistant_cancelled";
-  return "shop_failed";
+  return runnerErrorCode(error, "invalid_shop_request", "shop_failed");
 }
 
 let runner: ShopRunner | null = null;
@@ -488,7 +660,26 @@ export async function runShopRequest(raw: unknown, signal?: AbortSignal): Promis
   const request = parseShopRequest(raw);
   if (!request) throw new Error("invalid_shop_request");
   runner ??= new ShopRunner(process.env);
-  return JSON.stringify(await runner.run(request, signal));
+  // Журнал демона без времени, а покупки без записей вовсе: shop_busy 2026-09-18
+  // было не с чем сверить. Здесь только операция и код — без адресов и товаров.
+  const started = Date.now();
+  const stamp = () => new Date().toISOString();
+  console.log(`[shop] ${stamp()} ${request.op} start`);
+  try {
+    const out = await runner.run(request, signal);
+    const busy = !out.ok && out.busy_op ? ` busy_op=${out.busy_op} busy_ms=${out.busy_ms ?? "?"}` : "";
+    console.log(`[shop] ${stamp()} ${request.op} ${out.ok ? "ok" : out.code}${busy} ${Date.now() - started}ms`);
+    return JSON.stringify(out);
+  } catch (e) {
+    console.log(`[shop] ${stamp()} ${request.op} error=${shopErrorCode(e)} ${Date.now() - started}ms`);
+    throw e;
+  }
+}
+
+/** Замок покупок для починки селекторов (mac-daemon/selector-repair.ts); null — занято. */
+export function holdShopRunner(): Promise<(() => void) | null> {
+  runner ??= new ShopRunner(process.env);
+  return runner.hold();
 }
 
 export async function closeShopRunner(): Promise<void> {
@@ -500,7 +691,7 @@ async function cli(args: string[]) {
   const [command, ...rest] = args;
   if (command === "login" || command === "probe") {
     const dir = env.SHOP_PROFILE_DIR;
-    if (command === "login" && dir && isAbsolute(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+    ensureLoginProfileDir(command, dir);
     const profile = checkShopProfile(dir);
     const { launchPlaywrightShop } = await import("./shop-playwright.ts");
     const browser = await launchPlaywrightShop(env, profile, { headless: false });
@@ -508,14 +699,32 @@ async function cli(args: string[]) {
     await page.openHome({ service: rest[0] === "eda" || rest[0] === "market" ? rest[0] : "lavka" });
     if (command === "login") {
       console.log("Войди в Яндекс, выбери адрес доставки и проверь карту в открывшемся окне сам. Когда закончишь — нажми Enter здесь.");
-      await new Promise<void>((resolve) => process.stdin.once("data", () => resolve()));
+      await waitForEnter();
     } else {
       console.log("Открой в окне нужную страницу (корзина, оформление, заказ) и нажми Enter здесь.");
-      await new Promise<void>((resolve) => process.stdin.once("data", () => resolve()));
+      await waitForEnter();
       console.log(`guard: ${await page.guard()}`);
       console.log(await page.probe());
     }
     await browser.close();
+    return;
+  }
+  if (command === "selfcheck") {
+    // Для починщика селекторов: только чтение, без окна и без ожидания Enter.
+    const service = rest[0] === "eda" || rest[0] === "market" ? rest[0] : "lavka";
+    const profile = checkShopProfile(env.SHOP_PROFILE_DIR);
+    const { runSelfcheck } = await import("./shop-selfcheck.ts");
+    console.log(JSON.stringify(await runSelfcheck(service, env, profile)));
+    return;
+  }
+  if (command === "eda-places") {
+    const query = normalizeShopQuery(rest[0]);
+    const max = rest[1] === undefined ? undefined : Number(rest[1]);
+    if (!query || (max !== undefined && !isShopMaxEta(max))) throw new Error("usage: bun mac-daemon/shop.ts eda-places \"шаверма\" [45]");
+    const local = new ShopRunner({ ...env, SHOP_ENABLED: "true" }, { launch: async (e, d) => (await import("./shop-playwright.ts")).launchPlaywrightShop(e, d, { headless: false }) });
+    const out = await local.run({ op: "places", service: "eda", query, ...(max !== undefined ? { max_eta_min: max } : {}) });
+    await local.close();
+    printOutcome(out);
     return;
   }
   if (command === "quote" || command === "eda-quote" || command === "market-quote") {
@@ -530,15 +739,12 @@ async function cli(args: string[]) {
       ? { op: "quote", service: "eda", place: place!, queries: queries as string[] }
       : { op: "quote", service: command === "market-quote" ? "market" : "lavka", queries: queries as string[] });
     await local.close();
-    console.log(JSON.stringify(out.ok ? out : { ...out, screenshot: out.screenshot ? `<${out.screenshot.length} base64>` : undefined }, null, 2));
+    printOutcome(out);
     return;
   }
-  throw new Error("usage: bun mac-daemon/shop.ts login [eda|market] | probe [eda|market] | quote \"молоко\" | eda-quote \"ресторан\" \"блюдо\" | market-quote \"товар\"");
+  throw new Error("usage: bun mac-daemon/shop.ts login [eda|market] | probe [eda|market] | quote \"молоко\" | eda-quote \"ресторан\" \"блюдо\" | eda-places \"шаверма\" [45] | market-quote \"товар\" | selfcheck [eda|market]");
 }
 
 if (import.meta.main) {
-  cli(process.argv.slice(2)).then(() => process.exit(0)).catch((e) => {
-    console.error(e instanceof ShopError ? e.code : e instanceof Error ? e.message : String(e));
-    process.exit(1);
-  });
+  runCli(() => cli(process.argv.slice(2)), (e) => (e instanceof ShopError ? e.code : null));
 }

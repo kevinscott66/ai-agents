@@ -52,7 +52,7 @@ export const ACTION_TYPES = [
   // затем подпись на телефоне. TAXI_QUOTE и TAXI_STATUS — инлайновые.
   "ORDER_TAXI",
   "TAXI_CANCEL",
-  // Шаг 10a: ORDER_FOOD — Лавка, тот же путь. SHOP_QUOTE и SHOP_STATUS — инлайновые.
+  // Шаг 10a: ORDER_FOOD — Лавка, тот же путь. SHOP_QUOTE, SHOP_PLACES, SHOP_CHECKOUT и SHOP_STATUS — инлайновые.
   "ORDER_FOOD",
   // Шаг 10c: MARKET_PURCHASE — Маркет, тот же путь и те же SHOP_QUOTE/SHOP_STATUS.
   "MARKET_PURCHASE",
@@ -64,6 +64,10 @@ export const ACTION_TYPES = [
   // Напоминания в чат-источник (lib/reminders.ts). LIST_REMINDERS — инлайновый.
   "CREATE_REMINDER",
   "CANCEL_REMINDER",
+  // Слежение за заказом (lib/order-watch.ts). Заводит его само оформление,
+  // уже прошедшее подписанный гейт; модели остаются только чтение и отмена.
+  // LIST_ORDER_WATCH — инлайновый.
+  "CANCEL_ORDER_WATCH",
   // T-701/T-702/T-703: inter-agent mutation actions. ALWAYS approval-gated.
   "GRANT_PERMISSION",
   "UPDATE_AGENT_PROMPT",
@@ -187,11 +191,19 @@ export const CALLER_RESTRICTED: Record<string, string> = {
   ORDER_FOOD: "orchestrator",
   MARKET_PURCHASE: "orchestrator",
   SHOP_QUOTE: "orchestrator",
+  SHOP_PLACES: "orchestrator",
+  SHOP_CHECKOUT: "orchestrator",
   SHOP_STATUS: "orchestrator",
+  SHOP_SET_ADDRESS: "orchestrator",
   ORDER_DELIVERY: "orchestrator",
   DELIVERY_CANCEL: "orchestrator",
   DELIVERY_QUOTE: "orchestrator",
   DELIVERY_STATUS: "orchestrator",
+  // Отложенные проверки: в срок сервер запускает ход от имени владельца.
+  SCHEDULE_FOLLOWUP: "orchestrator",
+  CANCEL_FOLLOWUP: "orchestrator",
+  // Починка селекторов: PR от имени владельца, итог — ход в его личке.
+  SHOP_REPAIR: "orchestrator",
   // Создание канала от имени владельца + назначение админов — действие реального
   // аккаунта; только лид (orchestrator) как контролёр процесса.
   CREATE_TEAM_CHANNEL: "orchestrator",
@@ -437,10 +449,13 @@ export const LOW_FRICTION_ACTIONS: Set<ActionType> = new Set<ActionType>([
  *    Владелец рассчитывает, что публикации пойдут сами; вместо этого копятся
  *    заявки, которых никто не ждёт.
  *
- * Функция — общий рубеж для обоих входов к `setPermission` (команда `/grant` и
- * `POST /api/permissions` в Mini App) и для отчёта `/perms`: строка, которую
- * один вход отказывается писать, не должна проходить через другой и потом
- * выглядеть в отчёте как выданное право.
+ * Функция — общий рубеж для ВСЕХ входов к `setPermission`: команда `/grant`,
+ * `POST /api/permissions` в Mini App и действие `GRANT_PERMISSION`
+ * (`dispatch/permissions.ts`), которым право выдаёт сам агент. Плюс отчёт
+ * `/perms`. Строка, которую один вход отказывается писать, не должна проходить
+ * через другой и потом выглядеть в отчёте как выданное право. (Аудит
+ * 2026-09-11: здесь было «обоих входов» — третий появился позже, и запись «два»
+ * читалась как перечисление, то есть как обещание, что других нет.)
  *
  * Возвращает `null`, если строка подействует, иначе — причину с адресом в коде.
  */

@@ -2,8 +2,8 @@
  * ShopPage Яндекс Маркета поверх Playwright. Вкладка и помощники — общие с
  * Лавкой (shop-playwright.ts), вёрстка — только из market-selectors.ts.
  *
- * Товар — `<modelId>-<sku>`: у Маркета одна модель продаётся в разных
- * вариантах, и заказываем ровно подписанный sku. Если после «В корзину»
+ * Товар — номер карточки `/card/<slug>/<номер>`: у каждого варианта (объём,
+ * цвет) своя карточка, заказываем ровно подписанную. Если после «В корзину»
  * страница просит выбрать размер или цвет — отказ `options_required`, если
  * открылось своё окно — окно закрывается, товар не заказывается. Оплата — только
  * сохранённой картой: «при получении» агент не выбирает.
@@ -27,7 +27,7 @@ import {
 import { hostMatches, NAV_TIMEOUT_MS, pageKit, QTY_CLICKS_MAX, UI_TIMEOUT_MS, visible, wait } from "./shop-playwright.ts";
 import type { CartRow, SearchCard, ShopPage } from "./shop.ts";
 
-/** `/card/<slug>/<modelId>?sku=<sku>` или `/product--<slug>/<modelId>?sku=<sku>` → `modelId-sku`. */
+/** `/card/<slug>/<номер>?…` → номер карточки. Параметры ссылки (рекламные метки, оффер) не важны. */
 export function marketIdFromHref(href: unknown): string | null {
   if (typeof href !== "string") return null;
   let url: URL;
@@ -37,33 +37,44 @@ export function marketIdFromHref(href: unknown): string | null {
     return null;
   }
   if (url.origin !== MARKET_ORIGIN) return null;
-  const m = url.pathname.match(/^\/(?:card\/[^/]+|product--[^/]+|product)\/(\d+)\/?$/);
-  const sku = url.searchParams.get("sku");
-  if (!m || !sku) return null;
-  const id = `${m[1]}-${sku}`;
-  return MARKET_PRODUCT_ID.test(id) ? id : null;
+  const m = url.pathname.match(/^\/card\/[^/]+\/(\d+)\/?$/);
+  return m && MARKET_PRODUCT_ID.test(m[1]!) ? m[1]! : null;
 }
 
-export const marketUrlFor = (id: string) => {
-  const [model, sku] = id.split("-");
-  return marketProductUrl(model!, sku!);
-};
+export const marketUrlFor = (id: string) => marketProductUrl(id);
 
 export function marketShopPage(page: any): ShopPage {
-  const { bodyText, goto, text, totalNear, screenshot, probe, stateFromBody } = pageKit(page);
+  const { bodyText, goto, text, screenshot, probe, stateFromBody } = pageKit(page);
   const offer = () => page.locator(MARKET_TESTID.productOffer).first();
+  // Счётчик на карточке — input: текста в нём нет, количество лежит в value.
   const qtyNow = async (): Promise<number> => {
     const value = page.locator(MARKET_TESTID.qtyValue).first();
     if (!(await visible(value))) return 0;
-    const raw = String((await value.innerText().catch(() => "")) ?? "").trim();
+    const raw = String((await value.inputValue().catch(() => "")) ?? "").trim();
     return /^\d{1,3}$/.test(raw) ? Number(raw) : -1;
   };
+  const qtyButton = (name: RegExp) =>
+    page.locator(MARKET_TESTID.qtyCounter).first().getByRole("button", { name }).first();
   const dialogOpen = () => visible(page.getByRole("dialog").first(), 1_500);
-  const payLocator = () => page.getByRole("button", { name: MARKET_TEXT.pay }).first();
+  // Кнопка оплаты подписана data-auto; текст на ней меняется вместе со способом
+  // оплаты («Оплатить», «Пополнить и оплатить»), поэтому текст — только запасной путь.
+  const payLocator = () =>
+    page.locator(MARKET_TESTID.payButton).first()
+      .or(page.getByRole("button", { name: MARKET_TEXT.pay }).first());
+
+  /** Подпись выбранного способа оплаты — отмеченный `input` в панели способов. */
+  const chosenPayment = async (): Promise<string> =>
+    await page.evaluate((sel: typeof MARKET_TESTID) => {
+      const doc = document;
+      const panel = doc.querySelector(sel.paymentPanel);
+      const checked = panel?.querySelector('input:checked, [aria-checked="true"]');
+      const method = checked?.closest(sel.paymentMethod) ?? checked?.parentElement;
+      return String((method as HTMLElement | null)?.innerText ?? "").replace(/\s+/g, " ").trim();
+    }, MARKET_TESTID);
 
   return {
     openHome: () => goto(`${MARKET_ORIGIN}/`),
-    findPlace: async () => null,
+    places: async () => [],
     openSearch: (_target, query) => goto(marketSearchUrl(query)),
     openProduct: (_target, item) => goto(marketUrlFor(item.id)),
     openCart: () => goto(MARKET_CART_URL),
@@ -81,7 +92,7 @@ export function marketShopPage(page: any): ShopPage {
     async address() {
       const label = await text(page.locator(MARKET_TESTID.addressButton).first());
       if (!label || MARKET_TEXT.addressUnset.test(label)) return null;
-      const s = label.replace(/\s+/g, " ").trim();
+      const s = label.replace(/\s+/g, " ").replace(MARKET_TEXT.addressPrefix, "").replace(/ ,/g, ",").trim();
       return s.length >= 3 && s.length <= 200 ? s : null;
     },
     // Доставка Маркета зависит от продавцов и видна только на оформлении.
@@ -115,7 +126,8 @@ export function marketShopPage(page: any): ShopPage {
       if (!name) return { name: null, price_rub: null, available: false };
       const offerVisible = await visible(offer(), UI_TIMEOUT_MS);
       const offerText = offerVisible ? (await text(offer())) ?? "" : "";
-      const price = parseShopRubles(await text(offer().locator(MARKET_TESTID.productPrice).first()));
+      // Цена оффера — первая на странице: ниже идут цены похожих товаров.
+      const price = parseShopRubles(await text(page.locator(MARKET_TESTID.productPrice).first()));
       return { name, price_rub: price, available: offerVisible && !MARKET_TEXT.outOfStock.test(offerText) };
     },
     async setProductQty(qty) {
@@ -134,7 +146,7 @@ export function marketShopPage(page: any): ShopPage {
         current = await qtyNow();
       }
       for (let i = 0; i < QTY_CLICKS_MAX && current >= 0 && current !== qty; i++) {
-        const button = page.locator(current < qty ? MARKET_TESTID.qtyPlus : MARKET_TESTID.qtyMinus).first();
+        const button = qtyButton(current < qty ? MARKET_TEXT.qtyPlus : MARKET_TEXT.qtyMinus);
         if (!(await visible(button))) break;
         await button.click();
         await wait(500);
@@ -151,7 +163,8 @@ export function marketShopPage(page: any): ShopPage {
         const doc = (globalThis as any).document;
         return [...doc.querySelectorAll(sel.cartItem)].slice(0, 60).map((row: any) => ({
           href: row.querySelector(sel.cartItemLink)?.getAttribute("href") ?? null,
-          qty: String(row.querySelector(sel.cartItemQty)?.innerText ?? row.querySelector(sel.cartItemQty)?.value ?? ""),
+          // Количество в корзине — тоже input: value, и только потом текст.
+          qty: String(row.querySelector(sel.cartItemQty)?.value || row.querySelector(sel.cartItemQty)?.innerText || ""),
           price: String(row.querySelector(sel.cartItemPrice)?.innerText ?? ""),
         }));
       }, MARKET_TESTID);
@@ -176,11 +189,19 @@ export function marketShopPage(page: any): ShopPage {
     },
     async checkout() {
       const body = await bodyText();
+      // Способ оплаты ищем среди выбранного, а не по всей странице: в списке
+      // рядом лежат и чужие карты, и «Оплата при получении», и от их наличия
+      // ничего не зависит — платит тот способ, который отмечен.
+      const chosen = await chosenPayment();
+      // Подписи нет — значит и предупреждения о нехватке денег нет.
+      const payText = (await text(payLocator())) ?? "";
       return {
-        total_rub: parseShopRubles(await totalNear(MARKET_TEXT.total)),
+        total_rub: parseShopRubles(await text(page.locator(MARKET_TESTID.checkoutTotal).first())),
         blocked: MARKET_TEXT.checkoutBlocked.test(body),
-        // Выбрана оплата при получении — это не сохранённая карта, способ оплаты агент не меняет.
-        saved_card: MARKET_TEXT.savedCard.test(body) && !MARKET_TEXT.payOnDelivery.test(body),
+        saved_card:
+          MARKET_TEXT.savedCard.test(chosen) &&
+          !MARKET_TEXT.payOnDelivery.test(chosen) &&
+          !MARKET_TEXT.topUpNeeded.test(payText),
         pay_button: await visible(payLocator(), UI_TIMEOUT_MS),
       };
     },

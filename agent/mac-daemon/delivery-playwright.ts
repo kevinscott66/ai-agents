@@ -3,100 +3,76 @@
  * профилем доставки. Устроен как taxi-playwright.ts: playwright-core грузится
  * динамически, никаких «стелс»-приёмов, капча — остановка и скриншот.
  *
- * Локаторы НЕ сверены (см. delivery-selectors.ts).
+ * Что сверено, а что нет — в delivery-selectors.ts.
  */
 import { parseEtaMinutes, TAXI_SCREENSHOT_B64_MAX } from "../lib/taxi.ts";
-import { DELIVERY_TARIFFS, DELIVERY_TARIFF_KEYS, type DeliveryTariff } from "../lib/delivery.ts";
+import { DELIVERY_TARIFF_KEYS, type DeliveryTariff } from "../lib/delivery.ts";
 import {
   DELIVERY_CAPTCHA_FRAME,
   DELIVERY_CAPTCHA_TEXT,
   DELIVERY_CAPTCHA_URL,
   DELIVERY_ETA_TEXT,
   DELIVERY_LOGIN_HOSTS,
+  DELIVERY_OFFER_ETA,
+  DELIVERY_OFFER_INPUT,
+  DELIVERY_OFFERS,
   DELIVERY_ORDER_HOSTS,
+  DELIVERY_PRICE_POLL,
   DELIVERY_START_URL,
   DELIVERY_STATE_TEXT,
-  DELIVERY_SUGGESTION_ROLES,
   DELIVERY_TEXT,
 } from "./delivery-selectors.ts";
 import type { DeliveryBrowser, DeliveryEnv, DeliveryPage, DeliveryTariffRow } from "./delivery.ts";
 import { parseTariffCard } from "./taxi.ts";
-
-const PLAYWRIGHT = "playwright-core";
-const NAV_TIMEOUT_MS = 30_000;
-const UI_TIMEOUT_MS = 8_000;
-const BODY_TEXT_MAX = 20_000;
-
-const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+import {
+  ariaProbe,
+  bodyText as pageBodyText,
+  fillAddress,
+  hostMatches,
+  jpegScreenshot,
+  launchProfileChrome,
+  NAV_TIMEOUT_MS,
+  UI_TIMEOUT_MS,
+  visible,
+  wait,
+  waitFor,
+} from "./playwright-kit.ts";
 
 export async function launchPlaywrightDelivery(env: DeliveryEnv, profileDir: string, opts: { headless?: boolean } = {}): Promise<DeliveryBrowser> {
-  let pw: any;
-  try {
-    pw = await import(PLAYWRIGHT);
-  } catch {
-    throw new Error("browser_unavailable");
-  }
-  let context: any;
-  try {
-    context = await pw.chromium.launchPersistentContext(profileDir, {
-      channel: env.DELIVERY_BROWSER_CHANNEL || "chrome",
-      headless: opts.headless ?? env.DELIVERY_HEADLESS === "true",
-      viewport: { width: 1024, height: 720 },
-      locale: "ru-RU",
-      timezoneId: "Europe/Moscow",
-      acceptDownloads: false,
-    });
-  } catch {
-    throw new Error("browser_unavailable");
-  }
-  const raw = context.pages()[0] ?? (await context.newPage());
-  raw.setDefaultTimeout(UI_TIMEOUT_MS);
-  raw.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
+  const { context, page: raw } = await launchProfileChrome(profileDir, {
+    channel: env.DELIVERY_BROWSER_CHANNEL || "chrome",
+    headless: opts.headless ?? env.DELIVERY_HEADLESS === "true",
+    viewport: { width: 1024, height: 720 },
+  });
   const page = playwrightDeliveryPage(raw);
   return { page: () => page, close: () => context.close() };
 }
 
-function hostMatches(url: string, hosts: RegExp[]): boolean {
-  try {
-    const u = new URL(url);
-    return u.protocol === "https:" && hosts.some((h) => h.test(u.hostname));
-  } catch {
-    return false;
-  }
-}
-
-async function visible(locator: any, timeout = 0): Promise<boolean> {
-  try {
-    if (timeout) await locator.waitFor({ state: "visible", timeout });
-    return await locator.isVisible();
-  } catch {
-    return false;
-  }
-}
-
 export function playwrightDeliveryPage(page: any): DeliveryPage {
-  const bodyText = async (): Promise<string> => {
-    try {
-      return String(await page.locator("body").innerText({ timeout: UI_TIMEOUT_MS })).slice(0, BODY_TEXT_MAX);
-    } catch {
-      return "";
-    }
-  };
+  const bodyText = () => pageBodyText(page);
   const field = (name: RegExp) =>
     page.getByRole("textbox", { name }).or(page.getByPlaceholder(name)).first();
   const orderLocator = () => page.getByRole("button", { name: DELIVERY_TEXT.order }).first();
+  /** Варианты срока: значение radio и текст ближайшего предка, где этот radio единственный. */
+  const readOffers = (): Promise<Array<{ value: string; checked: boolean; text: string }>> =>
+    page.evaluate((selector: string) => {
+      const doc = (globalThis as any).document;
+      return [...doc.querySelectorAll(selector)].map((input: any) => {
+        let box: any = input;
+        while (box.parentElement && box.parentElement.querySelectorAll(selector).length === 1) box = box.parentElement;
+        return { value: String(input.value), checked: input.checked === true, text: String(box.innerText ?? "").replace(/\s+/g, " ").slice(0, 200) };
+      });
+    }, DELIVERY_OFFER_INPUT).catch(() => []);
+  const offerEta = (text: string): number | null => {
+    const m = text.match(DELIVERY_OFFER_ETA);
+    if (!m || (!m[1] && !m[2])) return null;
+    return Number(m[1] ?? 0) * 60 + Number(m[2] ?? 0);
+  };
 
   return {
     async open() {
       await page.goto(DELIVERY_START_URL, { waitUntil: "domcontentloaded" });
       await page.waitForLoadState("load", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
-      const tab = page.getByRole("tab", { name: DELIVERY_TEXT.tab })
-        .or(page.getByRole("button", { name: DELIVERY_TEXT.tab }))
-        .or(page.getByRole("link", { name: DELIVERY_TEXT.tab })).first();
-      if (await visible(tab, 3_000)) {
-        await tab.click();
-        await wait(700);
-      }
     },
     url: () => String(page.url()),
     async guard() {
@@ -111,65 +87,54 @@ export function playwrightDeliveryPage(page: any): DeliveryPage {
       return "ok";
     },
     async setRoute(from, to) {
-      for (const [name, address] of [[DELIVERY_TEXT.from, from], [DELIVERY_TEXT.to, to]] as const) {
-        const input = field(name);
+      const boxes = page.getByRole("textbox", { name: DELIVERY_TEXT.address });
+      for (const [i, address] of [[0, from], [1, to]] as const) {
+        const input = boxes.nth(i);
         if (!(await visible(input, UI_TIMEOUT_MS))) return false;
-        await input.click();
-        await input.fill("");
-        await input.fill(address);
+        if (!(await fillAddress(page, input, address))) return false;
         if (DELIVERY_TEXT.addressNotFound.test(await bodyText())) return false;
-        let picked = false;
-        for (const role of DELIVERY_SUGGESTION_ROLES) {
-          const option = page.getByRole(role).first();
-          if (await visible(option, role === DELIVERY_SUGGESTION_ROLES[0] ? UI_TIMEOUT_MS : 1_000)) {
-            await option.click();
-            picked = true;
-            break;
-          }
-        }
-        if (!picked) return false;
-        await wait(700);
       }
-      await page.waitForLoadState("networkidle", { timeout: UI_TIMEOUT_MS }).catch(() => {});
+      await waitFor(async () => (await readOffers()).some((o) => /₽/.test(o.text)), DELIVERY_PRICE_POLL.attempts, DELIVERY_PRICE_POLL.intervalMs);
       return true;
     },
     async tariffs() {
-      const labels = DELIVERY_TARIFF_KEYS.map((k) => [k, DELIVERY_TARIFFS[k]]);
-      const cards: Array<{ tariff: string; text: string; selected: boolean }> = await page.evaluate((pairs: string[][]) => {
-        const doc = (globalThis as any).document;
-        const out: Array<{ tariff: string; text: string; selected: boolean }> = [];
-        const isSelected = (el: any) =>
-          el.getAttribute("aria-selected") === "true" || el.getAttribute("aria-checked") === "true" ||
-          el.getAttribute("aria-pressed") === "true" || /(?:^|[\s_-])(?:selected|active|checked)(?:$|[\s_-])/i.test(String(el.className ?? ""));
-        for (const [tariff, label] of pairs) {
-          const leaf = [...doc.querySelectorAll("body *")].find((el: any) =>
-            el.children.length === 0 && String(el.textContent ?? "").trim() === label && el.getClientRects().length > 0);
-          if (!leaf) continue;
-          let card: any = leaf;
-          for (let i = 0; i < 4 && card && !String(card.innerText ?? "").includes("₽"); i++) card = card.parentElement;
-          if (!card || !String(card.innerText ?? "").includes("₽")) continue;
-          let selected = false;
-          for (let el: any = leaf, i = 0; el && i < 6; el = el.parentElement, i++) selected ||= isSelected(el);
-          out.push({ tariff, text: String(card.innerText).slice(0, 200), selected });
-        }
-        return out;
-      }, labels);
-      return cards
-        .filter((c) => (DELIVERY_TARIFF_KEYS as string[]).includes(c.tariff))
-        .map((c): DeliveryTariffRow => ({ tariff: c.tariff as DeliveryTariff, selected: c.selected === true, ...parseTariffCard(c.text) }));
+      const offers = await readOffers();
+      return DELIVERY_TARIFF_KEYS.flatMap((tariff): DeliveryTariffRow[] => {
+        const offer = offers.find((o) => o.value === DELIVERY_OFFERS[tariff]);
+        if (!offer || !/₽/.test(offer.text)) return [];
+        return [{ tariff, selected: offer.checked, price_rub: parseTariffCard(offer.text).price_rub, eta_min: offerEta(offer.text) }];
+      });
     },
     async selectTariff(tariff) {
-      await page.getByText(DELIVERY_TARIFFS[tariff], { exact: true }).first().click();
+      const value = DELIVERY_OFFERS[tariff];
+      if (!value) return;
+      await page.locator(`${DELIVERY_OFFER_INPUT}[value="${value}"]`).first().check({ force: true }).catch(() => {});
+      await wait(700);
+    },
+    async fillRecipientFromSender() {
+      const sender = page.getByRole("textbox", { name: DELIVERY_TEXT.senderPhone }).first();
+      const recipient = page.getByRole("textbox", { name: DELIVERY_TEXT.recipientPhone }).first();
+      if (!(await visible(sender))) return;
+      const phone = String(await sender.inputValue().catch(() => "")).trim();
+      if (!phone) return;
+      await recipient.scrollIntoViewIfNeeded({ timeout: UI_TIMEOUT_MS }).catch(() => {});
+      if (!(await visible(recipient, UI_TIMEOUT_MS))) return;
+      if (String(await recipient.inputValue().catch(() => "x")).trim()) return;
+      await recipient.click({ timeout: UI_TIMEOUT_MS }).catch(() => {});
+      await recipient.fill(phone, { timeout: UI_TIMEOUT_MS }).catch(() => {});
       await wait(700);
     },
     async contactRequired() {
-      const input = field(DELIVERY_TEXT.contact);
-      if (!(await visible(input, 1_000))) return false;
-      try {
-        return String(await input.inputValue()).trim() === "";
-      } catch {
-        return true;
+      // Телефонов два — отправителя и получателя; пустой любой из них — стоп.
+      for (const input of await page.getByRole("textbox", { name: DELIVERY_TEXT.contact }).all()) {
+        if (!(await visible(input))) continue;
+        try {
+          if (String(await input.inputValue()).trim() === "") return true;
+        } catch {
+          return true;
+        }
       }
+      return false;
     },
     async setComment(comment) {
       const input = field(DELIVERY_TEXT.comment);
@@ -185,9 +150,15 @@ export function playwrightDeliveryPage(page: any): DeliveryPage {
     },
     async orderButton() {
       const button = orderLocator();
-      if (!(await visible(button, UI_TIMEOUT_MS))) return null;
+      if (!(await visible(button, UI_TIMEOUT_MS))) {
+        const confirm = page.getByRole("button", { name: DELIVERY_TEXT.confirmData }).first();
+        if (!(await visible(confirm, 1_000))) return null;
+        return { label: "Подтвердите данные", price_rub: null, eta_min: null, blocked: "confirm_data" as const };
+      }
       const label = String(await button.innerText()).replace(/\s+/g, " ").trim().slice(0, 80);
-      return { label, ...parseTariffCard(label) };
+      const disabled = await button.isDisabled().catch(() => false);
+      const blocked = !disabled ? null : DELIVERY_TEXT.addPayment.test(label) ? "payment" as const : "disabled" as const;
+      return { label, ...parseTariffCard(label), blocked };
     },
     async clickOrder() {
       await orderLocator().click();
@@ -207,24 +178,7 @@ export function playwrightDeliveryPage(page: any): DeliveryPage {
       if (await visible(confirm, 3_000)) await confirm.click();
       return "clicked";
     },
-    async screenshot() {
-      for (const quality of [45, 30, 18]) {
-        try {
-          const buf: Uint8Array = await page.screenshot({ type: "jpeg", quality, scale: "css", timeout: UI_TIMEOUT_MS });
-          const b64 = Buffer.from(buf).toString("base64");
-          if (b64.length <= TAXI_SCREENSHOT_B64_MAX) return b64;
-        } catch {
-          return null;
-        }
-      }
-      return null;
-    },
-    async probe() {
-      try {
-        return String(await page.locator("body").ariaSnapshot({ timeout: UI_TIMEOUT_MS }));
-      } catch (e) {
-        return `probe failed: ${e instanceof Error ? e.message : String(e)}`;
-      }
-    },
+    screenshot: () => jpegScreenshot(page, TAXI_SCREENSHOT_B64_MAX),
+    probe: () => ariaProbe(page),
   };
 }

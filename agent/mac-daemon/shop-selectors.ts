@@ -32,6 +32,12 @@ export const LAVKA_TESTID = {
   qtyPlus: '[data-testid="add-spin-button"]',
   qtyMinus: '[data-testid="remove-spin-button"]',
   addressButton: '[data-testid="header-address-selection-button"]',
+  // окно «Мои адреса»: открывается кликом по адресу в шапке
+  addressModal: '[data-testid="my-addresses-modal"]',
+  addressItem: '[data-testid="address-item"]',
+  // в строке адреса есть ещё карандаш «изменить» — кликаем строго по подписи
+  addressItemTitle: '[data-testid="item-title"]',
+  addressModalClose: '[data-testid="modal-close-button"]',
   signIn: '[data-testid="sign-in"]',
   miniCart: '[data-testid="mini-cart"]',
   miniCartDelivery: '[data-testid="min-cart-delivery-conditions-title"]',
@@ -44,8 +50,10 @@ export const LAVKA_TEXT = {
   cartEmpty: /В корзине пока ничего нет/i,
   outOfStock: /Нет в наличии|Закончил(?:ся|ась|ось|ись)|Раскупили/i,
   checkout: /^(?:Оформить(?: заказ)?|К оформлению|Перейти к оформлению)/,
+  /** Корзина стала отдельной страницей: до экрана оплаты ещё один переход. */
+  toPayment: /^Перейти к оплате/,
   pay: /^(?:Оплатить|Заказать и оплатить|Оформить и оплатить)/,
-  savedCard: /(?:•{2,}|\*{2,}|··)\s?\d{4}|Сбер ?Пэй|SberPay|Яндекс Пэй|Yandex Pay/i,
+  savedCard: /(?:•{2,}|\*{2,}|··)\s?\d{4}|(?:MIR|Мир|Visa|Mastercard)\s?·\s?\d{4}(?!\d)|Сбер ?Пэй|SberPay|Яндекс Пэй|Yandex Pay/i,
   total: /^Итого/i,
   checkoutBlocked: /Минимальная сумма заказа|Сейчас не доставляем|Лавка закрыта|Не доставляем по этому адресу/i,
 };

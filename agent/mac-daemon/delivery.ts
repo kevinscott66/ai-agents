@@ -9,8 +9,13 @@
  * Отличия от такси:
  *   - свой профиль Chrome (DELIVERY_PROFILE_DIR): Chrome запирает профиль, а
  *     совпадение с TAXI_PROFILE_DIR — отказ `profile_shared`;
- *   - контакты отправителя и получателя агент не вводит: если страница их
- *     требует — отказ `contact_required`;
+ *   - телефон отправителя подставляет Яндекс Go, пустой телефон получателя
+ *     заполняется им же; если страница требует ещё контакт — отказ
+ *     `contact_required`;
+ *   - способ оплаты агент не добавляет: кнопка «Заказать» без него
+ *     неактивна — отказ `payment_needs_owner`;
+ *   - данные аккаунта (имя, телефон, код из SMS) подтверждает владелец: пока
+ *     вместо «Заказать» кнопка «Подтвердите данные» — отказ `data_confirm_needs_owner`;
  *   - комментарий курьеру вписывается только подписанный.
  *
  * Выключено, пока владелец не поставит DELIVERY_ENABLED=true. Вход — только
@@ -22,7 +27,6 @@
  *   bun mac-daemon/delivery.ts quote "откуда" "куда"
  */
 import { isAbsolute, resolve } from "node:path";
-import { mkdirSync } from "node:fs";
 import {
   DELIVERY_SESSION_TTL_MS,
   normalizeDeliveryAddress,
@@ -34,8 +38,8 @@ import {
   type DeliveryRequest,
   type DeliveryTariff,
 } from "../lib/delivery.ts";
-import { DELIVERY_STATE_POLL } from "./delivery-selectors.ts";
-import { checkTaxiProfile, TaxiError } from "./taxi.ts";
+import { DELIVERY_BUTTON_POLL, DELIVERY_STATE_POLL } from "./delivery-selectors.ts";
+import { ensureLoginProfileDir, printOutcome, profileDirProblem, runCli, runnerErrorCode, waitForEnter, settleOrRelease } from "./runner-kit.ts";
 
 export interface DeliveryEnv {
   DELIVERY_ENABLED?: string;
@@ -63,11 +67,21 @@ export interface DeliveryPage {
   setRoute(from: string, to: string): Promise<boolean>;
   tariffs(): Promise<DeliveryTariffRow[]>;
   selectTariff(tariff: DeliveryTariff): Promise<void>;
+  /**
+   * Пустой телефон получателя заполнить телефоном отправителя — это номер
+   * аккаунта владельца, его подставляет сам Яндекс Go. Значение не читается
+   * наружу: только из поля в поле.
+   */
+  fillRecipientFromSender?(): Promise<void>;
   /** Видно ли пустое обязательное поле контакта. */
   contactRequired(): Promise<boolean>;
   /** Вписать комментарий и прочитать обратно; false — поля нет или не вписалось. */
   setComment(comment: string): Promise<boolean>;
-  orderButton(): Promise<{ label: string; price_rub: number | null } | null>;
+  /**
+   * blocked: «payment» — кнопка неактивна и просит способ оплаты, «confirm_data» — вместо
+   * «Заказать» просят подтвердить данные аккаунта, «disabled» — неактивна по другой причине.
+   */
+  orderButton(): Promise<{ label: string; price_rub: number | null; blocked?: "payment" | "confirm_data" | "disabled" | null } | null>;
   clickOrder(): Promise<void>;
   orderState(): Promise<{ state: DeliveryOrderState; eta_min: number | null }>;
   cancelOrder(): Promise<"clicked" | "unavailable">;
@@ -99,13 +113,9 @@ class PriceChanged extends DeliveryError {
  * два Chrome на одном профиле не живут, а вход в разные аккаунты смешается.
  */
 export function checkDeliveryProfile(env: DeliveryEnv, uid: number | undefined = process.getuid?.()): string {
-  let dir: string;
-  try {
-    dir = checkTaxiProfile(env.DELIVERY_PROFILE_DIR, uid);
-  } catch (e) {
-    if (e instanceof TaxiError && (e.code === "profile_missing" || e.code === "profile_insecure")) throw new DeliveryError(e.code);
-    throw e;
-  }
+  const problem = profileDirProblem(env.DELIVERY_PROFILE_DIR, uid);
+  if (problem) throw new DeliveryError(problem);
+  const dir = env.DELIVERY_PROFILE_DIR!;
   const taxi = env.TAXI_PROFILE_DIR;
   if (taxi && isAbsolute(taxi) && resolve(taxi) === resolve(dir)) throw new DeliveryError("profile_shared");
   return dir;
@@ -113,7 +123,7 @@ export function checkDeliveryProfile(env: DeliveryEnv, uid: number | undefined =
 
 const SCREENSHOT_CODES: readonly DeliveryFailCode[] = [
   "login_required", "captcha", "unexpected_page", "address_not_found", "tariff_unavailable",
-  "contact_required", "comment_unavailable", "price_unreadable", "price_changed", "order_button_missing",
+  "contact_required", "comment_unavailable", "price_unreadable", "price_changed", "order_button_missing", "data_confirm_needs_owner",
 ];
 
 const ENDED: readonly DeliveryOrderState[] = ["none", "delivered", "cancelled"];
@@ -124,12 +134,23 @@ interface Session {
   expires: number;
 }
 
+/**
+ * Жёсткий срок одного запроса к исполнителю. Мост ждёт MAC_DELIVERY_TIMEOUT_MS (90 с) и
+ * по таймауту шлёт отмену; срок нужен на случай, когда отмена не дошла
+ * (сокет порвался). Больше мостового — чтобы сервер никогда не получил от демона
+ * отказ раньше собственного таймаута.
+ */
+export const DELIVERY_RUN_DEADLINE_MS = 120_000;
+
 export interface DeliveryRunnerOptions {
   launch?: DeliveryLauncher;
   checkProfile?: (env: DeliveryEnv) => string;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   idleMs?: number;
+  deadlineMs?: number;
+  /** Только для тестов: сколько ждать, что зависший шаг закончится сам. */
+  selfSettleMs?: number;
 }
 
 export class DeliveryRunner {
@@ -142,6 +163,10 @@ export class DeliveryRunner {
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly idleMs: number;
+  private readonly deadlineMs: number;
+  private readonly selfSettleMs: number | undefined;
+  /** Растёт на каждом close(): запуск, закончившийся после закрытия, — сирота. */
+  private generation = 0;
 
   constructor(private readonly env: DeliveryEnv, opts: DeliveryRunnerOptions = {}) {
     this.launch = opts.launch ?? (async (e, dir) => (await import("./delivery-playwright.ts")).launchPlaywrightDelivery(e, dir));
@@ -149,6 +174,8 @@ export class DeliveryRunner {
     this.now = opts.now ?? Date.now;
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.idleMs = opts.idleMs ?? 5 * 60_000;
+    this.deadlineMs = opts.deadlineMs ?? DELIVERY_RUN_DEADLINE_MS;
+    this.selfSettleMs = opts.selfSettleMs;
   }
 
   async run(request: DeliveryRequest, signal?: AbortSignal): Promise<DeliveryOutcome> {
@@ -156,10 +183,15 @@ export class DeliveryRunner {
     if (this.busy) return { ok: false, code: "delivery_busy" };
     this.busy = true;
     if (this.idleTimer) clearTimeout(this.idleTimer);
-    let page: DeliveryPage | null = null;
-    try {
+    // Присваивается внутри work — без приведения TS сузил бы до null.
+    let page = null as DeliveryPage | null;
+    const work = (async () => {
       page = await this.page();
-      return await this.dispatch(page, request, signal);
+      return this.dispatch(page, request, signal);
+    })();
+    try {
+      // Зависший шаг не держит замок вечно: см. settleOrRelease.
+      return await settleOrRelease(work, { signal, deadlineMs: this.deadlineMs, selfSettleMs: this.selfSettleMs, release: () => this.close() });
     } catch (e) {
       if (!(e instanceof DeliveryError)) throw e;
       if (e.code === "session_unknown" || e.code === "delivery_busy") return { ok: false, code: e.code };
@@ -179,6 +211,7 @@ export class DeliveryRunner {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = null;
     this.session = null;
+    this.generation++;
     const browser = this.browser;
     this.browser = null;
     await browser?.close().catch(() => {});
@@ -193,12 +226,21 @@ export class DeliveryRunner {
   private async page(): Promise<DeliveryPage> {
     if (!this.browser) {
       const dir = this.checkProfile(this.env);
+      const generation = this.generation;
+      let browser: DeliveryBrowser;
       try {
-        this.browser = await this.launch(this.env, dir);
+        browser = await this.launch(this.env, dir);
       } catch (e) {
         if (e instanceof DeliveryError) throw e;
         throw new DeliveryError("browser_unavailable");
       }
+      // Запуск завис, исполнитель тем временем закрыли и отпустили замок —
+      // поздний браузер никому не нужен, а профиль он держал бы.
+      if (generation !== this.generation) {
+        await browser.close().catch(() => {});
+        throw new DeliveryError("browser_unavailable");
+      }
+      this.browser = browser;
     }
     return this.browser.page();
   }
@@ -234,6 +276,7 @@ export class DeliveryRunner {
           row = (await page.tariffs()).find((r) => r.tariff === request.tariff);
           if (!row?.selected) throw new DeliveryError("tariff_unavailable");
         }
+        await page.fillRecipientFromSender?.();
         if (await page.contactRequired()) throw new DeliveryError("contact_required");
         if (request.comment !== null && !(await page.setComment(request.comment))) throw new DeliveryError("comment_unavailable");
         await this.guard(page);
@@ -295,11 +338,24 @@ export class DeliveryRunner {
   private async currentPrice(page: DeliveryPage, tariff: DeliveryTariff): Promise<number> {
     const row = (await page.tariffs()).find((r) => r.tariff === tariff);
     if (!row?.selected) throw new DeliveryError("tariff_unavailable");
-    const button = await page.orderButton();
+    const button = await this.settledOrderButton(page);
     if (!button) throw new DeliveryError("order_button_missing");
+    if (button.blocked === "payment") throw new DeliveryError("payment_needs_owner");
+    if (button.blocked === "confirm_data") throw new DeliveryError("data_confirm_needs_owner");
+    if (button.blocked) throw new DeliveryError("order_button_missing");
     const prices = [row.price_rub, button.price_rub].filter((p): p is number => p !== null);
     if (!prices.length) throw new DeliveryError("price_unreadable");
     return Math.max(...prices);
+  }
+
+  /** Кнопка без причины отказа (нет её или неактивна молча) — перечитать: страница ещё дорисовывается. */
+  private async settledOrderButton(page: DeliveryPage): ReturnType<DeliveryPage["orderButton"]> {
+    let button = await page.orderButton();
+    for (let i = 1; i < DELIVERY_BUTTON_POLL.attempts && (!button || button.blocked === "disabled"); i++) {
+      await this.sleep(DELIVERY_BUTTON_POLL.intervalMs);
+      button = await page.orderButton();
+    }
+    return button;
   }
 
   private async pollState(page: DeliveryPage, done: (s: DeliveryOrderState) => boolean): Promise<DeliveryOrderState> {
@@ -318,10 +374,7 @@ export class DeliveryRunner {
 }
 
 export function deliveryErrorCode(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  if (message === "invalid_delivery_request") return message;
-  if (message === "assistant_cancelled" || (error instanceof Error && error.name === "AbortError")) return "assistant_cancelled";
-  return "delivery_failed";
+  return runnerErrorCode(error, "invalid_delivery_request", "delivery_failed");
 }
 
 let runner: DeliveryRunner | null = null;
@@ -343,7 +396,7 @@ async function cli(args: string[]) {
   const [command, ...rest] = args;
   if (command === "login" || command === "probe") {
     const dir = env.DELIVERY_PROFILE_DIR;
-    if (command === "login" && dir && isAbsolute(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+    ensureLoginProfileDir(command, dir);
     const profile = checkDeliveryProfile(env);
     const { launchPlaywrightDelivery } = await import("./delivery-playwright.ts");
     const browser = await launchPlaywrightDelivery(env, profile, { headless: false });
@@ -351,7 +404,7 @@ async function cli(args: string[]) {
     await page.open();
     if (command === "login") {
       console.log("Войди в Яндекс Go в открывшемся окне сам. Когда закончишь — нажми Enter здесь.");
-      await new Promise<void>((done) => process.stdin.once("data", () => done()));
+      await waitForEnter();
     } else {
       console.log(`guard: ${await page.guard()}`);
       console.log(`contact_required: ${await page.contactRequired()}`);
@@ -366,15 +419,12 @@ async function cli(args: string[]) {
     const local = new DeliveryRunner({ ...env, DELIVERY_ENABLED: "true" }, { launch: async (e, d) => (await import("./delivery-playwright.ts")).launchPlaywrightDelivery(e, d, { headless: false }) });
     const out = await local.run({ op: "quote", from, to });
     await local.close();
-    console.log(JSON.stringify(out.ok ? out : { ...out, screenshot: out.screenshot ? `<${out.screenshot.length} base64>` : undefined }, null, 2));
+    printOutcome(out);
     return;
   }
   throw new Error("usage: bun mac-daemon/delivery.ts login | probe | quote \"откуда\" \"куда\"");
 }
 
 if (import.meta.main) {
-  cli(process.argv.slice(2)).then(() => process.exit(0)).catch((e) => {
-    console.error(e instanceof DeliveryError ? e.code : e instanceof Error ? e.message : String(e));
-    process.exit(1);
-  });
+  runCli(() => cli(process.argv.slice(2)), (e) => (e instanceof DeliveryError ? e.code : null));
 }

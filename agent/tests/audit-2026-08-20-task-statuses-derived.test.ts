@@ -10,7 +10,7 @@
 //     статус выпадает из total. Ровно это уже случалось (см. комментарий там:
 //     без awaiting_review и cancelled дайджест печатал «(no data)» при живой
 //     доске).
-//   • tools-schema.ts:105 — enum в JSON-схеме UPDATE_TASK_STATUS; агент не
+//   • tools-schema.ts:129 — enum в JSON-схеме UPDATE_TASK_STATUS; агент не
 //     сможет назвать статус, который FSM разрешает.
 //   • miniapp-server.ts, POST /api/tasks/:id/status — отвечает «bad
 //     status» на переход, который updateTaskStatus() принял бы.

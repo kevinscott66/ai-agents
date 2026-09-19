@@ -14,6 +14,7 @@ import type { UserbotHandle } from "../userbot.ts";
 import type { PayloadByType } from "../action-payload.ts";
 import { pinnedChatId, pinnedChatNote, type HandlerResult } from "./helpers.ts";
 import { cancelReminder, createReminder, formatMsk, isoMsk } from "../reminders.ts";
+import { cancelOrderWatch } from "../order-watch.ts";
 import { log } from "../log.ts";
 
 export type MiscHandlerResult = HandlerResult;
@@ -303,6 +304,18 @@ export function handleCreateReminder(
       note: note ?? "напоминание придёт в этот чат в указанное время",
     },
   };
+}
+
+/** CANCEL_ORDER_WATCH — только слежения своего чата. */
+export function handleCancelOrderWatch(
+  payload: PayloadByType["CANCEL_ORDER_WATCH"],
+  ctx: MiscHandlerContext,
+): MiscHandlerResult {
+  const chatId = pinnedChatId(payload.chatId, ctx.chatId, "CANCEL_ORDER_WATCH");
+  if (!cancelOrderWatch(payload.id, chatId)) {
+    return { ok: false, error: "no active order watch with this id in this chat" };
+  }
+  return { ok: true, result: { id: payload.id, status: "cancelled" } };
 }
 
 /** CANCEL_REMINDER — только напоминания своего чата. */
