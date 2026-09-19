@@ -4,6 +4,7 @@ import { isMacOnline, isUserAllowed, sendAssistantToMac } from './mac-bridge.ts'
 import { parseCalendarDay, type CalendarDay } from './assistant-types.ts';
 import { nativeAccess } from './native-access.ts';
 import { logToolCall } from './audit.ts';
+import { createContext, formatContextList, listContexts, MAX_CONTEXTS_PER_CHAT, parseContextCommand, switchContext, type ContextCommand } from './chat-contexts.ts';
 
 export type AssistantCommand = 'morning' | 'evening' | 'calendar' | 'workspace' | 'pair' | 'revoke' | 'alerts_on' | 'alerts_off';
 export function parseAssistantCommand(text: string): AssistantCommand | null {
@@ -57,7 +58,45 @@ export interface AssistantDependencies {
 }
 const defaults: AssistantDependencies = { tasks: listTasksByChat, online: isMacOnline, allowed: isUserAllowed, mac: sendAssistantToMac };
 
+/**
+ * /new, /chats, /switch — контексты разговора (lib/chat-contexts.ts). Работают
+ * в любом чате, куда пускает allowlist: контекст общий для всех участников
+ * группы, как и сама лента. В приложении свои разговоры, там команды не нужны.
+ */
+async function handleContextCommand(ctx: Context, command: ContextCommand, source: 'telegram' | 'native' | undefined): Promise<void> {
+  const chatId = ctx.chat!.id;
+  if (source === 'native') {
+    await ctx.reply('Агент: в приложении новый разговор начинается кнопкой нового чата, а прежние лежат в списке и архиве.');
+    return;
+  }
+  if (command.kind === 'new') {
+    const r = createContext(chatId, command.title);
+    await ctx.reply(r.ok
+      ? `Агент: начал новый контекст №${r.context.number}${command.title ? ` «${r.context.title}»` : ''}. Прежнюю переписку я в нём не вижу; вернуться — /switch <номер>, список — /chats.`
+      : `Агент: в этом чате уже ${MAX_CONTEXTS_PER_CHAT} контекстов, больше не заведу. Переключитесь на существующий: /chats.`);
+    return;
+  }
+  if (command.kind === 'list') {
+    await ctx.reply(formatContextList(listContexts(chatId)));
+    return;
+  }
+  if (!command.target) {
+    await ctx.reply('Агент: укажите номер из /chats, например /switch 1.');
+    return;
+  }
+  const found = switchContext(chatId, command.target);
+  await ctx.reply(found
+    ? `Агент: переключился на №${found.number} «${found.title}» (сообщений: ${found.messages}).`
+    : 'Агент: такого контекста в этом чате нет. Список — /chats.');
+}
+
 export async function handleAssistantCommand(ctx: Context, text: string, options: { source?: 'telegram' | 'native' } = {}, deps = defaults): Promise<boolean> {
+  const contextCommand = parseContextCommand(text);
+  if (contextCommand) {
+    if (!ctx.chat?.id || !ctx.from?.id || ctx.from.is_bot) return true;
+    await handleContextCommand(ctx, contextCommand, options.source);
+    return true;
+  }
   const command = parseAssistantCommand(text);
   if (!command) return false;
   const chatId = ctx.chat?.id;

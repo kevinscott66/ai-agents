@@ -358,3 +358,17 @@ Verification: local installed Claude accepted the readiness command and produced
   `data-testid` / `data-auto` / `data-zone-name` (без текста страницы).
 - На время починки браузер покупок закрыт, покупки получают `shop_busy`.
 
+## Задача на код (CODE_TASK)
+
+Кадр `code_task {id, task: {title, goal}}` (`code-task.ts`): тот же клон
+`SELECTOR_REPAIR_REPO`, свежая ветка `claude/improve-YYYYMMDD-HHMM` от
+`origin/main` в `.claude/worktrees/`, `bun install --frozen-lockfile`,
+`claude --print` с рамкой из `lib/code-task.ts` и одобренным текстом задачи.
+Затем демон сам смотрит `git status`: пусто — `code_task_no_change`, путь вне
+`isCodeTaskPath` — `code_task_forbidden_paths`. Иначе `tsc`, коммит названных
+путей, пуш и `gh pr create`. Мержа нет.
+
+- Одна задача за раз (`code_task_busy`); браузер покупок не трогается.
+- Таймауты: подготовка 5 мин, исполнитель 35 мин, `tsc` 3 мин, git 2 мин.
+- Ответ — одна строка JSON (`CodeTaskOutcome`), вывод исполнителя мосту не уходит.
+- Рабочие копии остаются на диске, удаляет их владелец.

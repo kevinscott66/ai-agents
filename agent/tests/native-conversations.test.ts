@@ -91,3 +91,27 @@ test('rename, archive and delete stay within the owner', () => {
   expect(s.conversations('1').map(c => c.id)).toEqual(['dialog-0000000001']);
  } finally { s.db.close(); }
 });
+test('deleting a conversation removes its turns, attachments and coordinates, not the neighbour\'s', () => {
+ const s = new NativeAccess(':memory:');
+ const upload = (id:string) => ({id,name:'a.txt',mimeType:'text/plain',size:3,data:Buffer.from('abc'),text:'',previews:[]});
+ try {
+  s.createConversation('dialog-0000000001','1','Keep'); s.createConversation('dialog-0000000002','1','Drop');
+  const keep='11111111-1111-1111-1111-111111111111', drop='22222222-2222-2222-2222-222222222222';
+  s.media.put('1',upload(keep)); s.media.put('1',upload(drop));
+  const where={latitude:55.7,longitude:37.6};
+  for (const [t,c,a] of [['turn-000000000001','dialog-0000000001',keep],['turn-000000000002','dialog-0000000002',drop]]) {
+   expect(s.start(t,'d','1','hi',c,[a],where)).toBe('created'); s.append(t,'answer'); s.finish(t,'done');
+  }
+  const usage = () => (s.db.query("SELECT COALESCE(SUM(cost),0) n FROM native_attachments WHERE user_id='1'").get() as {n:number}).n;
+  const before = usage();
+  expect(s.deleteConversation('dialog-0000000002','1')).toBe('deleted');
+  expect(s.get('turn-000000000002','d')).toBeNull();
+  expect(s.media.get(drop,'1')).toBeNull();
+  expect(usage()).toBeLessThan(before);
+  for (const table of ['native_turn_media','conversation_turns','native_output_media','turns'])
+   expect(s.db.query(`SELECT COUNT(*) n FROM ${table} WHERE ${table==='turns'?'id':'turn_id'}='turn-000000000002'`).get()).toEqual({n:0});
+  expect(s.get('turn-000000000001','d')!.replies).toEqual(['answer']);
+  expect(s.media.get(keep,'1')).not.toBeNull();
+  expect(s.db.query("SELECT COUNT(*) n FROM native_turn_media WHERE turn_id='turn-000000000001'").get()).toEqual({n:1});
+ } finally { s.db.close(); }
+});

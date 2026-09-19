@@ -358,7 +358,8 @@ export const MESSAGES_SPEC: ArchiveSpec = {
     "tg_message_id",
     "transport",
   ],
-  optionalColumns: ["kind"],
+  // `context_id` — миграция 068 (контексты Telegram-чата).
+  optionalColumns: ["kind", "context_id"],
 };
 
 export const AGENT_ACTIONS_SPEC: ArchiveSpec = {

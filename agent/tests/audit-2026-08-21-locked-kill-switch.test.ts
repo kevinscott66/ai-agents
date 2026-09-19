@@ -43,6 +43,7 @@ const CASES: Array<[string, ActionType]> = [
   ["orchestrator", "SPAWN_ROLE"],
   ["orchestrator", "MAC_RUN_CLAUDE"],
   ["smm", "PUBLISH_TO_CHANNEL"],
+  ["orchestrator", "CODE_TASK"],
 ];
 
 /**
@@ -72,7 +73,7 @@ describe("locked — рубильник, а не просьба подтверд
     });
   }
 
-  test("все семь — из ALWAYS_APPROVE_ACTIONS, то есть покрыт весь набор", () => {
+  test("все — из ALWAYS_APPROVE_ACTIONS, то есть покрыт весь набор", () => {
     for (const [, a] of CASES) expect(ALWAYS_APPROVE_ACTIONS.has(a)).toBe(true);
     // Набор в коде мог вырасти — тогда этот тест должен вырасти вместе с ним.
     expect(ALWAYS_APPROVE_ACTIONS.size).toBe(CASES.length);

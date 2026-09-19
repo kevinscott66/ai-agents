@@ -57,47 +57,102 @@ struct FluxSettings: Codable, Equatable {
 }
 
 /// All C runtime transitions are serialized off the UI thread. Never retries HTTP mutations.
+/// Смена сети (VPN, Wi‑Fi ↔ сотовая, другой оператор) рвёт соединения туннеля:
+/// монитор пути гасит его, и следующий запрос поднимает туннель заново.
 enum FluxNetwork {
     private static let queue = DispatchQueue(label: "agent.openflux.runtime", qos: .userInitiated)
     // Access only on queue.
     private static var active: FluxSettings?
     private static var endpoint: NWEndpoint?
+    private static var generation = 0
+    private static var monitor: NWPathMonitor?
+    private static var pathSignature: String?
 
-    static func configure(_ configuration: URLSessionConfiguration) async throws {
-        let proxy: NWEndpoint? = try await withCheckedThrowingContinuation { continuation in
+    /// Returns the tunnel generation used for this configuration, or nil for a direct connection.
+    @discardableResult
+    static func configure(_ configuration: URLSessionConfiguration) async throws -> Int? {
+        let prepared: (NWEndpoint, Int)? = try await withCheckedThrowingContinuation { continuation in
             queue.async {
                 do { continuation.resume(returning: try prepare()) }
                 catch { continuation.resume(throwing: error) }
             }
         }
         try Task.checkCancellation()
-        if let proxy {
-            var setting = ProxyConfiguration(socksv5Proxy: proxy)
-            setting.allowFailover = false
-            configuration.proxyConfigurations = [setting]
-            configuration.timeoutIntervalForRequest = 60
-            configuration.timeoutIntervalForResource = 90
+        guard let (proxy, used) = prepared else { return nil }
+        var setting = ProxyConfiguration(socksv5Proxy: proxy)
+        setting.allowFailover = false
+        configuration.proxyConfigurations = [setting]
+        configuration.timeoutIntervalForRequest = 60
+        configuration.timeoutIntervalForResource = 90
+        return used
+    }
+
+    /// Transport-level failure of a proxied request: the tunnel is likely dead after a network change.
+    static func isTunnelFailure(_ error: Error, generation used: Int?) -> Bool {
+        guard used != nil, let error = error as? URLError else { return false }
+        return [.networkConnectionLost, .cannotConnectToHost, .timedOut, .notConnectedToInternet,
+                .secureConnectionFailed, .cannotFindHost, .dnsLookupFailed, .cannotLoadFromNetwork].contains(error.code)
+    }
+
+    /// Drops the tunnel only if nobody has restarted it since `used` was handed out.
+    static func dropTunnel(generation used: Int?) async {
+        guard let used else { return }
+        await withCheckedContinuation { continuation in
+            queue.async {
+                if used == generation { stopTunnel() }
+                continuation.resume()
+            }
         }
     }
 
-    private static func prepare() throws -> NWEndpoint? {
+    // Queue only. Keeps `active`, so the next request restarts the same settings.
+    private static func stopTunnel() {
+        if endpoint != nil { OpenFluxStop() }
+        endpoint = nil
+        generation += 1
+    }
+
+    // Queue only.
+    private static func watchPath() {
+        guard monitor == nil else { return }
+        let watcher = NWPathMonitor()
+        watcher.pathUpdateHandler = { path in
+            let signature = "\(path.status)|" + path.availableInterfaces.map { "\($0.type)-\($0.name)" }.joined(separator: ",")
+                + "|\(path.isExpensive)|\(path.isConstrained)"
+            if let previous = pathSignature, previous != signature { stopTunnel() }
+            pathSignature = signature
+        }
+        watcher.start(queue: queue)
+        monitor = watcher
+    }
+
+    private static func prepare() throws -> (NWEndpoint, Int)? {
         let settings = try FluxSettings.load()
         try settings.validate()
         if settings != active {
-            OpenFluxStop()
-            endpoint = nil
+            stopTunnel()
             active = nil
         }
         guard settings.enabled else { return nil }
-        if let endpoint { return endpoint }
+        watchPath()
+        if let endpoint { return (endpoint, generation) }
         let values = [settings.transport, settings.document, "", "", "127.0.0.1:0", "1.1.1.1:53"]
         let arguments = values.map { strdup($0) }
         defer { arguments.forEach { free($0) } }
         guard arguments.allSatisfy({ $0 != nil }) else { throw AgentError.message("Не хватает памяти для OpenFlux") }
-        if let error = OpenFluxStart(arguments[0], arguments[1], arguments[2], arguments[3], arguments[4], arguments[5]) {
-            OpenFluxFree(error) // Raw transport errors can contain private document URLs or tokens.
-            throw AgentError.message("OpenFlux не подключился. Проверьте настройки и доступность выходной ноды.")
+        // Сразу после смены сети интерфейс ещё поднимается: старт туннеля
+        // (не HTTP-запрос к серверу) безопасно повторить с паузой.
+        var started = false
+        for delay in [0.0, 0.5, 1.5] {
+            if delay > 0 { Thread.sleep(forTimeInterval: delay) }
+            if let error = OpenFluxStart(arguments[0], arguments[1], arguments[2], arguments[3], arguments[4], arguments[5]) {
+                OpenFluxFree(error) // Raw transport errors can contain private document URLs or tokens.
+                OpenFluxStop()
+                continue
+            }
+            started = true; break
         }
+        guard started else { throw AgentError.message("OpenFlux не подключился. Проверьте сеть, настройки и доступность выходной ноды.") }
         guard let raw = OpenFluxSocksAddr() else {
             OpenFluxStop()
             throw AgentError.message("OpenFlux не создал локальное соединение")
@@ -109,14 +164,14 @@ enum FluxNetwork {
             throw AgentError.message("OpenFlux вернул некорректный локальный адрес")
         }
         let result = NWEndpoint.hostPort(host: "127.0.0.1", port: port)
-        active = settings; endpoint = result
-        return result
+        active = settings; endpoint = result; generation += 1
+        return (result, generation)
     }
 
     static func reset() async {
         await withCheckedContinuation { continuation in
             queue.async {
-                OpenFluxStop(); active = nil; endpoint = nil
+                stopTunnel(); OpenFluxStop(); active = nil
                 continuation.resume()
             }
         }
