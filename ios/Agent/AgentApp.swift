@@ -32,6 +32,8 @@ struct ChatLine: Identifiable, Codable {
     private var loadedMoreConversations = false
     @Published var conversationId: String?
     @Published var moreHistory = false
+    /// Сообщение, к которому прокрутить чат (переход из источника записи памяти).
+    @Published var focusMessage: String?
     @Published var remoteBusy = false
     private var boundServer = ""
     private var boundToken: String?
@@ -68,6 +70,20 @@ struct ChatLine: Identifiable, Codable {
         syncGeneration = UUID(); conversationId = id; fresh = false; lines = []; generations = []; draft = ""; firstSequence = nil; moreHistory = false
         UserDefaults.standard.set(id, forKey: "conversation:" + server)
         await synchronize(server: server)
+    }
+    /// Открыть диалог и догрузить историю до сообщения. Не больше 20 страниц, чтобы не качать всё.
+    func reveal(conversation id: String, message: String, server: String) async {
+        if conversationId != id { await selectConversation(id, server: server) }
+        guard conversationId == id else { return }
+        var pages = 0
+        while !lines.contains(where: { $0.id == message }) && moreHistory && pages < 20 {
+            let before = firstSequence
+            await synchronize(server: server, older: true)
+            guard conversationId == id, firstSequence != before else { break }
+            pages += 1
+        }
+        if lines.contains(where: { $0.id == message }) { focusMessage = message }
+        else { error = "Сообщение не найдено в истории диалога" }
     }
     func synchronize(server: String, older: Bool = false) async {
         bind(server: server)
@@ -445,7 +461,10 @@ struct RootView: View {
                     Section {
                         Label("Чат с командой", systemImage: "bubble.left.and.bubble.right")
                         if let conversationId = model.conversationId {
-                            NavigationLink { KnowledgeView(server: server, conversationID: conversationId) } label: { Label("Память", systemImage: "books.vertical") }
+                            NavigationLink { KnowledgeView(server: server, conversationID: conversationId) { conversation, message in
+                                menu = false
+                                Task { await model.reveal(conversation: conversation, message: message, server: server) }
+                            } } label: { Label("Память", systemImage: "books.vertical") }
                         }
                         NavigationLink { PanelView(server: server, onMacStart: { project, task, provider, allowFallback in
                             guard !model.busy && !model.pending && !model.remoteBusy else { throw AgentError.message("Дождитесь завершения текущего запроса") }
@@ -601,6 +620,15 @@ struct RootView: View {
             }.scrollDismissesKeyboard(.interactively)
                 .onChange(of: approvals.visibleItems.count) { _, _ in
                     if let item = approvals.visibleItems.last { proxy.scrollTo("approval-" + item.id, anchor: .bottom) }
+                }
+                .onChange(of: model.focusMessage) { _, value in
+                    guard let value else { return }
+                    Task {
+                        await Task.yield()
+                        if reducedMotion { proxy.scrollTo(value, anchor: .center) }
+                        else { withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(value, anchor: .center) } }
+                        model.focusMessage = nil
+                    }
                 }
                 .onChange(of: model.lines.last?.id) { _, _ in
                     if let id = model.lines.last?.id {

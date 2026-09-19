@@ -77,11 +77,11 @@ export async function nativeApi(req: Request, injectedStore?: NativeAccess): Pro
     const knowledgeMatch=path.match(/^\/api\/native\/conversations\/([a-zA-Z0-9-]{16,64})\/(knowledge|project|proposals|memory)$/);
     if(knowledgeMatch){
       const chat=knowledgeMatch[1];if(!store.conversation(chat,identity.userId))return json({error:'not_found'},404);
-      if(knowledgeMatch[2]==='knowledge'&&req.method==='GET')return json({...store.knowledge.snapshot(identity.userId,chat),memoryState:knowledgeState(store,chat)});
+      if(knowledgeMatch[2]==='knowledge'&&req.method==='GET')return json({...store.knowledge.view(identity.userId,chat),memoryState:knowledgeState(store,chat)});
       if(knowledgeMatch[2]==='project'&&req.method==='POST'){
         if(body.projectId!==null&&(typeof body.projectId!=='string'||body.projectId.length>64))return json({error:'invalid_project'},400);
         store.knowledge.assignProject(identity.userId,chat,body.projectId as string|null);
-        return json(store.knowledge.snapshot(identity.userId,chat));
+        return json(store.knowledge.view(identity.userId,chat));
       }
       if(knowledgeMatch[2]==='memory'&&req.method==='POST'){
         // Владелец правит или удаляет запись сам: {scope,entryId,kind?,text?,remove?,sourceConversationId?}.
@@ -91,7 +91,7 @@ export async function nativeApi(req: Request, injectedStore?: NativeAccess): Pro
         const change=remove?null:{kind:body.kind as 'fact',text:body.text as string};
         const source=typeof body.sourceConversationId==='string'?body.sourceConversationId:undefined;
         const ok=scope==='project'?store.knowledge.editProjectEntry(identity.userId,chat,body.entryId,change,source):store.knowledge.editChatEntry(identity.userId,chat,body.entryId,change);
-        return ok?json({...store.knowledge.snapshot(identity.userId,chat),memoryState:knowledgeState(store,chat)}):json({error:'not_found'},404);
+        return ok?json({...store.knowledge.view(identity.userId,chat),memoryState:knowledgeState(store,chat)}):json({error:'not_found'},404);
       }
       if(knowledgeMatch[2]==='proposals'&&req.method==='POST'){
         if(typeof body.entryId!=='string'||body.entryId.length>64)return json({error:'invalid_entry'},400);
