@@ -153,13 +153,13 @@ export function productIdFromHref(href: unknown): string | null {
   return SHOP_PRODUCT_ID.test(id) ? id : null;
 }
 
-/** Общие приёмы работы со страницей для адаптеров Лавки, Еды и Маркета. */
 /**
  * Сумма в рублях внутри текста. Разряды Еда отбивает тонкими пробелами
  * (U+2009, U+2006), а не только неразрывными: без них «1 317 ₽» читалось как 317.
  */
 export const RUB_AMOUNT = /\d[\d \u00a0\u2000-\u200a\u202f]*(?:[,.]\d{1,2})?\s?₽/;
 
+/** Общие приёмы работы со страницей для адаптеров Лавки, Еды и Маркета. */
 export function pageKit(page: any) {
   const bodyText = () => pageBodyText(page);
   const goto = async (url: string) => {
