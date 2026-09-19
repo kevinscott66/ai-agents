@@ -10,6 +10,13 @@ import SwiftUI
     let server: String
     let conversationID: String
     private let token: String?
+    private var preview = false
+    #if DEBUG
+    init(preview snapshot: KnowledgeSnapshot, projects: [KnowledgeProject]) {
+        server = ""; conversationID = "preview"; token = nil; preview = true
+        self.snapshot = snapshot; self.projects = projects
+    }
+    #endif
     private var currentIdentity: Bool { token != nil && Credentials.read(server: server) == token }
     init(server: String, conversationID: String) {
         self.server = server; self.conversationID = conversationID
@@ -23,7 +30,7 @@ import SwiftUI
         return token
     }
     func refresh() async {
-        guard !loading, !working else { return }
+        guard !loading, !working, !preview else { return }
         loading = true; defer { loading = false }
         do {
             let token = try checkIdentity()
@@ -55,6 +62,12 @@ import SwiftUI
     func createProject(_ title: String) async {
         await mutate { api, token in _ = try await api.createKnowledgeProject(title: title, expectedToken: token) }
     }
+    func save(_ entryID: String, scope: String, kind: String, text: String, source: String? = nil) async {
+        await mutate { api, token in _ = try await api.editKnowledge(entryID, scope: scope, kind: kind, text: text, sourceConversationID: source, conversationID: self.conversationID, expectedToken: token) }
+    }
+    func remove(_ entry: KnowledgeEntry, scope: String) async {
+        await mutate { api, token in _ = try await api.editKnowledge(entry.id, scope: scope, kind: nil, text: nil, sourceConversationID: entry.sourceConversationId, conversationID: self.conversationID, expectedToken: token) }
+    }
     func propose(_ entry: KnowledgeEntry) async {
         await mutate { api, token in try await api.proposeKnowledge(entry.id, conversationID: self.conversationID, expectedToken: token) }
     }
@@ -63,88 +76,111 @@ import SwiftUI
     }
 }
 
+/// Какую запись правит владелец: новая или существующая, в диалоге или в проекте.
+struct KnowledgeDraft: Identifiable {
+    let id = UUID()
+    let scope: String
+    var entryID: String
+    var kind: String
+    var text: String
+    var source: String? = nil
+    let isNew: Bool
+    static func fresh(scope: String) -> KnowledgeDraft {
+        KnowledgeDraft(scope: scope, entryID: "owner-" + String(UUID().uuidString.prefix(8)).lowercased(), kind: "fact", text: "", isNew: true)
+    }
+}
+
 struct KnowledgeView: View {
     @StateObject private var model: KnowledgeModel
     @State private var projectTitle = ""
+    @State private var creatingProject = false
+    @State private var draft: KnowledgeDraft?
     init(server: String, conversationID: String) {
         _model = StateObject(wrappedValue: KnowledgeModel(server: server, conversationID: conversationID))
     }
+    #if DEBUG
+    init(preview: KnowledgeModel) { _model = StateObject(wrappedValue: preview) }
+    #endif
     private var disabled: Bool { model.loading || model.working || model.needsRefresh }
     var body: some View {
         List {
             if let error = model.error {
                 Section {
-                    Text(error).font(.callout).foregroundStyle(.secondary)
+                    Label(error, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.secondary)
                     Button("Обновить память") { Task { await model.refresh() } }.disabled(model.loading || model.working)
                 }
             }
             if let snapshot = model.snapshot {
-                if let state = snapshot.memoryState {
-                    Section {
-                        if state.state == "updating" { Label("Обновляю выжимку…", systemImage: "clock") }
-                        else if ["error", "interrupted", "stale"].contains(state.state) {
-                            Label("Последнюю выжимку не удалось обновить. Сохранённая память доступна; следующая беседа обновит её.", systemImage: "exclamationmark.circle")
-                        }
-                        if state.updated > 0 {
-                            Text("Последняя попытка: " + Date(timeIntervalSince1970: state.updated / 1000).formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary)
-                        }
-                    }.font(.callout).foregroundStyle(.secondary)
-                }
                 Section {
                     Menu {
                         Button("Без проекта") { Task { await model.assign(nil) } }
                         ForEach(model.projects) { project in
                             Button(project.title) { Task { await model.assign(project.id) } }
                         }
+                        Divider()
+                        Button("Новый проект…", systemImage: "folder.badge.plus") { creatingProject = true }
                     } label: {
-                        HStack { Label("Проект", systemImage: "folder"); Spacer(); Text(snapshot.project?.title ?? "Без проекта").foregroundStyle(.secondary); Image(systemName: "chevron.up.chevron.down").font(.caption) }
-                            .frame(minHeight: 44)
+                        HStack {
+                            Label("Проект", systemImage: "folder")
+                            Spacer()
+                            Text(snapshot.project?.title ?? "Без проекта").foregroundStyle(.secondary)
+                            Image(systemName: "chevron.up.chevron.down").font(.caption).foregroundStyle(.secondary)
+                        }.frame(minHeight: 44)
                     }.disabled(disabled)
-                    TextField("Название нового проекта", text: $projectTitle).disabled(disabled)
-                    Button("Создать проект") {
-                        let title = projectTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-                        Task { await model.createProject(title); if model.error == nil { projectTitle = "" } }
-                    }.disabled(disabled || projectTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || projectTitle.utf16.count > 100)
-                } header: { Text("Проект диалога") } footer: {
-                    Text("Объединяйте диалоги вручную. После создания выберите проект. Общая память пополняется только после вашего подтверждения.")
+                    statusRow(snapshot.memoryState)
+                } footer: {
+                    Text("Агенты сами записывают, исправляют и удаляют память. Смахните запись влево, чтобы изменить или удалить её.")
                 }
                 Section {
-                    if snapshot.entries.isEmpty { Text("После содержательного разговора здесь появятся факты, решения и задачи.").foregroundStyle(.secondary) }
+                    if snapshot.entries.isEmpty { Text("Пока пусто. Агенты запомнят факты, решения и задачи из разговора.").foregroundStyle(.secondary) }
                     ForEach(snapshot.entries) { entry in
-                        VStack(alignment: .leading, spacing: 10) {
-                            entryContent(entry)
-                            if snapshot.project != nil {
-                                Button("Предложить в память проекта", systemImage: "arrow.up.doc") { Task { await model.propose(entry) } }.buttonStyle(.borderless).font(.subheadline).frame(minHeight: 44).disabled(disabled)
+                        row(entry)
+                            .swipeActions(edge: .trailing) {
+                                Button("Удалить", systemImage: "trash", role: .destructive) { Task { await model.remove(entry, scope: "conversation") } }
+                                Button("Изменить", systemImage: "pencil") { draft = KnowledgeDraft(scope: "conversation", entryID: entry.id, kind: entry.kind, text: entry.text, isNew: false) }.tint(.gray)
                             }
-                        }.padding(.vertical, 4)
+                            .contextMenu {
+                                Button("Изменить", systemImage: "pencil") { draft = KnowledgeDraft(scope: "conversation", entryID: entry.id, kind: entry.kind, text: entry.text, isNew: false) }
+                                if snapshot.project != nil {
+                                    Button("В память проекта", systemImage: "arrow.up.doc") { Task { await model.save(entry.id, scope: "project", kind: entry.kind, text: entry.text) } }
+                                }
+                                Button("Удалить", systemImage: "trash", role: .destructive) { Task { await model.remove(entry, scope: "conversation") } }
+                            }
                     }
-                } header: { Text("Память этого диалога") } footer: { Text("Краткая выжимка с источниками. Полная переписка остаётся в диалоге.") }
+                    Button("Добавить запись", systemImage: "plus") { draft = .fresh(scope: "conversation") }.disabled(disabled || snapshot.entries.count >= 24)
+                } header: { Text("Этот диалог · \(snapshot.entries.count)") }
                 if let project = snapshot.project {
-                    Section("Предложения для проекта") {
-                        let pending = snapshot.proposals
-                        if pending.isEmpty { Text("Нет предложений на проверку").foregroundStyle(.secondary) }
-                        ForEach(pending) { proposal in
-                            VStack(alignment: .leading, spacing: 10) {
-                                Text(proposal.entry.text).textSelection(.enabled)
-                                sources(proposal.entry.sourceMessageIds)
-                                HStack(spacing: 24) {
-                                    Button("Принять", systemImage: "checkmark") { Task { await model.decide(proposal, accept: true) } }
-                                    Button("Отклонить", systemImage: "xmark") { Task { await model.decide(proposal, accept: false) } }
-                                }.buttonStyle(.borderless).frame(minHeight: 44).disabled(disabled)
-                            }.padding(.vertical, 4)
+                    if !snapshot.proposals.isEmpty {
+                        Section("Ждут решения") {
+                            ForEach(snapshot.proposals) { proposal in
+                                VStack(alignment: .leading, spacing: 8) {
+                                    row(proposal.entry)
+                                    HStack(spacing: 24) {
+                                        Button("Принять", systemImage: "checkmark") { Task { await model.decide(proposal, accept: true) } }
+                                        Button("Отклонить", systemImage: "xmark") { Task { await model.decide(proposal, accept: false) } }
+                                    }.buttonStyle(.borderless).font(.subheadline).frame(minHeight: 36).disabled(disabled)
+                                }
+                            }
                         }
                     }
                     Section {
-                        if snapshot.projectEntries.isEmpty { Text("Подтверждённых записей пока нет").foregroundStyle(.secondary) }
-                        ForEach(snapshot.projectEntries, id: \.projectIdentity) { entry in entryContent(entry).padding(.vertical, 4) }
-                    } header: { Text("Общая память · " + project.title) }
+                        if snapshot.projectEntries.isEmpty { Text("Общих записей пока нет. Агенты перенесут сюда то, что важно для всего проекта.").foregroundStyle(.secondary) }
+                        ForEach(snapshot.projectEntries, id: \.projectIdentity) { entry in
+                            row(entry, shared: entry.sourceConversationId != model.conversationID)
+                                .swipeActions(edge: .trailing) {
+                                    Button("Удалить", systemImage: "trash", role: .destructive) { Task { await model.remove(entry, scope: "project") } }
+                                    Button("Изменить", systemImage: "pencil") { draft = KnowledgeDraft(scope: "project", entryID: entry.id, kind: entry.kind, text: entry.text, source: entry.sourceConversationId, isNew: false) }.tint(.gray)
+                                }
+                        }
+                        Button("Добавить в проект", systemImage: "plus") { draft = .fresh(scope: "project") }.disabled(disabled || snapshot.projectEntries.count >= 100)
+                    } header: { Text("Проект «\(project.title)» · \(snapshot.projectEntries.count)") }
                 }
             } else if !model.loading && model.error == nil {
                 Text("Память ещё не загружена").foregroundStyle(.secondary)
             }
             if model.loading || model.working { HStack { ProgressView(); Text(model.working ? "Сохраняю…" : "Загружаю память…").foregroundStyle(.secondary) } }
         }
-        .navigationTitle("Память диалога")
+        .navigationTitle("Память")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .topBarTrailing) { Button { Task { await model.refresh() } } label: { Image(systemName: "arrow.clockwise") }.accessibilityLabel("Обновить память").disabled(model.loading || model.working) } }
         .task {
@@ -155,19 +191,78 @@ struct KnowledgeView: View {
             }
         }
         .refreshable { await model.refresh() }
-    }
-    private func entryContent(_ entry: KnowledgeEntry) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(entry.kindLabel).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            Text(entry.text).textSelection(.enabled)
-            sources(entry.sourceMessageIds)
+        .alert("Новый проект", isPresented: $creatingProject) {
+            TextField("Название", text: $projectTitle)
+            Button("Создать") {
+                let title = projectTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !title.isEmpty, title.utf16.count <= 100 else { return }
+                Task { await model.createProject(title); if model.error == nil { projectTitle = "" } }
+            }
+            Button("Отмена", role: .cancel) { projectTitle = "" }
+        } message: { Text("Потом выберите его в меню «Проект».") }
+        .sheet(item: $draft) { item in
+            KnowledgeEditor(draft: item) { saved in
+                draft = nil
+                Task { await model.save(saved.entryID, scope: saved.scope, kind: saved.kind, text: saved.text, source: saved.source) }
+            }
         }
     }
-    @ViewBuilder private func sources(_ ids: [String]) -> some View {
-        if !ids.isEmpty {
-            DisclosureGroup("Источники · \(ids.count)") {
-                ForEach(Array(ids.enumerated()), id: \.offset) { _, id in Text(id).font(.caption.monospaced()).textSelection(.enabled).foregroundStyle(.secondary) }
-            }.font(.caption).foregroundStyle(.secondary)
+    @ViewBuilder private func statusRow(_ state: KnowledgeMemoryState?) -> some View {
+        if let state {
+            if state.state == "updating" {
+                Label("Агенты обновляют память…", systemImage: "clock").font(.callout).foregroundStyle(.secondary)
+            } else if ["error", "interrupted", "stale"].contains(state.state) {
+                Label("Последнее обновление не удалось. Сохранённое на месте, следующий ответ обновит память.", systemImage: "exclamationmark.circle").font(.callout).foregroundStyle(.secondary)
+            } else if state.updated > 0 {
+                Label("Обновлено " + Date(timeIntervalSince1970: state.updated / 1000).formatted(.relative(presentation: .named)), systemImage: "checkmark.circle").font(.callout).foregroundStyle(.secondary)
+            }
         }
+    }
+    private func row(_ entry: KnowledgeEntry, shared: Bool = false) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Image(systemName: entry.kindIcon).foregroundStyle(.secondary).frame(width: 20)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(entry.text).textSelection(.enabled)
+                Text(([entry.kindLabel] + (entry.pinned == true ? ["записано вручную"] : []) + (shared ? ["из другого диалога"] : [])).joined(separator: " · "))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }.padding(.vertical, 2)
     }
 }
+
+struct KnowledgeEditor: View {
+    @State var draft: KnowledgeDraft
+    let onSave: (KnowledgeDraft) -> Void
+    @Environment(\.dismiss) private var dismiss
+    private var trimmed: String { draft.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+    var body: some View {
+        NavigationStack {
+            Form {
+                Picker("Вид", selection: $draft.kind) {
+                    Text("Факт").tag("fact"); Text("Решение").tag("decision"); Text("Задача").tag("task")
+                }.pickerStyle(.segmented).listRowBackground(Color.clear).listRowInsets(EdgeInsets())
+                Section {
+                    TextField("Что запомнить", text: $draft.text, axis: .vertical).lineLimit(3...10)
+                } footer: { Text("\(trimmed.count)/600" + (draft.scope == "project" ? " · увидят все диалоги проекта" : "")) }
+            }
+            .navigationTitle(draft.isNew ? "Новая запись" : "Изменить запись")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Сохранить") { var value = draft; value.text = trimmed; onSave(value) }.disabled(trimmed.isEmpty || trimmed.count > 600)
+                }
+            }
+        }.presentationDetents([.medium, .large])
+    }
+}
+
+#if DEBUG
+struct KnowledgePreview: View {
+    var body: some View {
+        let json = #"{"revision":3,"entries":[{"id":"call","kind":"decision","text":"Созвон команды — по вторникам в 11:00","sourceMessageIds":["a"],"pinned":true},{"id":"db","kind":"fact","text":"Хранилище — SQLite на сервере","sourceMessageIds":["b"]},{"id":"report","kind":"task","text":"Подготовить отчёт по продажам к пятнице","sourceMessageIds":["c"]}],"project":{"id":"p","title":"Агент"},"projectEntries":[{"id":"stack","kind":"fact","text":"Бэкенд на Bun, приложение на SwiftUI","sourceMessageIds":["d"],"sourceConversationId":"other"}],"proposals":[],"memoryState":{"state":"ready","updated":\(Int(Date().timeIntervalSince1970 * 1000) - 120000)}}"#
+        let snapshot = try! JSONDecoder().decode(KnowledgeSnapshot.self, from: Data(json.utf8))
+        return NavigationStack { KnowledgeView(preview: KnowledgeModel(preview: snapshot, projects: [KnowledgeProject(id: "p", title: "Агент")])) }.tint(.primary)
+    }
+}
+#endif
