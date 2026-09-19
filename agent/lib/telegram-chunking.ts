@@ -627,3 +627,10 @@ export async function sendChunked(
   }
   return last;
 }
+
+/**
+ * Мерка «влезает всё»: `sendChunked` с ней шлёт ответ одним сообщением и без
+ * «(1/3)». Для приложения «Агент» — лимита в 4096 символов у него нет, а
+ * счётчик частей — оформление Telegram, не его.
+ */
+export const WHOLE_MESSAGE_FITS = (_part: string): boolean => true;

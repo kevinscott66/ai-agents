@@ -50,10 +50,22 @@ indirect enum ApprovalValue: Decodable {
     private var credential: String?
     private var generation = UUID()
     private var accepted: Set<String> = []
+    /// Отклонённые здесь карточки ещё секунду показывают исход, потом уходят.
+    @Published private var dismissed: Set<String> = []
     var visibleItems: [ChatApproval] {
         items.filter { item in
+            // Сбой и обрыв остаются: владельцу надо проверить, что уже сделано.
             if item.execution == "failed" || item.execution == "interrupted" || item.status == "failed" { return true }
+            if dismissed.contains(item.id) || item.status == "rejected" || item.status == "expired" { return false }
             return !accepted.contains(item.id) && item.status != "approved" && item.execution != "completed"
+        }
+    }
+    private func dismissSoon(_ id: String) {
+        let operation = generation
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1.5))
+            guard let self, self.generation == operation else { return }
+            self.dismissed.insert(id)
         }
     }
     private var terminal: Set<String> = []
@@ -63,7 +75,7 @@ indirect enum ApprovalValue: Decodable {
         let token = Credentials.read(server: server)
         if currentServer != server || credential != token || currentConversation != conversation {
             currentServer = server; credential = token; currentConversation = conversation
-            currentOwner = ""; items = []; outcomes = [:]; working = []; awaitingDecision = []; terminal = []; accepted = []; error = nil
+            currentOwner = ""; items = []; outcomes = [:]; working = []; awaitingDecision = []; terminal = []; accepted = []; dismissed = []; error = nil
             generation = UUID()
         }
         guard let token, let conversation else { return }
@@ -121,7 +133,7 @@ indirect enum ApprovalValue: Decodable {
                result.approval.status == (approve ? "approved" : "rejected"), result.executed == approve {
                 awaitingDecision.remove(item.id)
                 terminal.insert(item.id)
-                if approve { accepted.insert(item.id) }
+                if approve { accepted.insert(item.id) } else { dismissSoon(item.id) }
                 outcomes[item.id] = approve ? "Выполнено. Результат — в сообщении ниже." : "Отклонено. Действие не выполнено."
             } else {
                 outcomes[item.id] = "Сервер не подтвердил выполнение (\(status)). Проверьте результат у Агента перед повтором."

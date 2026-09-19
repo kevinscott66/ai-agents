@@ -141,5 +141,8 @@ export class NativeKnowledge {
         // Fixed per-project bound, including entries removed from later chat snapshots.
         this.db.query('DELETE FROM native_knowledge_rejections WHERE project_id=? AND rowid NOT IN (SELECT rowid FROM native_knowledge_rejections WHERE project_id=? ORDER BY updated DESC,rowid DESC LIMIT 100)').run(r.project_id, r.project_id);
     } this.db.query('DELETE FROM native_knowledge_proposals WHERE id=?').run(id); return true; })(); }
+    /** Чат удалён: его память и предложения уходят; одобренное в проект остаётся проекту. */
+    forgetConversation(chat: string) { for (const table of ['native_chat_knowledge', 'native_knowledge_proposals', 'native_knowledge_rejections', 'native_project_chats'])
+        this.db.query(`DELETE FROM ${table} WHERE conversation_id=?`).run(chat); }
     removeProjectEntry(user: string, project: string, chat: string, entry: string) { this.project(user, project); this.db.query('DELETE FROM native_project_knowledge WHERE project_id=? AND conversation_id=? AND entry_id=?').run(project, chat, entry); }
 }

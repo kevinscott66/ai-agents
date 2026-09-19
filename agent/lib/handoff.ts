@@ -23,7 +23,7 @@ import { isTriggerDelivered } from "./trigger-delivery.ts";
 import type { RunningBot, InputImage, InputDocument } from "./types.ts";
 import { log, redactText } from "./log.ts";
 import {
-  sendChunked,
+  sendChunked, WHOLE_MESSAGE_FITS,
   messagePlainFits,
   HTML_MESSAGE_FITS,
 } from "./telegram-chunking.ts";
@@ -508,7 +508,7 @@ export async function respondAs(
       },
       // Части шлются с parse_mode: HTML, значит и мерить их надо по видимой
       // длине. Плейн-фолбэк прикрыт messagePlainFits выше.
-      HTML_MESSAGE_FITS,
+      deps.nativeReply ? WHOLE_MESSAGE_FITS : HTML_MESSAGE_FITS,
     );
     deliveredReply = reply;
     // Аудит 2026-09-11: тут стояли первые 80 символов ответа открытым

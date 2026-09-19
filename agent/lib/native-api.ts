@@ -100,7 +100,7 @@ export async function nativeApi(req: Request, injectedStore?: NativeAccess): Pro
     const match = cursor?.match(/^(\d{1,16}):([a-zA-Z0-9-]{16,64})$/);
     if (cursor !== null && (!match || !Number.isSafeInteger(Number(match[1])))) return json({error:'invalid_cursor'},400);
     const before = match ? {updated:Number(match[1]),id:match[2]} : undefined;
-    const rows = store.conversations(identity.userId,before,201);
+    const rows = store.conversations(identity.userId,before,201,new URL(req.url).searchParams.get('archived') === '1');
     const more = rows.length > 200;
     const conversations = rows.slice(0,200);
     const last = conversations.at(-1);
@@ -151,6 +151,17 @@ export async function nativeApi(req: Request, injectedStore?: NativeAccess): Pro
     return json({approvals});
   }
   const conversationMatch = path.match(/^\/api\/native\/conversations\/([a-zA-Z0-9-]{16,64})$/);
+  // Правка чата — POST, как и остальное API: веб-граница пропускает только GET и POST.
+  if (conversationMatch && req.method === 'POST') {
+    if ((body.title !== undefined && (typeof body.title !== 'string' || !body.title.trim() || body.title.length > 100)) || (body.archived !== undefined && typeof body.archived !== 'boolean') || (body.title === undefined && body.archived === undefined)) return json({error:'invalid_conversation'},400);
+    const conversation = store.editConversation(conversationMatch[1],identity.userId,{title:body.title as string|undefined,archived:body.archived as boolean|undefined});
+    return conversation ? json({conversation}) : json({error:'not_found'},404);
+  }
+  const deleteMatch = path.match(/^\/api\/native\/conversations\/([a-zA-Z0-9-]{16,64})\/delete$/);
+  if (deleteMatch && req.method === 'POST') {
+    const deleted = store.deleteConversation(deleteMatch[1],identity.userId);
+    return deleted === 'deleted' ? json({ok:true}) : deleted === 'busy' ? json({error:'busy'},409) : json({error:'not_found'},404);
+  }
   if (conversationMatch && req.method === 'GET') {
     const raw = new URL(req.url).searchParams.get('before'); const before = raw === null ? Number.MAX_SAFE_INTEGER : Number(raw);
     if (!Number.isSafeInteger(before) || before <= 0) return json({error:'invalid_cursor'},400);

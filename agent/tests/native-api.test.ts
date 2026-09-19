@@ -35,9 +35,19 @@ test('native API binds device to owner; rejects browser, revoked ACL and repeat 
     const history = await (await nativeApi(req(`conversations/${conversationId}`, second.token), store)).json() as any;
     expect(history.messages.map((m:any)=>m.text)).toEqual(['hello','Ответ: hello']);
     expect((await nativeApi(req(`conversations/${conversationId}?before=-1`, second.token), store)).status).toBe(400);
+    expect(typeof history.messages[0].created).toBe('number');
+    expect((await nativeApi(req(`conversations/${conversationId}`, second.token, {title:''}), store)).status).toBe(400);
+    expect((await nativeApi(req(`conversations/${conversationId}`, second.token, {archived:'yes'}), store)).status).toBe(400);
+    const renamed = await (await nativeApi(req(`conversations/${conversationId}`, second.token, {title:'Renamed',archived:true}), store)).json() as any;
+    expect(renamed.conversation).toMatchObject({title:'Renamed',archived:1});
+    expect((await (await nativeApi(req('conversations', second.token), store)).json() as any).conversations).toHaveLength(0);
+    expect((await (await nativeApi(req('conversations?archived=1', second.token), store)).json() as any).conversations[0].id).toBe(conversationId);
+    await nativeApi(req(`conversations/${conversationId}`, second.token, {archived:false}), store);
     process.env.MAC_USER_IDS = '';
     expect((await nativeApi(req('status', token), store)).status).toBe(401);
     process.env.MAC_USER_IDS = uid;
+    expect((await nativeApi(req(`conversations/${conversationId}/delete`, second.token, {}), store)).status).toBe(200);
+    expect((await nativeApi(req(`conversations/${conversationId}`, second.token), store)).status).toBe(404);
     store.revoke(uid);
     expect((await nativeApi(req('status', token), store)).status).toBe(401);
   } finally {
