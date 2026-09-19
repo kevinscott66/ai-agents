@@ -130,15 +130,18 @@ describe("ключи сортировки замкнуты во всех спи�
     });
   }
 
-  test("lib/miniapp-server.ts: ни одного ORDER BY created_at без тай-брейка", () => {
-    const src = require("node:fs").readFileSync(
-      new URL("../lib/miniapp-server.ts", import.meta.url).pathname,
-      "utf8",
-    ) as string;
-    const bare = src
-      .split("\n")
-      .filter((l) => !l.trimStart().startsWith("//"))
-      .filter((l) => /ORDER BY created_at (ASC|DESC)(?!,)/.test(l));
-    expect(bare).toEqual([]);
-  });
+  // lib/task-list-window.ts — выборка GET /api/tasks, вынесенная из ручки (AUD-030).
+  for (const file of ["lib/miniapp-server.ts", "lib/task-list-window.ts"]) {
+    test(`${file}: ни одного ORDER BY created_at без тай-брейка`, () => {
+      const src = require("node:fs").readFileSync(
+        new URL(`../${file}`, import.meta.url).pathname,
+        "utf8",
+      ) as string;
+      const bare = src
+        .split("\n")
+        .filter((l) => !l.trimStart().startsWith("//"))
+        .filter((l) => /ORDER BY created_at (ASC|DESC)(?!,)/.test(l));
+      expect(bare).toEqual([]);
+    });
+  }
 });

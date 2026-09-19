@@ -71,8 +71,6 @@ function constantTimeEqual(a: string, b: string): boolean {
 import {
   createTask,
   getTask,
-  listTasksByAssignee,
-  listTasksByChat,
   updateTaskStatus,
   type TaskStatus,
 } from "./tasks.ts";
@@ -155,6 +153,7 @@ import { dispatchAndAudit, type DispatchCtx } from "./action-dispatch.ts";
 import type { PayloadFor } from "./action-payload.ts";
 import type { MacBridge } from "./dispatch/mac.ts";
 import { renderMetrics } from "./miniapp-metrics.ts";
+import { listTaskWindow, TASK_LIST_DEFAULT_LIMIT, TASK_LIST_MAX_LIMIT } from "./task-list-window.ts";
 
 // Re-exports kept for backward compatibility with existing test imports
 // (tests/c26-miniapp-e2e.test.ts imports these from miniapp-server.ts).
@@ -1459,7 +1458,7 @@ export function startMiniappServer(
       if (chatId instanceof Response) return chatId;
       const assignee = url.searchParams.get("assignee");
       const status = url.searchParams.get("status") as TaskStatus | null;
-      const limit = parseIntOr(url.searchParams.get("limit"), 50, 200);
+      const limit = parseIntOr(url.searchParams.get("limit"), TASK_LIST_DEFAULT_LIMIT, TASK_LIST_MAX_LIMIT);
       // AUD-012: `truncated` честно говорил «за краем есть ещё», но достать
       // это «ещё» было нечем — потолок 200 и ни одного способа сдвинуть окно.
       // `offset` сдвигает окно во всех трёх ветках; `nextOffset` в ответе —
@@ -1521,62 +1520,13 @@ export function startMiniappServer(
         }
       }
       const statuses: TaskStatus[] | undefined = status ? [status] : undefined;
-      // Аудит 2026-08-28: выдача резалась молча. Ответ на сто задач из ста и
-      // ответ на сто задач из трёхсот выглядели одинаково — код 200, массив
-      // ровно по лимиту, ни поля, ни «показать ещё». Tasks.tsx просит
-      // `limit: 100` и рисует полученное как всю доску, а `limit` тут вообще
-      // не может быть больше 200. Соседняя ручка `/api/wiki/list` эту же
-      // ситуацию давно подписывает флагом `truncated` — делаем так же:
-      // спрашиваем на строку больше лимита и по ней узнаём, есть ли что-то за
-      // краем окна.
-      const probe = limit + 1;
-      let tasks;
-      let truncated = false;
-      if (assigneeKey) {
-        // Аудит 2026-08-28: `chat_id` сюда не доезжал вовсе — ветка assignee
-        // выигрывала и молча теряла сужение области, отвечая 200 с задачами
-        // роли из всех чатов сразу.
-        const rows = listTasksByAssignee(assigneeKey, statuses, probe, chatId, offset);
-        truncated = rows.length > limit;
-        // Очередь роли отсортирована `priority DESC`: лишняя строка последняя.
-        tasks = truncated ? rows.slice(0, limit) : rows;
-      } else if (chatId !== undefined) {
-        const rows = listTasksByChat(chatId, statuses, probe, offset);
-        truncated = rows.length > limit;
-        // А здесь порядок ВОЗРАСТАЮЩИЙ, хотя `limit` берёт N свежайших (F1
-        // того же аудита). Лишняя строка в такой выборке — самая старая, то
-        // есть первая: `slice(0, limit)` выбросил бы самую свежую задачу,
-        // ровно ту, ради которой доску и открывают.
-        tasks = truncated ? rows.slice(rows.length - limit) : rows;
-      } else {
-        // Без chat_id и assignee — прямой скан. Аудит 2026-08-20: статус здесь
-        // не применялся вовсе. Две других ветки принимают `statuses`, а эта
-        // молча возвращала всю доску — то есть ?status=pending без chat_id
-        // работал как запрос вообще без фильтра, отвечая 200.
-        //
-        // Это не гипотетика: `load()` в miniapp/src/pages/Dashboard.tsx зовёт
-        // ровно `api.tasks({ status: "pending", limit: 200 })` — без chat_id. Список
-        // «в очереди» на главной показывал задачи в любом статусе, включая
-        // done и cancelled.
-        const where = statuses?.length
-          ? ` WHERE status IN (${statuses.map(() => "?").join(",")})`
-          : "";
-        const rows = db
-          .prepare(
-            // Без тай-брейка произвольной становится не только выдача, но и
-            // флаг truncated: лишняя строка probe берётся с плавающей границы.
-            `SELECT id FROM tasks${where} ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?`,
-          )
-          .all(...(statuses ?? []), probe, offset) as { id: string }[];
-        truncated = rows.length > limit;
-        // Режем по id, а не после getTask: лишняя строка тут самая старая по
-        // `created_at DESC`, то есть последняя, и тянуть её целиком незачем.
-        tasks = rows.slice(0, limit).map((r) => getTask(r.id)).filter(Boolean);
-      }
+      // Выборка окна, `truncated` и `nextOffset` — lib/task-list-window.ts
+      // (AUD-030); здесь остаются разбор запроса и redaction.
+      const w = listTaskWindow({ assignee: assigneeKey, chatId, statuses, limit, offset });
       return json({
-        tasks: redactContent(user, tasks, TASK_CONTENT_FIELDS),
-        truncated,
-        nextOffset: truncated ? offset + limit : null,
+        tasks: redactContent(user, w.tasks, TASK_CONTENT_FIELDS),
+        truncated: w.truncated,
+        nextOffset: w.nextOffset,
       });
     }
 
