@@ -1,12 +1,18 @@
 /* Shared panel content, tailored to the native companion's monochrome surfaces. */
+/* Цвета — системные iOS (systemBackground, secondarySystemBackground,
+   secondaryLabel, separator), как в SwiftUI-части приложения (ios/DESIGN.md). */
 html:has(.native-panel) {
-  --bg: #fff; --text: #141414; --hint: #707070; --link: #242424;
-  --button: #171717; --button-text: #fff; --secondary-bg: #f4f4f5;
-  --border: rgba(0,0,0,.09); color-scheme: light;
+  --bg: #fff; --text: #000; --hint: rgba(60,60,67,.6); --link: #000;
+  --button: #000; --button-text: #fff; --secondary-bg: #f2f2f7;
+  --border: rgba(60,60,67,.18); --hover-bg: #e9e9ee; --text-muted: rgba(60,60,67,.6);
+  color-scheme: light;
 }
-.native-panel { font-size: 16px; line-height: 1.5; }
+.native-panel {
+  font-family: -apple-system, system-ui, sans-serif; font-size: 17px; line-height: 1.4;
+  -webkit-font-smoothing: antialiased; -webkit-tap-highlight-color: transparent;
+}
 .native-panel .header { padding: 24px 22px 8px; border: 0; }
-.native-panel .header h1 { font-size: 28px; letter-spacing: -.7px; font-weight: 650; }
+.native-panel .header h1 { font-size: 30px; letter-spacing: -.4px; font-weight: 600; }
 .native-panel .header-right { display: none; }
 .native-panel .content { padding: 12px 18px 100px; }
 .native-panel .tabs {
@@ -16,24 +22,52 @@ html:has(.native-panel) {
   padding: 5px; box-shadow: 0 3px 18px #0000000a;
 }
 .native-panel button, .native-panel select, .native-panel input { min-height: 44px; font-size: 16px; }
-.native-panel button { border-radius: 14px; }
+.native-panel button { border-radius: 22px; }
 .native-panel input, .native-panel select, .native-panel textarea { border-radius: 12px; }
-.native-panel .card { border-radius: 20px; box-shadow: none; padding: 18px; }
+.native-panel .card { border-radius: 24px; box-shadow: none; padding: 18px; border: 0; }
 .native-panel table { font-size: 14px; }
 .native-panel pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .native-panel h2 { letter-spacing: -.4px; }
 @media (prefers-color-scheme: dark) {
-  html:has(.native-panel) { --bg: #000; --text: #f5f5f5; --hint: #a0a0a0; --link: #eee;
-    --button: #f0f0f0; --button-text: #151515; --secondary-bg: #1c1c1e;
-    --border: rgba(255,255,255,.13); color-scheme: dark; }
+  html:has(.native-panel) { --bg: #000; --text: #fff; --hint: rgba(235,235,245,.6); --link: #fff;
+    --button: #fff; --button-text: #000; --secondary-bg: #1c1c1e;
+    --border: rgba(84,84,88,.6); --hover-bg: #2c2c2e; --text-muted: rgba(235,235,245,.6);
+    color-scheme: dark; }
 }
 @media (prefers-reduced-transparency: reduce) { .native-panel .tabs { background: var(--bg); backdrop-filter: none; } }
 @media (prefers-reduced-motion: reduce) { .native-panel *, .native-panel *::before { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
 
-.native-panel .native-error { padding: 18px; background: var(--secondary-bg); border: 1px solid var(--border); border-radius: 20px; margin: 12px 0; }
+.native-panel .native-error { padding: 18px; background: var(--secondary-bg); border-radius: 24px; margin: 12px 0; }
+.native-panel .native-error .btn.secondary { background: var(--button); color: var(--button-text); padding: 10px 20px; }
 .native-panel .native-error p { color: var(--hint); font-size: 15px; margin: 8px 0 14px; }
 .native-panel .tabs .icon { display: flex; justify-content: center; padding: 2px 0; }
 .native-panel .tabs button { min-width: 66px; padding: 7px 9px; font-size: 11px; }
 
 .native-panel .page-header { margin-bottom: 18px; }
 .native-panel .page-header p { font-size: 14px; }
+
+/* Поверхности как в SwiftUI-части: плоские, без рамок и теней, одни радиусы. */
+.native-panel .stat-grid { gap: 10px; }
+.native-panel .stat-card { border-radius: 24px; padding: 16px 18px; }
+.native-panel .stat-card .label { font-size: 15px; margin-bottom: 2px; }
+.native-panel .stat-card .value { font-size: 30px; font-weight: 600; letter-spacing: -.4px; }
+.native-panel .list-item,
+.native-panel .agent-status-card,
+.native-panel .autonomy-display { border: 0; border-radius: 24px; padding: 14px 18px; }
+.native-panel .agents-grid { gap: 10px; }
+.native-panel .agent-name { font-size: 17px; font-weight: 500; }
+.native-panel .agent-provider,
+.native-panel .list-item .meta { font-size: 15px; color: var(--hint); }
+
+/* Заголовки секций — как у сгруппированного списка iOS: мелко, серым, без разрядки. */
+.native-panel .section-title {
+  font-size: 13px; font-weight: 400; color: var(--hint); text-transform: uppercase;
+  letter-spacing: 0; margin: 26px 4px 8px;
+}
+
+/* Статусы — спокойные капсулы: цвет остаётся у текста, не у заливки. */
+.native-panel .badge {
+  text-transform: none; letter-spacing: 0; font-size: 13px; font-weight: 500;
+  padding: 3px 10px; border-radius: 999px;
+}
+.native-panel .agent-status { text-transform: none; font-size: 13px; padding: 3px 10px; border-radius: 999px; }
