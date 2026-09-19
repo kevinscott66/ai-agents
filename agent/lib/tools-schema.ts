@@ -600,11 +600,11 @@ export const TOOLS: Anthropic.Tool[] = [
   {
     name: "WRITE_WIKI",
     description:
-      "Записать (создать/перезаписать) страницу в вики. scope — только '_team' или твой собственный ключ роли. Используй для долгоживущих заметок: решения, чек-листы, контекст проекта.",
+      "Записать (создать/перезаписать) страницу в вики. scope — только '_team' или твой собственный ключ роли. Используй для долгоживущих заметок: решения, чек-листы, контекст проекта. В диалоге приложения вместо вики правит память напрямую, без подтверждения владельца: scope='conversation' (память этого диалога) или 'project' (общая память проекта диалога), slug — id записи (тот же id перезаписывает), title — fact|decision|task, content — текст до 600 символов; пустой content удаляет запись.",
     input_schema: {
       type: "object",
       properties: {
-        scope: { type: "string", description: "'_team' или твой собственный ключ роли." },
+        scope: { type: "string", description: "'_team' или твой собственный ключ роли; в приложении — 'conversation' или 'project'." },
         slug: { type: "string", description: "Slug страницы (можно с подпапкой: 'projects/foo')." },
         title: { type: "string", description: "Заголовок страницы." },
         content: { type: "string", description: "Тело в markdown." },
@@ -1381,7 +1381,21 @@ async function dispatchTool(
   const nativeMemory = nativeTurnContext.getStore();
   if (nativeMemory && ["SEARCH_WIKI", "READ_WIKI", "WRITE_WIKI"].includes(name)) {
     if (nativeMemory.userId !== String(ctx.chatId)) return JSON.stringify({error:"native_owner_mismatch"});
-    if (name === "WRITE_WIKI") return JSON.stringify({error:"Память диалога обновляется автоматически после ответа. Общая память проекта меняется только после подтверждения владельца в разделе Память диалога."});
+    if (name === "WRITE_WIKI") {
+      // Приложение: вики команды здесь нет, WRITE_WIKI правит память диалога
+      // или его проекта напрямую. slug — id записи, title — вид, пустой content удаляет.
+      if (!nativeMemory.writeKnowledge) return JSON.stringify({error:"native_memory_unavailable"});
+      const id = String(i.slug ?? "").trim().replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
+      if (!id) return JSON.stringify({error:"slug (id записи) обязателен"});
+      const kind = ["fact","decision","task"].includes(String(i.title)) ? String(i.title) as "fact"|"decision"|"task" : "fact";
+      const scope = i.scope === "project" || i.scope === "_team" ? "project" : "conversation";
+      try {
+        return JSON.stringify(nativeMemory.writeKnowledge({scope, id, kind, text: String(i.content ?? "")}));
+      } catch (e) {
+        const code = getErrorMessage(e);
+        return JSON.stringify({error: code === "knowledge_no_project" ? "У диалога нет проекта: пиши в scope=conversation." : code === "knowledge_limit" ? "Память заполнена: удали или объедини устаревшие записи." : code === "native_memory_scope_changed" ? code : "invalid_knowledge"});
+      }
+    }
     const query=String(i.query ?? i.slug ?? '').slice(0,2000);
     return JSON.stringify({scope:"current_conversation_and_approved_project",content:nativeMemory.readKnowledge?.(query) ?? nativeMemory.knowledge ?? "Память этого диалога пока пуста."});
   }

@@ -1,6 +1,6 @@
 import { voiceApi } from './native-voice.ts';
 import { signingApi } from './native-signing.ts';
-import { compactNativeKnowledge, knowledgePrompt, knowledgeState, scopedKnowledgeReader } from "./native-knowledge-runtime.ts";
+import { compactNativeKnowledge, knowledgePrompt, knowledgeState, scopedKnowledgeReader, scopedKnowledgeWriter } from "./native-knowledge-runtime.ts";
 import { attachmentId, parseUpload, locationValue, readMediaJson, type NativeMediaInput } from './native-media.ts';
 import { nativeAccess, type NativeAccess } from './native-access.ts';
 import { isAssistantOwner as permitted } from './assistant-auth.ts';
@@ -74,7 +74,7 @@ export async function nativeApi(req: Request, injectedStore?: NativeAccess): Pro
       if(typeof body.title!=='string')return json({error:'invalid_project'},400);
       return json({project:store.knowledge.createProject(identity.userId,body.title)},201);
     }
-    const knowledgeMatch=path.match(/^\/api\/native\/conversations\/([a-zA-Z0-9-]{16,64})\/(knowledge|project|proposals)$/);
+    const knowledgeMatch=path.match(/^\/api\/native\/conversations\/([a-zA-Z0-9-]{16,64})\/(knowledge|project|proposals|memory)$/);
     if(knowledgeMatch){
       const chat=knowledgeMatch[1];if(!store.conversation(chat,identity.userId))return json({error:'not_found'},404);
       if(knowledgeMatch[2]==='knowledge'&&req.method==='GET')return json({...store.knowledge.snapshot(identity.userId,chat),memoryState:knowledgeState(store,chat)});
@@ -82,6 +82,16 @@ export async function nativeApi(req: Request, injectedStore?: NativeAccess): Pro
         if(body.projectId!==null&&(typeof body.projectId!=='string'||body.projectId.length>64))return json({error:'invalid_project'},400);
         store.knowledge.assignProject(identity.userId,chat,body.projectId as string|null);
         return json(store.knowledge.snapshot(identity.userId,chat));
+      }
+      if(knowledgeMatch[2]==='memory'&&req.method==='POST'){
+        // Владелец правит или удаляет запись сам: {scope,entryId,kind?,text?,remove?,sourceConversationId?}.
+        const scope=body.scope,remove=body.remove===true;
+        if((scope!=='conversation'&&scope!=='project')||typeof body.entryId!=='string'||body.entryId.length>64)return json({error:'invalid_entry'},400);
+        if(!remove&&(typeof body.kind!=='string'||typeof body.text!=='string'))return json({error:'invalid_entry'},400);
+        const change=remove?null:{kind:body.kind as 'fact',text:body.text as string};
+        const source=typeof body.sourceConversationId==='string'?body.sourceConversationId:undefined;
+        const ok=scope==='project'?store.knowledge.editProjectEntry(identity.userId,chat,body.entryId,change,source):store.knowledge.editChatEntry(identity.userId,chat,body.entryId,change);
+        return ok?json({...store.knowledge.snapshot(identity.userId,chat),memoryState:knowledgeState(store,chat)}):json({error:'not_found'},404);
       }
       if(knowledgeMatch[2]==='proposals'&&req.method==='POST'){
         if(typeof body.entryId!=='string'||body.entryId.length>64)return json({error:'invalid_entry'},400);
@@ -93,7 +103,7 @@ export async function nativeApi(req: Request, injectedStore?: NativeAccess): Pro
       if(typeof body.accept!=='boolean')return json({error:'invalid_decision'},400);
       return store.knowledge.decide(identity.userId,proposalMatch[1],body.accept)?json({ok:true}):json({error:'proposal_expired'},409);
     }
-  }catch(error){const code=error instanceof Error?error.message:'';return json({error:code==='knowledge_not_found'?'not_found':code==='knowledge_limit'?'knowledge_limit':'invalid_knowledge'},code==='knowledge_not_found'?404:code==='knowledge_limit'?429:400);}
+  }catch(error){const code=error instanceof Error?error.message:'';return json({error:code==='knowledge_not_found'?'not_found':code==='knowledge_limit'?'knowledge_limit':code==='knowledge_no_project'?'no_project':'invalid_knowledge'},code==='knowledge_not_found'?404:code==='knowledge_limit'?429:code==='knowledge_no_project'?409:400);}
   if (path === '/api/native/status' && req.method === 'GET') return json({ name: 'Агент', userId: identity.userId, available: !!lead && !agentStopReason('orchestrator') });
   if (path === '/api/native/conversations' && req.method === 'GET') {
     const cursor = new URL(req.url).searchParams.get('cursor');
@@ -188,7 +198,7 @@ export async function nativeApi(req: Request, injectedStore?: NativeAccess): Pro
         if(process.env.NATIVE_APP_ENABLED!=='true'||!live||live.userId!==identity.userId||!permitted(identity.userId)||store.get(id,identity.device)?.status!=='running')throw new Error('native_turn_inactive');
         store.append(id,answer,agentKey);
       };
-      void Promise.resolve().then(() => nativeTurnContext.run({userId:identity.userId,turnId:id,conversationId:store.turnConversation(id)!,knowledge:knowledgePrompt(store,identity.userId,store.turnConversation(id)!,text),readKnowledge:scopedKnowledgeReader(store,identity.userId,store.turnConversation(id)!),reply:async (agentKey,answer)=>{deliver(answer,agentKey);return {message_id:-Date.now(),date:Math.floor(Date.now()/1000)};},mediaSink:store.artifactSink(id,identity.userId,identity.device,store.turnConversation(id)!),linkApproval: approvalId => store.linkApproval(approvalId,id,identity.userId)}, () => run(identity.userId, text, answer => deliver(answer), typeof conversationId === 'string' ? store.history(conversationId,identity.userId)!.messages.slice(-40) : undefined,store.media.input(ids,identity.userId,location)))).then(() => {
+      void Promise.resolve().then(() => nativeTurnContext.run({userId:identity.userId,turnId:id,conversationId:store.turnConversation(id)!,knowledge:knowledgePrompt(store,identity.userId,store.turnConversation(id)!,text),readKnowledge:scopedKnowledgeReader(store,identity.userId,store.turnConversation(id)!),writeKnowledge:scopedKnowledgeWriter(store,identity.userId,store.turnConversation(id)!),reply:async (agentKey,answer)=>{deliver(answer,agentKey);return {message_id:-Date.now(),date:Math.floor(Date.now()/1000)};},mediaSink:store.artifactSink(id,identity.userId,identity.device,store.turnConversation(id)!),linkApproval: approvalId => store.linkApproval(approvalId,id,identity.userId)}, () => run(identity.userId, text, answer => deliver(answer), typeof conversationId === 'string' ? store.history(conversationId,identity.userId)!.messages.slice(-40) : undefined,store.media.input(ids,identity.userId,location)))).then(() => {
         if (!store.get(id, identity.device)?.replies.length) store.append(id, 'Агент не вернул ответ. Проверь состояние роли и лимиты.');
         store.finish(id, 'done');
         const dialog=store.turnConversation(id);

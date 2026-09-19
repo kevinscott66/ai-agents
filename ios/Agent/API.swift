@@ -5,8 +5,10 @@ struct KnowledgeEntry: Codable, Identifiable {
     let text: String
     let sourceMessageIds: [String]
     var sourceConversationId: String? = nil
+    var pinned: Bool? = nil
     var projectIdentity: String { (sourceConversationId ?? "") + ":" + id }
     var kindLabel: String { ["fact":"Факт", "decision":"Решение", "task":"Задача"][kind] ?? "Запись" }
+    var kindIcon: String { ["fact":"info.circle", "decision":"checkmark.seal", "task":"checklist"][kind] ?? "doc.text" }
 }
 struct KnowledgeProposal: Codable, Identifiable {
     let id: String
@@ -226,9 +228,9 @@ struct AgentAPI {
             let code = (response as? HTTPURLResponse)?.statusCode ?? 0
             let errorData = path == "/api/native/attachments" ? try await Self.readBody(bytes) : nil
             let uploadError = errorData.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: String] }?["error"]
-            let isKnowledge = path.contains("/knowledge") || path == "/api/native/projects" || path.hasSuffix("/project") || path.hasSuffix("/proposals")
+            let isKnowledge = path.contains("/knowledge") || path == "/api/native/projects" || path.hasSuffix("/project") || path.hasSuffix("/proposals") || path.hasSuffix("/memory")
             let isVoice = path.hasPrefix("/api/native/voice/")
-            let message = isVoice && code == 503 ? "Голосовой сервис не настроен или временно недоступен." : isVoice && code == 502 ? "Голосовой сервис не смог обработать запрос. Попробуйте снова." : isVoice && code == 429 ? "Голосовой сервис занят. Попробуйте немного позже." : isKnowledge && code == 409 ? "Предложение устарело. Обновите память диалога." : isKnowledge && code == 429 ? "Достигнут лимит памяти или проектов." : uploadError == "media_quota" ? "Хранилище вложений заполнено (лимит 40 МБ); файлы хранятся 30 дней." : code == 401 ? "Код или ключ недействителен. Подключите устройство заново." : code == 409 ? "Лид уже выполняет запрос. Дождитесь результата." : code == 503 ? "Лид или доступ приложения пока недоступен." : code == 413 ? "Файл слишком большой" : code == 507 ? "Хранилище вложений заполнено" : code == 429 ? "Загрузка уже идёт. Дождитесь завершения." : "Сервер вернул ошибку \(code)"
+            let message = isVoice && code == 503 ? "Голосовой сервис не настроен или временно недоступен." : isVoice && code == 502 ? "Голосовой сервис не смог обработать запрос. Попробуйте снова." : isVoice && code == 429 ? "Голосовой сервис занят. Попробуйте немного позже." : isKnowledge && code == 409 ? (path.hasSuffix("/memory") ? "У диалога нет проекта. Выберите проект." : "Предложение устарело. Обновите память диалога.") : isKnowledge && code == 429 ? "Достигнут лимит памяти или проектов." : uploadError == "media_quota" ? "Хранилище вложений заполнено (лимит 40 МБ); файлы хранятся 30 дней." : code == 401 ? "Код или ключ недействителен. Подключите устройство заново." : code == 409 ? "Лид уже выполняет запрос. Дождитесь результата." : code == 503 ? "Лид или доступ приложения пока недоступен." : code == 413 ? "Файл слишком большой" : code == 507 ? "Хранилище вложений заполнено" : code == 429 ? "Загрузка уже идёт. Дождитесь завершения." : "Сервер вернул ошибку \(code)"
             if path == "/api/native/turns", (body != nil || encodedBody != nil) {
                 let data = try await Self.readBody(bytes)
                 if Self.turnWasRejected(status: code, data: data) { throw TurnRejected(message: message) }
@@ -269,7 +271,7 @@ struct AgentAPI {
     }
     static func knowledgeRoute(_ conversationID: String, resource: String = "knowledge") throws -> String {
         guard conversationID.range(of: #"^[a-zA-Z0-9-]{16,64}$"#, options: .regularExpression) != nil else { throw AgentError.message("Некорректный диалог") }
-        guard ["knowledge", "project", "proposals"].contains(resource) else { throw AgentError.message("Некорректный путь памяти") }
+        guard ["knowledge", "project", "proposals", "memory"].contains(resource) else { throw AgentError.message("Некорректный путь памяти") }
         return "/api/native/conversations/" + conversationID + "/" + resource
     }
     func knowledgeProjects(expectedToken: String) async throws -> [KnowledgeProject] {
@@ -289,6 +291,15 @@ struct AgentAPI {
         // JSONEncoder omits optional nil; the API requires an explicit null to detach.
         let data = try JSONSerialization.data(withJSONObject: ["projectId": projectID as Any? ?? NSNull()])
         return try await request(Self.knowledgeRoute(conversationID, resource: "project"), expectedToken: expectedToken, encodedBody: data)
+    }
+    /// Прямая правка записи владельцем: без text — удаление.
+    func editKnowledge(_ entryID: String, scope: String, kind: String?, text: String?, sourceConversationID: String? = nil, conversationID: String, expectedToken: String) async throws -> KnowledgeSnapshot {
+        guard ["conversation", "project"].contains(scope) else { throw AgentError.message("Некорректная память") }
+        var body: [String: Any] = ["scope": scope, "entryId": entryID]
+        if let kind, let text { body["kind"] = kind; body["text"] = text } else { body["remove"] = true }
+        if let sourceConversationID { body["sourceConversationId"] = sourceConversationID }
+        let data = try JSONSerialization.data(withJSONObject: body)
+        return try await request(Self.knowledgeRoute(conversationID, resource: "memory"), expectedToken: expectedToken, encodedBody: data)
     }
     func proposeKnowledge(_ entryID: String, conversationID: String, expectedToken: String) async throws {
         struct Result: Decodable { let proposal: KnowledgeProposal }

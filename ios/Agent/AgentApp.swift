@@ -297,6 +297,7 @@ struct AgentGlass: ViewModifier {
         if ProcessInfo.processInfo.arguments.contains("--generation-preview") { GenerationPreview() }
         else if ProcessInfo.processInfo.arguments.contains("--media-selftest") { MediaSelfTestView() }
         else if ProcessInfo.processInfo.arguments.contains("--connection-preview") { NavigationStack { SettingsView(server: .constant("https://agent.example.com")) }.tint(.primary) }
+        else if ProcessInfo.processInfo.arguments.contains("--memory-preview") { KnowledgePreview() }
         else if ProcessInfo.processInfo.arguments.contains("--voice-settings-preview") { NavigationStack { VoiceSettingsView() }.tint(.primary) }
         else if ProcessInfo.processInfo.arguments.contains("--openflux-probe") { OpenFluxProbeView() }
         else if ProcessInfo.processInfo.arguments.contains("--approval-preview") { ChatApprovalPreview() }
@@ -414,7 +415,7 @@ struct RootView: View {
                     Section {
                         Label("Чат с командой", systemImage: "bubble.left.and.bubble.right")
                         if let conversationId = model.conversationId {
-                            NavigationLink { KnowledgeView(server: server, conversationID: conversationId) } label: { Label("Память диалога", systemImage: "books.vertical") }
+                            NavigationLink { KnowledgeView(server: server, conversationID: conversationId) } label: { Label("Память", systemImage: "books.vertical") }
                         }
                         NavigationLink { PanelView(server: server, onMacStart: { project, task, provider, allowFallback in
                             guard !model.busy && !model.pending && !model.remoteBusy else { throw AgentError.message("Дождитесь завершения текущего запроса") }
