@@ -1460,6 +1460,11 @@ export function startMiniappServer(
       const assignee = url.searchParams.get("assignee");
       const status = url.searchParams.get("status") as TaskStatus | null;
       const limit = parseIntOr(url.searchParams.get("limit"), 50, 200);
+      // AUD-012: `truncated` честно говорил «за краем есть ещё», но достать
+      // это «ещё» было нечем — потолок 200 и ни одного способа сдвинуть окно.
+      // `offset` сдвигает окно во всех трёх ветках; `nextOffset` в ответе —
+      // готовое значение для следующей страницы (null — страниц больше нет).
+      const offset = parseIntOr(url.searchParams.get("offset"), 0, 1_000_000);
       // Аудит 2026-08-20: незнакомый статус молча ронял фильтр, и вместо
       // «задач в статусе X» приходила ВСЯ доска — с ответом 200, по которому
       // отличить одно от другого невозможно. Тот же класс уже чинили для
@@ -1531,12 +1536,12 @@ export function startMiniappServer(
         // Аудит 2026-08-28: `chat_id` сюда не доезжал вовсе — ветка assignee
         // выигрывала и молча теряла сужение области, отвечая 200 с задачами
         // роли из всех чатов сразу.
-        const rows = listTasksByAssignee(assigneeKey, statuses, probe, chatId);
+        const rows = listTasksByAssignee(assigneeKey, statuses, probe, chatId, offset);
         truncated = rows.length > limit;
         // Очередь роли отсортирована `priority DESC`: лишняя строка последняя.
         tasks = truncated ? rows.slice(0, limit) : rows;
       } else if (chatId !== undefined) {
-        const rows = listTasksByChat(chatId, statuses, probe);
+        const rows = listTasksByChat(chatId, statuses, probe, offset);
         truncated = rows.length > limit;
         // А здесь порядок ВОЗРАСТАЮЩИЙ, хотя `limit` берёт N свежайших (F1
         // того же аудита). Лишняя строка в такой выборке — самая старая, то
@@ -1560,9 +1565,9 @@ export function startMiniappServer(
           .prepare(
             // Без тай-брейка произвольной становится не только выдача, но и
             // флаг truncated: лишняя строка probe берётся с плавающей границы.
-            `SELECT id FROM tasks${where} ORDER BY created_at DESC, rowid DESC LIMIT ?`,
+            `SELECT id FROM tasks${where} ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?`,
           )
-          .all(...(statuses ?? []), probe) as { id: string }[];
+          .all(...(statuses ?? []), probe, offset) as { id: string }[];
         truncated = rows.length > limit;
         // Режем по id, а не после getTask: лишняя строка тут самая старая по
         // `created_at DESC`, то есть последняя, и тянуть её целиком незачем.
@@ -1571,6 +1576,7 @@ export function startMiniappServer(
       return json({
         tasks: redactContent(user, tasks, TASK_CONTENT_FIELDS),
         truncated,
+        nextOffset: truncated ? offset + limit : null,
       });
     }
 

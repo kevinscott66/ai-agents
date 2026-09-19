@@ -1149,6 +1149,7 @@ export function listTasksByAssignee(
   statuses?: TaskStatus[],
   limit?: number,
   chatId?: number | string,
+  offset = 0,
 ): Task[] {
   let sql = `SELECT * FROM tasks WHERE assigned_to = ?`;
   const args: unknown[] = [agentKey];
@@ -1169,8 +1170,11 @@ export function listTasksByAssignee(
   // стоял `USE TEMP B-TREE FOR ORDER BY`, так что цена нулевая.
   sql += ` ORDER BY priority DESC, created_at ASC, rowid ASC`;
   if (typeof limit === "number" && Number.isFinite(limit) && limit > 0) {
-    sql += ` LIMIT ?`;
-    args.push(Math.floor(limit));
+    // OFFSET — страницы доски (AUD-012): без него всё дальше двухсот первых
+    // строк было недостижимо. Ключ сортировки полный (rowid), так что страницы
+    // не перекрываются, пока очередь не меняется между запросами.
+    sql += ` LIMIT ? OFFSET ?`;
+    args.push(Math.floor(limit), Math.max(0, Math.floor(offset)));
   }
   const rows = db.prepare(sql).all(...args as never[]) as TaskRow[];
   return rows.map(rowToTask);
@@ -1212,6 +1216,7 @@ export function listTasksByChat(
   chatId: number | string,
   statuses?: TaskStatus[],
   limit?: number,
+  offset = 0,
 ): Task[] {
   const cid = typeof chatId === "string" ? Number(chatId) : chatId;
   let where = `chat_id = ?`;
@@ -1223,9 +1228,11 @@ export function listTasksByChat(
   const capped =
     typeof limit === "number" && Number.isFinite(limit) && limit > 0;
   const sql = capped
-    ? `SELECT * FROM tasks WHERE ${where} ORDER BY created_at DESC, rowid DESC LIMIT ?`
+    ? `SELECT * FROM tasks WHERE ${where} ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?`
     : `SELECT * FROM tasks WHERE ${where} ORDER BY created_at ASC, rowid ASC`;
-  if (capped) args.push(Math.floor(limit as number));
+  // `offset` отсчитывается от свежего конца: страница 2 — следующие N задач
+  // старше первой, в том же возрастающем порядке внутри страницы.
+  if (capped) args.push(Math.floor(limit as number), Math.max(0, Math.floor(offset)));
   const rows = db.prepare(sql).all(...args as never[]) as TaskRow[];
   if (capped) rows.reverse();
   return rows.map(rowToTask);

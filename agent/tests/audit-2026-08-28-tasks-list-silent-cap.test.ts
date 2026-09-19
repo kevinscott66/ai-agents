@@ -212,15 +212,15 @@ describe("применение", () => {
   test("клиентский тип обещает флаг, а не забывает про него", () => {
     const api = readFileSync(new URL("../miniapp/src/lib/api.ts", import.meta.url), "utf-8");
     const tasksFn = api.slice(api.indexOf("  tasks: (params:"), api.indexOf("  task: (id:"));
-    expect(tasksFn).toContain("req<{ tasks: Task[]; truncated: boolean }>");
+    expect(tasksFn).toContain("req<{ tasks: Task[]; truncated: boolean;");
   });
 
-  test("страница задач показывает предупреждение, а не проглатывает флаг", () => {
+  test("страница задач не проглатывает флаг: за краем — кнопка «Показать ещё» (AUD-012)", () => {
     const page = readFileSync(
       new URL("../miniapp/src/pages/Tasks.tsx", import.meta.url),
       "utf-8",
     );
     expect(page).toContain("setTruncated(Boolean(r.truncated))");
-    expect(page).toContain("Показаны не все задачи");
+    expect(page).toContain("Показать ещё");
   });
 });

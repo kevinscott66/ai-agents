@@ -1,5 +1,6 @@
 import {test,expect} from 'bun:test';
 import {startTaskRefresh} from '../miniapp/src/lib/task-refresh.ts';
+import {loadTaskPages,TASK_PAGE_SIZE} from '../miniapp/src/lib/task-pages.ts';
 test('task refresh reconciles foreground and interval, skips overlap/hidden, cleans up',async()=>{
  let visible=true,listener=()=>{},tick=()=>{},calls=0,disposed=0,release!:()=>void;
  const stop=startTaskRefresh(async()=>{calls++;await new Promise<void>(r=>release=r);},{visible:()=>visible,subscribe:f=>{listener=f;return()=>disposed++;},interval:f=>{tick=f;return()=>disposed++;}});
@@ -17,7 +18,7 @@ test('missing selected detail never freezes a successfully refreshed board',asyn
  const start=source.indexOf('  async function load()');
  const code=new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,source.indexOf('\n  useEffect(',start)));
  let board:unknown, error:unknown, loading=true;
- const load=new Function('api','beginLoad','setLoading','setErr','status','assignee','selectedId','setTasks','setTruncated','setSelectedSnapshot','formatApiError',code+';return load;')(
- {tasks:async()=>({tasks:[{id:'new'}],truncated:false}),task:async()=>{throw new Error('Detail unavailable');}},()=>()=>true,(v:boolean)=>loading=v,(e:unknown)=>error=e,'','', 'missing',(v:unknown)=>board=v,()=>{},()=>{},(e:Error)=>e.message);
+ const load=new Function('api','beginLoad','setLoading','setErr','status','assignee','selectedId','setTasks','setTruncated','setSelectedSnapshot','formatApiError','loadTaskPages','TASK_PAGE_SIZE','depth',code+';return load;')(
+ {tasks:async()=>({tasks:[{id:'new'}],truncated:false}),task:async()=>{throw new Error('Detail unavailable');}},()=>()=>true,(v:boolean)=>loading=v,(e:unknown)=>error=e,'','', 'missing',(v:unknown)=>board=v,()=>{},()=>{},(e:Error)=>e.message,loadTaskPages,TASK_PAGE_SIZE,1);
  await load();expect(board).toEqual([{id:'new'}]);expect(error).toBe('Detail unavailable');expect(loading).toBe(false);
 });

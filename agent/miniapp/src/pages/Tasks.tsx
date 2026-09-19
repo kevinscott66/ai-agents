@@ -13,6 +13,7 @@ import { ErrorBox } from "../components/ErrorBox";
 import { TASK_STATUS_LABELS, label } from "../lib/labels";
 import { ellipsize } from "../lib/text";
 import { adminFromAutonomy } from "../lib/admin";
+import { TASK_PAGE_SIZE, loadTaskPages } from "../lib/task-pages";
 import { TASK_TRANSITIONS, nextStatuses } from "../../../lib/task-fsm.ts";
 
 const STATUSES: (TaskStatus | "")[] = [
@@ -109,6 +110,9 @@ export default function Tasks() {
   // Ответ ручки режется лимитом, и до аудита 2026-08-28 узнать об этом было
   // неоткуда: сотня задач из трёхсот выглядела как вся доска.
   const [truncated, setTruncated] = useState(false);
+  // Сколько страниц раскрыто «Показать ещё» (AUD-012). Смена фильтра
+  // возвращает к первой: глубина относится к конкретной выборке.
+  const [depth, setDepth] = useState(1);
   const [status, setStatus] = useState<TaskStatus | "">("");
   const [assignee, setAssignee] = useState<string>("");
   const [agentsState, setAgentsState] = useState(AGENTS_EMPTY);
@@ -154,18 +158,23 @@ export default function Tasks() {
   const beginLoad = useLatestRun();
   const coalescer = useCoalescer();
 
-  useEffect(() => startTaskRefresh(load, browserTaskRefresh), [status, assignee, selectedId]);
+  useEffect(() => startTaskRefresh(load, browserTaskRefresh), [status, assignee, selectedId, depth]);
 
   async function load() {
     const isCurrent = beginLoad();
     setLoading(true);
     setErr(null);
     try {
-      const r = await api.tasks({
-        status: status || undefined,
-        assignee: assignee || undefined,
-        limit: 100,
-      });
+      const r = await loadTaskPages(
+        (offset) =>
+          api.tasks({
+            status: status || undefined,
+            assignee: assignee || undefined,
+            limit: TASK_PAGE_SIZE,
+            offset,
+          }),
+        depth,
+      );
       if (!isCurrent()) return;
       // A detail request may fail independently; keep the fresh board visible.
       setTasks(r.tasks);
@@ -197,7 +206,7 @@ export default function Tasks() {
 
   useEffect(() => {
     load();
-  }, [status, assignee, selectedId]);
+  }, [status, assignee, selectedId, depth]);
 
   // Задачи меняют все 12 агентов, и за один ход команды событий прилетает
   // пачка. Схлопываем: смена фильтра грузит сразу, поток событий — не чаще
@@ -221,7 +230,7 @@ export default function Tasks() {
       unsubs.forEach((u) => u());
       coalescer.cancel();
     };
-  }, [status, assignee, selectedId]);
+  }, [status, assignee, selectedId, depth]);
 
   function setBusy(id: string, b: boolean) {
     setBusyIds((m) => ({ ...m, [id]: b }));
@@ -295,6 +304,7 @@ export default function Tasks() {
       setNInput("");
       setStatus("");
       setAssignee("");
+      setDepth(1);
       openTask(created.task);
     } catch (e: any) {
       haptic("error");
@@ -325,7 +335,10 @@ export default function Tasks() {
       <div className="filter-row">
         <select
           value={status}
-          onChange={(e) => setStatus(e.currentTarget.value as TaskStatus | "")}
+          onChange={(e) => {
+            setStatus(e.currentTarget.value as TaskStatus | "");
+            setDepth(1);
+          }}
         >
           {STATUSES.map((s) => (
             <option key={s} value={s}>
@@ -335,7 +348,10 @@ export default function Tasks() {
         </select>
         <select
           value={assignee}
-          onChange={(e) => setAssignee(e.currentTarget.value)}
+          onChange={(e) => {
+            setAssignee(e.currentTarget.value);
+            setDepth(1);
+          }}
         >
           <option value="">все исполнители</option>
           {agentsHint(agentsState) && (
@@ -350,12 +366,6 @@ export default function Tasks() {
           ))}
         </select>
       </div>
-
-      {truncated && !loading && (
-        <div className="meta" style={{ marginBottom: 8 }}>
-          Показаны не все задачи — выдача обрезана по лимиту. Сузь фильтрами.
-        </div>
-      )}
 
       {loading && tasks.length === 0 ? (
         <SkeletonList rows={5} />
@@ -404,6 +414,19 @@ export default function Tasks() {
             </div>
           );
         })
+      )}
+
+      {truncated && tasks.length > 0 && (
+        // Раньше здесь была только надпись «сузь фильтрами» (аудит
+        // 2026-08-28), а задачи за двухсотой строкой оставались недостижимы.
+        <button
+          className="btn"
+          style={{ width: "100%", marginTop: 8 }}
+          disabled={loading}
+          onClick={() => setDepth((d) => d + 1)}
+        >
+          {loading ? "⏳ Загружаю…" : `Показать ещё (показано ${tasks.length})`}
+        </button>
       )}
 
       {selected && (
