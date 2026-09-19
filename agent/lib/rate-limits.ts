@@ -79,6 +79,9 @@ const RULES: Record<string, { perAgent?: BucketRule; global?: BucketRule }> = {
   CANCEL_FOLLOWUP: { perAgent: { windowMs: MINUTE_MS, max: 6 } },
   // Свои потолки в lib/shop-repair.ts (одна одновременно, 3 в сутки).
   SHOP_REPAIR: { perAgent: { windowMs: HOUR_MS, max: 2 } },
+  // Свои потолки в lib/code-tasks.ts (одна одновременно, 5 в сутки); здесь —
+  // чтобы цикл заявок не заваливал владельца карточками.
+  CODE_TASK: { perAgent: { windowMs: HOUR_MS, max: 3 } },
   ORDER_DELIVERY: { perAgent: { windowMs: HOUR_MS, max: 10 } },
   DELIVERY_CANCEL: { perAgent: { windowMs: HOUR_MS, max: 10 } },
   DELIVERY_QUOTE: { perAgent: { windowMs: MINUTE_MS, max: 4 } },
