@@ -1,7 +1,9 @@
-import {test,expect} from 'bun:test';
+import {test,expect,beforeEach} from 'bun:test';
 import {NativeAccess} from '../lib/native-access.ts';
 import {nativeApi,webApi} from '../lib/native-api.ts';
-import {promptEcho,transcribeModels} from '../lib/native-voice.ts';
+import {promptEcho,transcribeModels,_resetVoiceLimitsForTests} from '../lib/native-voice.ts';
+// Окна лимита голоса общие для модуля: без сброса повтор файла (--rerun-each) упирается в 429.
+beforeEach(()=>_resetVoiceLimitsForTests());
 test('voice uses owner bearer, bounds input, transcribes, rechecks revocation; web isolates origin',async()=>{
  const names=['NATIVE_APP_ENABLED','MAC_USER_IDS','TELEGRAM_ALLOWED_GROUP_IDS','OPENAI_API_KEY','WEB_APP_ORIGIN'];const saved=Object.fromEntries(names.map(k=>[k,process.env[k]]));const realFetch=globalThis.fetch;
  Object.assign(process.env,{NATIVE_APP_ENABLED:'true',MAC_USER_IDS:'999323908',TELEGRAM_ALLOWED_GROUP_IDS:'999323908',WEB_APP_ORIGIN:'https://agent.test',OPENAI_API_KEY:'test-key'});
