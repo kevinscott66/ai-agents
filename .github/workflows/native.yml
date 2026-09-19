@@ -1,0 +1,104 @@
+name: Native Checks
+
+# AUD-20260919-007 — зелёный PR не проверял native-часть: ни Swift-регрессии
+# iPhone-клиента (ios/tests/run.py), ни сборку приложения, ни Go-ядро
+# OpenFluxCore. Сломанный runner (AUD-006) месяцами был не виден CI.
+#
+# Все три джобы работают без сертификатов владельца: сборка — без подписи,
+# как ios/build-unsigned.sh. Недоверенных входов (заголовков, веток PR) здесь
+# нет. Фильтр путей держит macOS-минуты для PR, которые native-часть не
+# трогают; если эти проверки станут обязательными в защите main (AUD-004),
+# фильтр надо заменить на условие внутри джоб — иначе PR без native-изменений
+# будет ждать пропущенную проверку.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'ios/**'
+      - 'agent/miniapp/**'
+      - 'agent/lib/signed-actions.ts'
+      - '.github/workflows/native.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  openflux-core:
+    name: OpenFluxCore (go test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ios/OpenFluxCore/go.mod
+          cache-dependency-path: ios/OpenFluxCore/go.sum
+
+      - name: go vet + go test
+        working-directory: ios/OpenFluxCore
+        run: |
+          go vet ./...
+          go test -mod=readonly ./...
+
+  ios-regressions:
+    name: iOS regressions (ios/tests/run.py)
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      # Шаг с подписью сверяет подпись iPhone с сервером через bun.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.0.2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install deps
+        working-directory: agent
+        run: bun install --frozen-lockfile
+
+      - name: Toolchain
+        run: xcodebuild -version && xcrun swiftc --version
+
+      - name: Run regressions
+        run: python3 ios/tests/run.py
+
+  ios-build:
+    name: iOS build (unsigned)
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ios/OpenFluxCore/go.mod
+          cache-dependency-path: ios/OpenFluxCore/go.sum
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.0.2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install miniapp deps
+        working-directory: agent/miniapp
+        run: bun install --frozen-lockfile
+
+      - name: Build without signing
+        env:
+          AGENT_IOS_BUILD_DIR: ${{ runner.temp }}/agent-ios
+        run: sh ios/build-unsigned.sh
