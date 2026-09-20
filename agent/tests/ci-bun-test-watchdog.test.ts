@@ -30,7 +30,7 @@ const WORKFLOW = join(import.meta.dir, "..", "..", ".github", "workflows", "chec
 /** Каждое зависание стоит секунды реального времени — 5s по умолчанию мало. */
 const slowTest = (name: string, fn: () => void) => test(name, fn, 60_000);
 
-type Mode = "hang-then-pass" | "red" | "hang-twice";
+type Mode = "hang-then-pass" | "red" | "hang-twice" | "slow-alive";
 
 /**
  * Песочница с поддельным `bun` первым в PATH. Заглушка считает вызовы,
@@ -47,12 +47,15 @@ function sandbox(mode: Mode) {
 N=$(cat "${root}/count" 2>/dev/null || echo 0); N=$((N + 1)); echo "$N" > "${root}/count"
 echo "$@" >> "${root}/argv"
 echo "##[group]tests/prelude.test.ts:"
-echo "(pass) что-то раньше"
-echo "##[group]tests/stuck-here.test.ts:"
+# Без перевода строки перед последней группой: убитый прогон обрывается на
+# полуслове, и в реальном логе CI группа приехала приклеенной к предыдущей
+# строке — отчёт тогда не назвал файл.
+printf '(pass) что-то раньше, без перевода##[group]tests/stuck-here.test.ts:\n'
 case "${mode}" in
   hang-then-pass) if [ "$N" = "1" ]; then exec sleep 20; fi; echo "8329 pass 0 fail"; exit 0 ;;
   red)            echo "1 fail"; exit 1 ;;
   hang-twice)     exec sleep 20 ;;
+  slow-alive)     for i in $(seq 1 16); do echo "(pass) тик $i"; sleep 0.5; done; echo "8329 pass 0 fail"; exit 0 ;;
 esac
 `;
   writeFileSync(join(bin, "bun"), stub);
@@ -66,10 +69,11 @@ function run(sb: ReturnType<typeof sandbox>) {
     env: {
       ...process.env,
       PATH: `${sb.bin}:${process.env.PATH ?? ""}`,
-      // Срок не меньше трёх секунд: на загруженной машине заглушка успевает
-      // родиться не мгновенно, а убитая ДО первой своей строки не увеличит
-      // счётчик вызовов — и тест начнёт врать про число попыток.
-      BUN_TEST_TIMEOUT_SEC: "3",
+      // Срок не меньше четырёх секунд: тишина считается с рождения процесса,
+      // а на загруженной машине заглушка стартует не мгновенно — убитая ДО
+      // первой своей строки, она не увеличит счётчик вызовов, и тест начнёт
+      // врать про число попыток (ловил это на полном прогоне файла).
+      BUN_TEST_TIMEOUT_SEC: "4",
       BUN_TEST_POLL_SEC: "0.2",
       BUN_TEST_ATTEMPTS: "2",
     },
@@ -101,10 +105,15 @@ describe("сторож превращает зависание в повтор, 
 
   slowTest("в отчёте названо, на каком файле встало", () => {
     const r = run(sandbox("hang-then-pass"));
-    expect(r.stderr).toContain("молчал");
+    // Именно в строке отчёта, а не где-нибудь в приложенном хвосте вывода:
+    // хвост содержит имя файла всегда, поэтому проверка «есть в stderr»
+    // зелёная даже у сломанного отчёта — так и было поймано.
+    const warn = r.stderr.split("\n").find((l) => l.includes("::warning::run-bun-tests"));
+    expect(warn).toBeDefined();
+    expect(warn).toContain("молчал");
     // Без имени файла зависание неотличимо от любого другого, и следующее
     // такое расследование начинается с нуля — как случилось в этот раз.
-    expect(r.stderr).toContain("tests/stuck-here.test.ts");
+    expect(warn).toContain("tests/stuck-here.test.ts");
   });
 
   slowTest("два зависания подряд — это уже не шум: код 124 и внятная ошибка", () => {
@@ -112,6 +121,19 @@ describe("сторож превращает зависание в повтор, 
     expect(r.calls).toBe(2);
     expect(r.code).toBe(124);
     expect(r.stderr).toContain("::error::");
+  });
+});
+
+describe("срок отмеряет тишину, а не длительность прогона", () => {
+  slowTest("живой прогон длиннее срока доходит до конца и не перезапускается", () => {
+    // Заглушка печатает ~8 секунд при сроке в 4: «срок от старта» убил бы её
+    // на середине и перезапустил. Ровно этим сторож и был сломан в первой
+    // редакции — здоровый набор идёт 5,5–9 минут, то есть под нож попадал бы
+    // каждый прогон, а не только зависший.
+    const r = run(sandbox("slow-alive"));
+    expect(r.calls).toBe(1);
+    expect(r.code).toBe(0);
+    expect(r.output).toContain("8329 pass");
   });
 });
 
@@ -130,6 +152,25 @@ describe("повтор лечит зависание, но не прячет к�
   });
 });
 
+describe("отчёт читается одинаково всеми grep", () => {
+  test("файл ищется фиксированной строкой, а не регуляркой со скобками", () => {
+    // 20.09 сторож поймал настоящее зависание — и не смог назвать файл:
+    // шаблон `##\\[group\\]` в CI молча не находил ничего, хотя группа
+    // стояла в хвосте вывода рядом. Экранированную скобку реализации grep
+    // читают по-разному, и локальный прогон этого не ловит в принципе —
+    // поэтому запрет на такие шаблоны стоит здесь, а не в чьей-то памяти.
+    const runner = readFileSync(SCRIPT, "utf8");
+    const greps = runner
+      .split("\n")
+      .filter((l) => !l.trim().startsWith("#") && l.includes("grep "));
+    expect(greps.length).toBeGreaterThan(0);
+    for (const line of greps) {
+      expect(line).toContain("-aF");
+      expect(/\\[[\]]/.test(line)).toBe(false);
+    }
+  });
+});
+
 describe("джоба baseline и правда ходит через сторож", () => {
   test("шаг прогона зовёт скрипт и кладёт вывод туда, откуда его читает коридор", () => {
     const wf = readFileSync(WORKFLOW, "utf8");
@@ -139,5 +180,21 @@ describe("джоба baseline и правда ходит через сторож
     expect(wf).not.toContain("bun test --max-concurrency 1 --isolate 2>&1 | tee");
     expect(wf).toContain('run-bun-tests.sh" /tmp/bun-test-output.txt');
     expect(wf).toContain("assert-test-baseline.sh /tmp/bun-test-output.txt");
+  });
+
+  test("потолок джобы вмещает зависание и следом целый здоровый прогон", () => {
+    // 20.09 сторож сработал правильно, а джобу всё равно срезало: попытка 2
+    // не влезла в оставшиеся минуты, и починка зависания упёрлась в потолок.
+    // Поэтому потолок проверяется против срока, а не «на глаз».
+    const wf = readFileSync(WORKFLOW, "utf8");
+    const job = wf.slice(wf.indexOf("\n  test-baseline:"));
+    const cap = Number(job.match(/timeout-minutes:\s*(\d+)/)?.[1]);
+    const runner = readFileSync(SCRIPT, "utf8");
+    const limit = Number(runner.match(/BUN_TEST_TIMEOUT_SEC-\}" "(\d+)"/)?.[1]);
+    expect(Number.isFinite(cap)).toBe(true);
+    expect(Number.isFinite(limit)).toBe(true);
+    // Худший случай: одна попытка молчит весь срок, вторая идёт целиком
+    // (здоровый набор — до 9 минут) поверх checkout и bun install.
+    expect(cap * 60).toBeGreaterThanOrEqual(limit + 9 * 60 + 120);
   });
 });
