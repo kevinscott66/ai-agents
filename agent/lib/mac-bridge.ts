@@ -446,20 +446,52 @@ export function sendToMac(req: MacRunRequest): Promise<MacRunResult> {
   return sendMacRequest(req);
 }
 
-/** Explicit personal commands only: caller must be the allowlisted Mac user in their DM. */
+/**
+ * Explicit personal commands only: caller must be the allowlisted Mac user.
+ *
+ * `calendar_today` — такое же чтение календаря, как `reminders` у MAC_CONTROL,
+ * и правило у них одно: владельцу из любого его чата. Иначе «что у меня
+ * сегодня» отвечалось бы в личке и отказывало в приложении — при одинаковом
+ * смысле вопроса. `open_workspace` открывает окна на самой машине и остаётся
+ * в личном чате.
+ */
 export function sendAssistantToMac(operation: "calendar_today" | "open_workspace", userId: string, chatId: number): Promise<MacRunResult> {
-  if (!isUserAllowed(userId) || String(chatId) !== userId || chatId <= 0) return Promise.reject(new Error("forbidden"));
+  if (!isUserAllowed(userId)) return Promise.reject(new Error("forbidden"));
+  const ownerDm = String(chatId) === userId && chatId > 0;
+  if (!ownerDm && operation !== "calendar_today") return Promise.reject(new Error("forbidden"));
   if (!isMacOnline()) return Promise.reject(new Error("mac_offline"));
   return sendMacRequest({ operation });
 }
 
 /**
- * Команда MAC_CONTROL. Те же условия, что у помощника: владелец из
- * MAC_USER_IDS и только его личный чат — чужой или групповой чат не может
- * заблокировать, усыпить или выключить его машину.
+ * Команды календаря: напоминания и события. Владелец просит их отовсюду, где
+ * говорит с агентом — из приложения, из веб-панели, из группы команды, — а не
+ * только из лички с ботом. Они ничего не делают с самой машиной: читают список
+ * или добавляют запись, и любую можно удалить руками.
+ *
+ * Список белый, а не чёрный, намеренно: новая команда в MAC_CONTROL по
+ * умолчанию попадёт под строгое правило ниже, а не под это послабление.
+ */
+const MAC_CALENDAR_COMMANDS: ReadonlySet<MacControl["command"]> = new Set(["reminders", "reminder_add", "event_add"]);
+
+/**
+ * Команда MAC_CONTROL. Вызывающий всегда должен быть владельцем из
+ * MAC_USER_IDS — это не ослабляется нигде: чужой человек в общем чате не
+ * дотянется до Mac, сколько бы он там ни писал.
+ *
+ * А вот чат проверяется только для команд, которые трогают саму машину:
+ * заблокировать, усыпить, сменить громкость, открыть приложение, выключить,
+ * перезагрузить. Такое остаётся привилегией личного чата: сообщение в группе
+ * видят и пересылают, а выключение чужой машины по чужой подсказке необратимо
+ * в отличие от лишнего напоминания.
+ *
+ * Плата за послабление названа прямо: список напоминаний, прочитанный в
+ * группе, в группе и останется. Это решение владельца, а не побочный эффект.
  */
 export function sendControlToMac(control: MacControl, userId: string | undefined, chatId: number): Promise<MacRunResult> {
-  if (!userId || !isUserAllowed(userId) || String(chatId) !== userId || chatId <= 0) return Promise.reject(new Error("forbidden"));
+  if (!userId || !isUserAllowed(userId)) return Promise.reject(new Error("forbidden"));
+  const ownerDm = String(chatId) === userId && chatId > 0;
+  if (!ownerDm && !MAC_CALENDAR_COMMANDS.has(control.command)) return Promise.reject(new Error("forbidden"));
   if (!isMacOnline()) return Promise.reject(new Error("mac_offline"));
   return sendMacRequest({ control });
 }

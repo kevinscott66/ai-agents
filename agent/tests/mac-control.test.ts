@@ -192,8 +192,31 @@ describe("handler and bridge", () => {
   });
 
   test("real bridge refuses group chats and missing users", async () => {
-    await expect(sendControlToMac({ command: "lock" }, undefined, 42)).rejects.toThrow("forbidden");
-    await expect(sendControlToMac({ command: "lock" }, "42", -100_42)).rejects.toThrow("forbidden");
+    const saved = process.env.MAC_USER_IDS;
+    process.env.MAC_USER_IDS = "42";
+    try {
+      await expect(sendControlToMac({ command: "lock" }, undefined, 42)).rejects.toThrow("forbidden");
+      // Машину из группы не трогают: сообщение там видят и пересылают, а
+      // выключение необратимо.
+      await expect(sendControlToMac({ command: "lock" }, "42", -100_42)).rejects.toThrow("forbidden");
+      await expect(sendControlToMac({ command: "open_app", app: "notes" }, "42", -100_42)).rejects.toThrow("forbidden");
+      // Чужой человек не дотянется до Mac и календарём — allowlist считается
+      // всегда, чат тут ни при чём.
+      await expect(sendControlToMac({ command: "reminders" }, "99", -100_42)).rejects.toThrow("forbidden");
+      // А владельцу календарь открыт из любого его чата: приложение, веб-панель,
+      // группа команды. Отказ «mac_offline» — это уже за гейтом, Mac просто не
+      // подключён в тесте.
+      for (const c of [
+        { command: "reminders" } as const,
+        { command: "reminder_add", title: "хлеб" } as const,
+        { command: "event_add", title: "созвон", startAt: future(1), endAt: future(2) } as const,
+      ]) {
+        await expect(sendControlToMac(c, "42", -100_42)).rejects.toThrow("mac_offline");
+      }
+    } finally {
+      if (saved === undefined) delete process.env.MAC_USER_IDS;
+      else process.env.MAC_USER_IDS = saved;
+    }
   });
 
   test("approval card describes the command and the policy", () => {
