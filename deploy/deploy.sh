@@ -262,6 +262,23 @@ fi
 grep -E 'Number of files|transferred' "$RSYNC_LOG" || true
 rm -f "$RSYNC_LOG"
 
+# --- 2b. манифест версии рядом с кодом ---
+# Аудит 2026-09-19 (AUD-027): выкаченный sha жил только в строке «deploy OK»
+# ниже, то есть в терминале оператора. /opt/agent-team не git-чекаут — `git log`
+# там не работает, и вопрос «что сейчас в бою» решался по памяти. Пишем сразу
+# после rsync, а не после health: манифест отвечает за КОД НА ДИСКЕ, и если
+# шаг 3 упадёт, он честно покажет, что именно там лежит.
+#
+# Провал записи выкатку не валит: код уже на месте, а манифест — бухгалтерия.
+if [ -x "$SCRIPT_DIR/version-manifest.sh" ]; then
+  if ! DEPLOY_RECORD_PATH="$REMOTE" DEPLOY_RECORD_REPO="$REPO_ROOT" \
+       "$SCRIPT_DIR/version-manifest.sh" record server; then
+    red "манифест версии не записался — выкатку это не отменяет, но 'version-manifest.sh show' покажет старое"
+  fi
+else
+  red "нет $SCRIPT_DIR/version-manifest.sh — версия выкатки нигде не останется"
+fi
+
 # --- 3. install deps, rebuild Mini App, restart ---
 cyan "== 3. bun install + miniapp build + restart =="
 # Шаг не был обёрнут вовсе. При `set -euo pipefail` любой его отказ — упавший
