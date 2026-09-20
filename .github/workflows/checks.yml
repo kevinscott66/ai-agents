@@ -154,9 +154,11 @@ jobs:
       # suite in isolated serial workers so server lifecycles cannot overlap.
       # This preserves every test and assertion; it only removes Bun runner
       # concurrency as a source of EADDRINUSE/port-0 failures.
+      # Сам прогон — в .github/scripts/run-bun-tests.sh: там же и флаги, и
+      # сторож времени против зависаний bun --isolate (шапка скрипта).
       - name: Run tests and capture output
         working-directory: agent
-        run: bun test --max-concurrency 1 --isolate 2>&1 | tee /tmp/bun-test-output.txt; exit ${PIPESTATUS[0]}
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/run-bun-tests.sh" /tmp/bun-test-output.txt
 
       - name: Assert test count is inside the baseline corridor
         run: .github/scripts/assert-test-baseline.sh /tmp/bun-test-output.txt
