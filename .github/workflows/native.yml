@@ -6,19 +6,18 @@ name: Native Checks
 #
 # Все три джобы работают без сертификатов владельца: сборка — без подписи,
 # как ios/build-unsigned.sh. Недоверенных входов (заголовков, веток PR) здесь
-# нет. Фильтр путей держит macOS-минуты для PR, которые native-часть не
-# трогают; если эти проверки станут обязательными в защите main (AUD-004),
-# фильтр надо заменить на условие внутри джоб — иначе PR без native-изменений
-# будет ждать пропущенную проверку.
+# нет.
+#
+# AUD-20260919-004 — эти проверки сделаны обязательными в защите main, поэтому
+# фильтра путей в триггере больше нет: пропущенный из-за `paths:` workflow не
+# присылает check run вовсе, и PR без native-изменений ждал бы его вечно.
+# Экономию macOS-минут даёт джоба detect: она считает, задеты ли native-пути, а
+# три тяжёлые джобы висят на её выходе через `if:`. Пропущенная по `if:` джоба
+# отдаёт заключение skipped, и защита ветки считает такую проверку выполненной.
 
 on:
   pull_request:
     branches: [main]
-    paths:
-      - 'ios/**'
-      - 'agent/miniapp/**'
-      - 'agent/lib/signed-actions.ts'
-      - '.github/workflows/native.yml'
   workflow_dispatch:
 
 permissions:
@@ -29,8 +28,43 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  detect:
+    name: Native paths touched?
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      native: ${{ steps.check.outputs.native }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Сравнить с базой PR
+        id: check
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -eu
+          # workflow_dispatch: базы нет, гоняем всё.
+          if [ -z "${BASE_SHA:-}" ]; then
+            echo "native=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          # Тот же список, что раньше стоял в paths: триггера.
+          if printf '%s\n' "$changed" | grep -qE '^(ios/|agent/miniapp/|agent/lib/signed-actions\.ts$|\.github/workflows/native\.yml$)'; then
+            echo "native=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "native=false" >> "$GITHUB_OUTPUT"
+          fi
+          printf 'затронутых файлов: %s\n' "$(printf '%s\n' "$changed" | grep -c . || true)"
+
   openflux-core:
     name: OpenFluxCore (go test)
+    needs: detect
+    if: needs.detect.outputs.native == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -52,6 +86,8 @@ jobs:
 
   ios-regressions:
     name: iOS regressions (ios/tests/run.py)
+    needs: detect
+    if: needs.detect.outputs.native == 'true'
     runs-on: macos-26
     timeout-minutes: 20
     steps:
@@ -77,6 +113,8 @@ jobs:
 
   ios-build:
     name: iOS build (unsigned)
+    needs: detect
+    if: needs.detect.outputs.native == 'true'
     runs-on: macos-26
     timeout-minutes: 30
     steps:
