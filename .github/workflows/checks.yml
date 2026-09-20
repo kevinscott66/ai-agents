@@ -4,6 +4,20 @@ name: Repo Checks
 # regressions. Currently:
 #   - committed git conflict markers (6/9 PRs blocked on 2026-05-23)
 # Add new repo-wide invariants here rather than spinning up new workflows.
+#
+# AUD-20260919-004 — эти джобы обязательны в защите main. Список обязательных
+# проверок на 2026-09-20: пять джоб отсюда, гейт авторства `kevinscott66 only`
+# и три native-джобы из native.yml. Переименование джобы здесь НЕ переименует
+# обязательную проверку в настройках репозитория: старое имя останется
+# требоваться, нового никто не пришлёт, и PR перестанут мёрджиться. Меняя
+# `name:`, правь и список в защите ветки (Settings → Branches, либо
+# `gh api repos/:owner/:repo/branches/main/protection`).
+#
+# По той же причине у этого workflow нет и не должно быть фильтра `paths:`:
+# пропущенный по фильтру workflow не присылает check run вовсе, и обязательная
+# проверка зависает в «ожидается» навсегда. Если понадобится экономить время —
+# делать как в native.yml: джоба detect плюс `if:` на тяжёлых джобах, потому
+# что пропуск по `if:` даёт заключение skipped, и защита его засчитывает.
 
 on:
   pull_request:
