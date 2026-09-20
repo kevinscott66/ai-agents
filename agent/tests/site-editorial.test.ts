@@ -12,12 +12,18 @@
  */
 import { describe, expect, test } from "bun:test";
 import {
+  ACT_TITLE_MAX,
+  ACT_TITLE_MIN,
   BODY_MIN,
   EDITORIAL_BATCH,
   EDITORIAL_MAX_TURNS,
+  INTRO_MAX,
+  INTRO_MIN,
   SUMMARY_MIN,
   TITLE_MAX,
   TITLE_MIN,
+  activityPrompt,
+  checkActivity,
   checkEntry,
   dropSelfLink,
   editorialPrompt,
@@ -25,6 +31,7 @@ import {
   pickPending,
   styleExamples,
   type EditorialEntry,
+  type RawActivity,
   type RawDigest,
 } from "../tools/site-editorial.ts";
 
@@ -114,9 +121,18 @@ describe("pickPending — кого берём в работу", () => {
     expect(pickPending(rows, empty, auto).map((d) => d.id)).toEqual(["b", "a"]);
   });
 
+  test("виды разведены: бюджет выпусков не съедает бюджет активностей", () => {
+    // С одним общим числом новости (их 3-7 в день) выбирали бы его целиком, и
+    // активности не редактировались бы никогда.
+    const acts = [{ id: "act", title: "Отрабатываем тестнет", origin: "telegram", date: "2026-09-20" }];
+    const busy = { digests: {}, activities: {} };
+    expect(pickPending(acts as RawActivity[], busy, busy, "activities").map((a) => a.id)).toEqual(["act"]);
+    expect(pickPending(rows, busy, { digests: { b: good(), c: good(), a: good() } }, "digests")).toEqual([]);
+  });
+
   test("за прогон берётся не больше объявленного: таймаут юнита конечен", () => {
     const many = Array.from({ length: 50 }, (_, i) => digest({ id: `d${i}`, date: "2026-09-20" }));
-    expect(pickPending(many, empty, empty).length).toBe(EDITORIAL_BATCH);
+    expect(pickPending(many, empty, empty).length).toBe(EDITORIAL_BATCH.digests);
   });
 });
 
@@ -137,6 +153,71 @@ describe("dropSelfLink — ссылка на сам пост", () => {
     expect(dropSelfLink([self], withSelf)).toEqual([self]);
     // И проверка целостности после вычитания по-прежнему довольна.
     expect(checkEntry(good({ items: [self] }), withSelf)).toEqual([]);
+  });
+});
+
+describe("активности — заголовок зовёт тратить время, поэтому строже", () => {
+  const act = (over: Partial<RawActivity> = {}): RawActivity => ({
+    id: "lora-testnet",
+    title: "Отрабатываем новый тестнет Lora и фармим дроп",
+    project: "Lora",
+    intro: "**Lora Finance** анонсировали запуск платформы в тестовом режиме.",
+    steps: ["Переходим на сайт и запрашиваем тестовые токены."],
+    origin: "telegram",
+    date: "2026-03-25",
+    ...over,
+  });
+
+  const okAct = (over: Partial<EditorialEntry> = {}): EditorialEntry => ({
+    title: "Lora открыла тестнет аренды ценовой экспозиции на MegaETH — токен и дроп команда не анонсировала",
+    intro: `**Lora** запустила тестнет. ${"Деталь предложения. ".repeat(20)}`,
+    ...over,
+  });
+
+  test("нормальная карточка проходит", () => {
+    expect(checkActivity(okAct(), act())).toEqual([]);
+  });
+
+  test("без оговорки после тире не пускаем: это половина пользы заголовка", () => {
+    const bad = checkActivity(okAct({ title: "Lora открыла тестнет аренды ценовой экспозиции на MegaETH и раздаёт очки" }), act());
+    expect(bad.join(" ")).toContain("после тире");
+  });
+
+  test("заголовок без названия проекта не годится: карточку ищут по проекту", () => {
+    const bad = checkActivity(okAct({ title: "Команда открыла тестнет аренды экспозиции на MegaETH — токен не анонсирован" }), act());
+    expect(bad.join(" ")).toContain("Lora");
+  });
+
+  test("границы интро отбивают и отписку, и простыню", () => {
+    expect(checkActivity(okAct({ intro: "Коротко." }), act()).length).toBe(1);
+    expect(checkActivity(okAct({ intro: "Длинно. ".repeat(200) }), act()).length).toBe(1);
+    expect(INTRO_MIN).toBeLessThan(INTRO_MAX);
+    expect(ACT_TITLE_MIN).toBeLessThan(ACT_TITLE_MAX);
+  });
+
+  test("оставленное как в канале — не редактура", () => {
+    const a = act();
+    const same = checkActivity({ title: a.title, intro: a.intro }, a).join(" ");
+    expect(same).toContain("не изменил");
+  });
+
+  test("промпт несёт шаги, но запрещает их трогать: ошибка там стоит читателю денег", () => {
+    const p = activityPrompt(act(), []);
+    expect(p).toContain("Переходим на сайт и запрашиваем тестовые токены.");
+    expect(p).toContain("не переписывай");
+  });
+
+  test("промпт отваживает от канального «отрабатываем»", () => {
+    expect(activityPrompt(act(), [])).toContain("отрабатываем");
+  });
+
+  test("образцы для активностей берутся из активностей, а не из выпусков", () => {
+    const manual = {
+      digests: { d: good({ title: "ВЫПУСК" }) },
+      activities: { a: okAct({ title: "КАРТОЧКА" }) },
+    };
+    expect(styleExamples(manual, "activities").map((e) => e.title)).toEqual(["КАРТОЧКА"]);
+    expect(styleExamples(manual, "digests").map((e) => e.title)).toEqual(["ВЫПУСК"]);
   });
 });
 
