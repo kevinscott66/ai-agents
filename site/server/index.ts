@@ -851,7 +851,54 @@ function fileResponse(filePath: string, noCache = false): Response {
 
 // ---- RSS feed -----------------------------------------------------------
 
-const SITE_ORIGIN = "https://delabs.space";
+const DEFAULT_SITE_ORIGIN = "https://delabs.space";
+
+/**
+ * Публичный origin сайта — настройка, а не константа.
+ *
+ * Аудит 2026-09-19 (AUD-023): здесь была зашита строка `https://delabs.space`,
+ * и её берут RSS (`<link>`, `atom:link`, ссылки на выпуски), sitemap, robots
+ * и og:url. С переездом тот домен обслуживает другой код и другой корпус,
+ * а этот backend продолжал раздавать ссылки на него: читатель уходил из ленты
+ * и получал 404 или чужой материал, canonical указывал на страницу, которой у
+ * этого сайта нет. Ленту нельзя починить редиректом снаружи — адреса уже
+ * разошлись по агрегаторам и в канал.
+ *
+ * Умолчание оставлено прежним: выкладка, которая про `SITE_ORIGIN` не знает,
+ * ведёт себя ровно как до этой правки.
+ *
+ * Проверяем строго и падаем на старте. Тихо откатиться к умолчанию нельзя:
+ * опечатка в окружении дала бы ровно ту же молчаливую подмену ссылок, из-за
+ * которой пункт и завели, — сервис поднялся бы «успешно» и снова отправлял
+ * читателей не туда. Требуем http/https и голый origin: всё подставляется как
+ * `${SITE_ORIGIN}/digest/...`, поэтому путь, запрос или фрагмент в значении
+ * дали бы `https://host/base//digest/...`.
+ */
+export function resolveSiteOrigin(raw: string | undefined): string {
+  const value = (raw ?? "").trim();
+  if (!value) return DEFAULT_SITE_ORIGIN;
+  const bad = (why: string): never => {
+    throw new Error(`SITE_ORIGIN (${JSON.stringify(value)}): ${why}`);
+  };
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return bad("не разбирается как URL; нужен абсолютный адрес со схемой");
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    return bad(`схема ${url.protocol} не поддерживается, нужен http или https`);
+  }
+  if (url.username || url.password) return bad("учётные данные в адресе недопустимы");
+  // `new URL("https://host")` даёт pathname "/", поэтому корень проходит, а
+  // "https://host/base" — нет; хвостовой слэш при этом срезается сам.
+  if (url.pathname !== "/") return bad("путь недопустим, нужен голый origin");
+  if (url.search) return bad("строка запроса недопустима");
+  if (url.hash) return bad("фрагмент недопустим");
+  return url.origin;
+}
+
+const SITE_ORIGIN = resolveSiteOrigin(process.env.SITE_ORIGIN);
 
 /**
  * Символы, которых в XML 1.0 не может быть НИКАК — ни сырыми, ни числовой
