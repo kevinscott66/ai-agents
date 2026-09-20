@@ -180,8 +180,19 @@ describe("checks.yml и файл в репозитории", () => {
     expect(yaml).not.toContain("FLOOR=");
   });
 
-  test("код выхода bun по-прежнему берётся из PIPESTATUS, а не из tee", () => {
-    expect(yaml).toContain("${PIPESTATUS[0]}");
+  // 2026-09-20: инлайн `bun test ... | tee ...; exit ${PIPESTATUS[0]}` уехал в
+  // .github/scripts/run-bun-tests.sh — там к нему добавился сторож времени
+  // против зависаний bun --isolate. Требование осталось прежним и проверяется
+  // теперь по существу, а не по тексту YAML: код выхода принадлежит bun, а не
+  // tee. Поведение красного прогона ловит ci-bun-test-watchdog.
+  test("прогон идёт через скрипт, а код выхода принадлежит bun, а не tee", () => {
+    expect(yaml).toContain("run-bun-tests.sh");
+    expect(yaml).not.toContain("| tee");
+    const runner = readFileSync(
+      join(import.meta.dir, "..", "..", ".github", "scripts", "run-bun-tests.sh"),
+      "utf8",
+    );
+    expect(runner).toContain('exit "$BUN_CODE"');
   });
 
   test("у скрипта стоит бит запуска", () => {
