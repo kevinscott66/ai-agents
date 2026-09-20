@@ -93,8 +93,17 @@ describe('Агент: personal daily workflow', () => {
       let frame: any;
       const socket = { data: { authed: true }, send: (s: string) => { frame = JSON.parse(s); return 1; } };
       _setActiveSocketForTests(socket);
-      await expect(sendAssistantToMac('calendar_today', String(owner), -owner)).rejects.toThrow('forbidden');
+      // Окна на машине открывают только из лички; чужой человек не дотянется
+      // ниоткуда, даже в свой собственный чат.
+      await expect(sendAssistantToMac('open_workspace', String(owner), -owner)).rejects.toThrow('forbidden');
       await expect(sendAssistantToMac('calendar_today', '5', 5)).rejects.toThrow('forbidden');
+      // А календарь владелец читает из любого своего чата — в том числе из
+      // группы команды и из приложения.
+      const inGroup = sendAssistantToMac('calendar_today', String(owner), -owner);
+      expect(frame.type).toBe('assistant');
+      _handleClientMessageForTests(socket, JSON.stringify({ type: 'chunk', id: frame.id, stream: 'stdout', data: JSON.stringify(day) }));
+      _handleClientMessageForTests(socket, JSON.stringify({ type: 'result', id: frame.id, ok: true, code: 0 }));
+      expect((await inGroup).stdout).toContain('Планирование');
       const result = sendAssistantToMac('calendar_today', String(owner), owner);
       expect(frame.type).toBe('assistant');
       _handleClientMessageForTests(socket, JSON.stringify({ type: 'chunk', id: frame.id, stream: 'stdout', data: JSON.stringify(day) }));
