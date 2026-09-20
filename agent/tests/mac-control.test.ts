@@ -111,6 +111,28 @@ describe("macctl", () => {
     expect(controlErrorCode(new Error("calendar_bin_dir_invalid"))).toBe("calendar_bin_dir_invalid");
   });
 
+  test("окружение по умолчанию несёт и папку помощника", async () => {
+    // Демон зовёт runMacControl без env (daemon.ts, кадр control), поэтому список
+    // переменных по умолчанию — это и есть настройка напоминаний на живом Mac.
+    // Пока MAC_CALENDAR_BIN_DIR в нём не было, помощник искался внутри папки
+    // релиза: разрешение macOS выдано постоянному пути, и владелец получал
+    // control_failed при полностью верной настройке.
+    const saved = { ...process.env };
+    const calls: string[][] = [];
+    try {
+      process.env.MAC_CONTROL_ENABLED = "true";
+      process.env.MAC_CALENDAR_ENABLED = "true";
+      process.env.MAC_CALENDAR_BIN_DIR = "/opt/agent/bin";
+      await runMacControl({ command: "reminders" }, undefined, async (file, args) => {
+        calls.push([file, ...args]);
+        return JSON.stringify({ reminders: [], truncated: false });
+      });
+    } finally {
+      process.env = saved;
+    }
+    expect(calls).toEqual([["/opt/agent/bin/agent-calendar-run", "reminders"]]);
+  });
+
   test("прокладка ищет помощника соседом и молчит в stderr", async () => {
     // stderr помощника разбирается построчно: лишняя строка от прокладки
     // превратила бы понятный код в native_command_failed.

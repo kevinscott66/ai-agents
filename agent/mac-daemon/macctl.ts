@@ -83,7 +83,17 @@ export function controlArgv(c: MacControl, env: ControlEnv): [string, string[]] 
 
 export async function runMacControl(
   raw: unknown,
-  env: ControlEnv = { MAC_CONTROL_ENABLED: process.env.MAC_CONTROL_ENABLED, MAC_CALENDAR_ENABLED: process.env.MAC_CALENDAR_ENABLED, MAC_APPS: process.env.MAC_APPS },
+  // MAC_CALENDAR_BIN_DIR здесь обязателен, хотя выключателем не является: без него
+  // помощник ищется внутри папки релиза, а разрешение macOS выдано постоянному пути.
+  // Демон зовёт эту функцию без env (daemon.ts, кадр control), и пропуск переменной
+  // означал не «календарь выключен», а молчаливый native_command_failed на каждом
+  // напоминании и событии — при полностью верной настройке владельца.
+  env: ControlEnv = {
+    MAC_CONTROL_ENABLED: process.env.MAC_CONTROL_ENABLED,
+    MAC_CALENDAR_ENABLED: process.env.MAC_CALENDAR_ENABLED,
+    MAC_CALENDAR_BIN_DIR: process.env.MAC_CALENDAR_BIN_DIR,
+    MAC_APPS: process.env.MAC_APPS,
+  },
   exec: NativeExec = controlExec,
   signal?: AbortSignal,
 ): Promise<string> {
