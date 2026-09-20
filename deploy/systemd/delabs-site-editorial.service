@@ -1,0 +1,63 @@
+# delabs-site-editorial.service
+# Ежедневная редактура выпусков сайта delabs.space.
+#
+# Сайт с 20.09.2026 догоняет канал сам, но канал пишет ярлыками
+# («Fermah: Открыт Waitlist»), а рядом лежат 250 выпусков с человеческими
+# заголовками, лидом и разбором. Разницу делал редакционный слой, и делался он
+# руками. Этот юнит делает то же самое ежедневно и без человека: читает корпус,
+# берёт выпуски без редактуры, ходит в их первоисточники (Agent SDK по
+# подписке, WebSearch/WebFetch) и пишет заголовок, лид, тело и источники.
+#
+# В канал не постит ничего и корпус не пересобирает: складывает написанное в
+# свой файл, а сайт подхватит его на ближайшей пересборке (delabs-site-refresh,
+# дважды в час). Поэтому падение этого юнита сайту ничем не грозит — выпуск
+# просто ещё день постоит с текстом поста как есть.
+#
+# Oneshot — запускается таймером delabs-site-editorial.timer.
+[Unit]
+Description=DeLabs site editorial (rewrite raw channel digests into site copy)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=agent-team
+Group=agent-team
+WorkingDirectory=/opt/agent-team
+EnvironmentFile=/opt/agent-team/.env
+Environment=CLAUDE_BIN=/usr/local/bin/claude
+ExecStart=/usr/local/bin/bun /opt/agent-team/tools/site-editorial.ts
+# Выпуск — это открыть пару источников и написать три поля, ~2 минуты; за
+# прогон берётся не больше восьми (EDITORIAL_BATCH). Полчаса хватает с запасом,
+# а написанное сохраняется после каждого выпуска, так что обрыв по таймауту
+# теряет самое большее один.
+TimeoutStartSec=1800
+NoNewPrivileges=true
+UMask=0077
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+# Единственное, куда юнит пишет: /var/lib/delabs-editorial/editorial.json.
+# В каталог сайта он не пишет намеренно. Редактура с Mac живёт в
+# src/data/snapshot/editorial.json и уезжает туда выкладкой — писать агентом в
+# тот же файл значит терять его работу на первом же деплое. Слои разные, и
+# build-index.mjs кладёт агентский ПОД ручной: правка человека всегда сильнее.
+StateDirectory=delabs-editorial
+StateDirectoryMode=0755
+
+[Install]
+WantedBy=multi-user.target
