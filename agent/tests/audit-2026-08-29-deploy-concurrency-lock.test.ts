@@ -33,6 +33,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { writeSmokeStub } from "./helpers/deploy-smoke-stub.ts";
+import { writeDiskGuardStub } from "./helpers/deploy-disk-stub.ts";
 import { join } from "node:path";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -267,6 +268,7 @@ function makeDeploySandbox(): DeploySandbox {
 
   // Смоук — заглушка: настоящий делает `bun install` и полный прогон тестов.
   writeSmokeStub(repo, sb.calls);
+  writeDiskGuardStub(repo, sb.calls);
 
   // ssh-заглушка с ветками: замок исполняем локально, остальное — сценарий.
   writeFileSync(

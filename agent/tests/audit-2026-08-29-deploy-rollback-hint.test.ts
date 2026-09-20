@@ -33,6 +33,7 @@ import {
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { writeSmokeStub } from "./helpers/deploy-smoke-stub.ts";
+import { writeDiskGuardStub } from "./helpers/deploy-disk-stub.ts";
 
 const REPO = join(import.meta.dir, "..", "..");
 const SNAPSHOT = "/root/agent-team-predeploy-20260829-010203";
@@ -81,6 +82,7 @@ exit 0
   copyFileSync(join(REPO, "deploy", "deploy-lock.sh"), join(REPO_DIR, "deploy", "deploy-lock.sh"));
   // Шаг «смоук» стоит до замка и без скрипта не пускает выкатку (круг 49).
   writeSmokeStub(REPO_DIR, CALLS);
+  writeDiskGuardStub(REPO_DIR, CALLS);
   writeFileSync(join(REPO_DIR, "agent", "index.ts"), "// tracked\n");
   const git = (...a: string[]) => spawnSync("git", ["-C", REPO_DIR, ...a], { encoding: "utf8" });
   git("init", "-q");

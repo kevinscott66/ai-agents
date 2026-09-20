@@ -28,6 +28,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeSmokeStub } from "./helpers/deploy-smoke-stub.ts";
+import { writeDiskGuardStub } from "./helpers/deploy-disk-stub.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const SCRIPT = join(REPO_ROOT, "deploy", "version-manifest.sh");
@@ -268,6 +269,7 @@ function makeDeploySandbox(): DeploySandbox {
     chmodSync(join(repo, "deploy", name), 0o755);
   }
   writeSmokeStub(repo, calls);
+  writeDiskGuardStub(repo, calls);
 
   // ssh: замок и запись манифеста исполняем локально, остальное — сценарий.
   writeFileSync(

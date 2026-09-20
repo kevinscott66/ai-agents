@@ -1,0 +1,31 @@
+# Часовой сторож свободного места. Ничего не удаляет — только считает и пишет
+# в журнал; см. шапку deploy/disk-guard.sh и раздел «Бюджет диска» в
+# deploy/README.md.
+#
+# SuccessExitStatus=1 — намеренно. Скрипт различает три состояния, а systemd
+# знает только «получилось / нет». Предупреждение (exit 1) должно попасть в
+# журнал, но не красить `systemctl --failed`: иначе индикатор загорится за
+# недели до настоящей беды и к моменту, когда запас кончится, глаз к нему
+# привыкнет. Красным остаётся только критический порог (exit 2).
+[Unit]
+Description=Disk headroom guard (report only, never deletes)
+Documentation=file:/opt/agent-team/deploy/disk-guard.sh
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/disk-guard.sh --label prod
+SuccessExitStatus=1
+
+# Сторожу нужно прочитать df и написать в журнал — больше ничего.
+# Права урезаны до этого, чтобы «сторож места» сам не стал способом что-то
+# испортить: ProtectSystem=strict делает всю файловую систему только для
+# чтения, и ни одного ReadWritePaths здесь нет намеренно.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallFilter=@system-service
