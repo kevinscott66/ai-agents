@@ -11,6 +11,9 @@
  * затёртая чужая работа, поэтому отбор обязан видеть оба слоя.
  */
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   ACT_TITLE_MAX,
   ACT_TITLE_MIN,
@@ -29,6 +32,8 @@ import {
   editorialPrompt,
   extractJson,
   pickPending,
+  readCorpus,
+  siteTree,
   styleExamples,
   type EditorialEntry,
   type RawActivity,
@@ -266,5 +271,42 @@ describe("разбор ответа", () => {
 
   test("ответ без JSON — это ошибка, а не пустая запись на сайте", () => {
     expect(() => extractJson("не осилил")).toThrow();
+  });
+});
+
+/**
+ * Раскладка сайта менялась под работающей редактурой, и та этого не заметила:
+ * корпус читался из `/opt/delabs/src`, которого после перехода на релизы больше
+ * нет, а пустой результат выглядел как «всё уже отредактировано». Сутки выпуски
+ * выходили текстом поста без единой ошибки в журнале.
+ */
+describe("раскладка сайта", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "editorial-tree-"));
+
+  test("релизная раскладка: дерево за ссылкой current", () => {
+    const root = join(tmp, "releases-layout");
+    mkdirSync(join(root, "current", "src", "data"), { recursive: true });
+    expect(siteTree(root)).toBe(join(root, "current"));
+  });
+
+  test("прежняя раскладка и рабочая копия на Mac: дерево в самом каталоге", () => {
+    const root = join(tmp, "plain-layout");
+    mkdirSync(join(root, "src", "data"), { recursive: true });
+    expect(siteTree(root)).toBe(root);
+  });
+
+  test("пустой каталог — это не старая раскладка, а повод упасть на чтении", () => {
+    const root = join(tmp, "empty-layout");
+    mkdirSync(root, { recursive: true });
+    expect(siteTree(root)).toBe(root);
+    expect(() => readCorpus(join(root, "src/data/current/digests.json"))).toThrow(/нет корпуса/);
+  });
+
+  test("корпус на месте — читается как обычно", () => {
+    const root = join(tmp, "ok-layout");
+    const dir = join(root, "current", "src", "data", "current");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "digests.json"), JSON.stringify([{ id: "a" }]));
+    expect(readCorpus(join(siteTree(root), "src/data/current/digests.json"))).toEqual([{ id: "a" }]);
   });
 });
