@@ -42,7 +42,11 @@ describe("CORS allowlist", () => {
     "https://delabs.space",
     "https://www.delabs.space",
     "https://dobropalm.tech",
-    "https://web3.dobropalm.tech",
+    // Поддомен намеренно вымышленный: правило — `host.endsWith(".dobropalm.tech")`,
+    // конкретное имя роли не играет. Реальный поддомен здесь стоял до 21.09.2026
+    // и был снят: адрес давно не резолвится (NXDOMAIN), а публичному репозиторию
+    // незачем знать внутренние имена.
+    "https://sub.dobropalm.tech",
     "http://localhost:5173",
     "http://127.0.0.1:8790",
   ]) {
