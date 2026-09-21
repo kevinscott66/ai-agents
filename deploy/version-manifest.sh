@@ -40,6 +40,9 @@
 #   DEPLOY_RECORD_PATH   что записать в поле path у `record`
 #   DEPLOY_RECORD_REPO   из какого чекаута брать коммит (default: репозиторий
 #                        этого скрипта)
+#   DEPLOY_RECORD_COMMIT назвать коммит явно, вместо HEAD чекаута — для отката,
+#                        где работает не то, что лежит в чекауте
+#   DEPLOY_RECORD_BRANCH то же для ветки
 #   MAC_DAEMON_PS        команда, перечисляющая процессы (default "ps -eo args=")
 #   IOS_PLIST            путь к Info.plist (default ios/Agent/Info.plist в репо)
 #
@@ -83,6 +86,18 @@ check_component() {
   esac
 }
 
+# Значение, приехавшее снаружи (из RELEASE на том конце, из переменной
+# вызывающего), уезжает обратно на ту сторону позиционным аргументом ssh —
+# а ssh склеивает аргументы через пробел и отдаёт их УДАЛЁННОМУ шеллу. То
+# есть кавычки и пробелы там разъезжаются, а точка с запятой была бы дырой.
+# Поэтому чужое значение либо укладывается в алфавит, либо не уезжает вовсе.
+safe_value() {
+  case "${1-}" in
+    ''|*[!a-zA-Z0-9._/-]*) printf '%s' "${2-?}" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
 git_at() { git -C "$REPO_ROOT" "$@" 2>/dev/null || true; }
 
 remote_sh() {
@@ -114,10 +129,24 @@ do_record() {
   check_component "$component"
   [ -n "$HOST" ] || { echo "version-manifest: record требует DEPLOY_HOST" >&2; exit 2; }
   local full short branch path
-  full="$(nonblank "$(git_at rev-parse HEAD)" "?")"
-  short="$(nonblank "$(git_at rev-parse --short HEAD)" "?")"
-  branch="$(nonblank "$(git_at rev-parse --abbrev-ref HEAD)" "?")"
-  path="$(nonblank "${DEPLOY_RECORD_PATH-}" "?")"
+  # Обычный случай — коммит берётся из чекаута, который позвал скрипт: он и
+  # уехал. Но у сайта есть откат: `deploy.sh rollback` возвращает ПРЕЖНИЙ
+  # релиз, и HEAD чекаута в этот момент говорит про другой коммит. Поэтому
+  # вызывающий может назвать коммит сам (delabs читает его из RELEASE в
+  # каталоге релиза) — тогда манифест описывает то, что правда работает, а не
+  # то, что лежит в папке у оператора.
+  if [ -n "$(nonblank "${DEPLOY_RECORD_COMMIT-}" "")" ]; then
+    # Назвали явно — значит HEAD здесь не при чём. Негодное значение
+    # становится «?», а НЕ коммитом чекаута: манифест, уверенно называющий не
+    # тот код, вреднее манифеста, честно признавшего незнание.
+    full="$(safe_value "$DEPLOY_RECORD_COMMIT" "?")"
+    short="$(printf '%.7s' "$full")"
+  else
+    full="$(nonblank "$(git_at rev-parse HEAD)" "?")"
+    short="$(nonblank "$(git_at rev-parse --short HEAD)" "?")"
+  fi
+  branch="$(safe_value "$(nonblank "${DEPLOY_RECORD_BRANCH-}" "$(nonblank "$(git_at rev-parse --abbrev-ref HEAD)" "?")")" "?")"
+  path="$(safe_value "$(nonblank "${DEPLOY_RECORD_PATH-}" "?")" "?")"
   if ! remote_sh "$REMOTE_RECORD" "$MANIFEST_DIR" "$component" "$full" "$short" "$branch" "$path"; then
     echo "version-manifest: манифест $component не записался" >&2
     exit 5

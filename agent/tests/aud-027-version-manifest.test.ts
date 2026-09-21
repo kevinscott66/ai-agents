@@ -151,6 +151,55 @@ describe("version-manifest.sh — запись версии на стороне 
     }
   });
 
+  slowTest("коммит можно назвать явно — иначе откат оставит в манифесте чужой sha", () => {
+    // Сайт катится каталогами релизов и умеет откатываться на предыдущий.
+    // В этот момент HEAD чекаута говорит про коммит, которого в бою нет, и
+    // запись «из HEAD» сделала бы манифест вреднее его отсутствия: он бы
+    // уверенно назвал не тот код.
+    const sb = makeSandbox();
+    try {
+      const rolledBack = "0123456789abcdef0123456789abcdef01234567";
+      const rec = run(sb, ["record", "site"], {
+        DEPLOY_RECORD_PATH: "/opt/delabs/current",
+        DEPLOY_RECORD_COMMIT: rolledBack,
+        DEPLOY_RECORD_BRANCH: "main",
+      });
+      expect(rec.code).toBe(0);
+
+      const file = readFileSync(join(sb.manifests, "site.txt"), "utf8");
+      expect(file).toContain(`commit=${rolledBack}`);
+      expect(file).toContain("short=0123456");
+      expect(file).toContain("branch=main");
+      // Коммит чекаута, из которого позвали, в файл попасть не должен.
+      expect(file).not.toContain(headOf(sb.repo, "--verify"));
+    } finally {
+      rmSync(sb.dir, { recursive: true, force: true });
+    }
+  });
+
+  slowTest("чужое значение не уезжает на ту сторону как команда", () => {
+    // Значение приезжает из файла на сервере, а уходит позиционным аргументом
+    // ssh — то есть попадает в УДАЛЁННЫЙ шелл. Точка с запятой здесь была бы
+    // выполнением, а не строкой в файле.
+    const sb = makeSandbox();
+    try {
+      const marker = join(sb.dir, "тронуто");
+      const rec = run(sb, ["record", "site"], {
+        DEPLOY_RECORD_PATH: "/opt/delabs/current",
+        DEPLOY_RECORD_COMMIT: `x; touch ${marker}`,
+      });
+      expect(rec.code).toBe(0);
+      expect(existsSync(marker)).toBe(false);
+
+      const file = readFileSync(join(sb.manifests, "site.txt"), "utf8");
+      expect(file).not.toContain("touch");
+      // Непригодное значение не притворяется коммитом.
+      expect(file).toContain("commit=?");
+    } finally {
+      rmSync(sb.dir, { recursive: true, force: true });
+    }
+  });
+
   slowTest("show показывает версию iOS из Info.plist и состояние чекаута", () => {
     const sb = makeSandbox();
     try {
