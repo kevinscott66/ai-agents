@@ -35,7 +35,7 @@
  * Таймер: delabs-site-editorial.timer. Сайт подхватит написанное сам на
  * ближайшей пересборке корпуса — отдельного шага публикации здесь нет.
  */
-import { readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { buildSubscriptionEnv } from "../lib/subscription-env.ts";
@@ -96,6 +96,38 @@ export interface EditorialEntry {
 export type EditorialFile = Partial<Record<Kind, Record<string, EditorialEntry>>>;
 
 export const SITE_DIR = process.env.DELABS_SITE_DIR ?? "/opt/delabs";
+
+/**
+ * Где на самом деле лежит дерево сайта.
+ *
+ * До 20.09.2026 `/opt/delabs` и было деревом. С переходом на релизы (AUD-021)
+ * там лежат `releases/<метка>/`, а рабочая копия — за ссылкой `current`, и
+ * `/opt/delabs/src` перестал существовать. Редактура этого не заметила: чтение
+ * корпуса падало молча, `readJson` возвращал пустой массив, и прогон бодро
+ * сообщал «без редактуры никого». Сутки все новые выпуски выходили на сайт
+ * текстом поста — ошибки при этом не было ни одной.
+ *
+ * Поэтому раскладка определяется, а не предполагается, и обе поддерживаются:
+ * переменная `DELABS_SITE_DIR` может указывать и на рабочую копию на Mac, где
+ * никакого `current` нет.
+ */
+export function siteTree(root: string = SITE_DIR): string {
+  return existsSync(join(root, "current", "src", "data")) ? join(root, "current") : root;
+}
+
+/**
+ * Корпус читается строго: пустой список от отсутствующего файла неотличим от
+ * «всё уже отредактировано», и именно это скрыло поломку выше. Лучше падение
+ * юнита, которое видно в `systemctl --failed`, чем спокойный отчёт ни о чём.
+ */
+export function readCorpus<T>(path: string): T[] {
+  if (!existsSync(path)) {
+    throw new Error(
+      `нет корпуса ${path} — проверь раскладку сайта (releases/current) и DELABS_SITE_DIR`,
+    );
+  }
+  return JSON.parse(readFileSync(path, "utf8")) as T[];
+}
 export const AUTO_PATH =
   process.env.DELABS_EDITORIAL_AUTO ?? "/var/lib/delabs-editorial/editorial.json";
 
@@ -443,13 +475,14 @@ export async function writeActivity(a: RawActivity, examples: EditorialEntry[]):
 }
 
 export async function main(): Promise<void> {
-  const manual = readJson<EditorialFile>(join(SITE_DIR, "src/data/snapshot/editorial.json"), {});
+  const tree = siteTree();
+  const manual = readJson<EditorialFile>(join(tree, "src/data/snapshot/editorial.json"), {});
   const auto = readJson<EditorialFile>(AUTO_PATH, {});
   let written = 0;
   let seen = 0;
 
   for (const kind of KINDS) {
-    const rows = readJson<RawRecord[]>(join(SITE_DIR, `src/data/current/${kind}.json`), []);
+    const rows = readCorpus<RawRecord>(join(tree, `src/data/current/${kind}.json`));
     const pending = pickPending(rows, manual, auto, kind);
     if (!pending.length) {
       console.log(`[site-editorial] ${kind}: без редактуры никого`);
