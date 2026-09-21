@@ -41,7 +41,7 @@ function excludesBlock(): string {
  * отдельный том, шаблон со слэшем мимо, и рантайм уедет под код. `--exclude
  * 'data'` ловит и каталог, и симлинк, и файл. Слэши убраны в a80e9a07.
  */
-const RUNTIME_DIRS = ["data", "memory", "backups"];
+const RUNTIME_DIRS = ["data", "memory", "backups", ".eliza"];
 
 describe("deploy.sh: рантайм-состояние не перезаписывается кодом", () => {
   const block = excludesBlock();
@@ -55,6 +55,36 @@ describe("deploy.sh: рантайм-состояние не перезаписы
   test("секреты тоже не едут из репозитория", () => {
     expect(block).toContain("--exclude '.env'");
     expect(block).toContain("--exclude '.env.*'");
+  });
+
+  /**
+   * Аудит 2026-09-21: три списка исключений живут в разных местах — заливка
+   * (`RSYNC_EXCLUDES`), снимок перед выкаткой и подсказка отката. `.eliza`
+   * был в двух последних и отсутствовал в первом. Гитом он игнорируется,
+   * поэтому и в список неотслеживаемых не попал: заливка молча потащила его
+   * на прод, где каталог принадлежит другому пользователю, и упала на mkdir —
+   * уже после того, как доставила код, но до перезапуска сервиса.
+   *
+   * Инвариант односторонний. Что снимок и откат считают состоянием, заливка
+   * обязана считать состоянием тоже: иначе она везёт туда файлы, которых
+   * откат не вернёт. Обратное допустимо — заливка вправе не везти и то, что
+   * снимать имеет смысл.
+   */
+  test("заливка исключает всё, что исключают снимок и откат", () => {
+    const patterns = (line: string) =>
+      new Set([...line.matchAll(/--exclude\s+'?([\w.*\-\/]+)'?/g)].map((m) => m[1]));
+
+    const lines = DEPLOY_SH.split("\n").filter(
+      (l) => l.includes("--exclude") && !l.includes("RSYNC_EXCLUDES"),
+    );
+    const derived = lines.filter((l) => patterns(l).size >= RUNTIME_DIRS.length);
+    expect(derived.length).toBeGreaterThan(0);
+
+    for (const line of derived) {
+      for (const p of patterns(line)) {
+        expect(block).toContain(`--exclude '${p}'`);
+      }
+    }
   });
 
   test("rsync без --delete — исключённое на проде остаётся на месте", () => {

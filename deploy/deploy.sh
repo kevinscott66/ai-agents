@@ -112,9 +112,15 @@ cyan "Deploying ${BRANCH}@${COMMIT} → ${HOST}:${REMOTE}"
 # data/, а data/ исключён) — после деплоя SEARCH_WIKI находил страницу, а
 # READ_WIKI отдавал откатившийся файл. Заготовки прод переживёт без них:
 # wikiAppendLog/wikiWrite делают mkdirSync(recursive) сами.
+# `.eliza` — локальная база ElizaOS. Снимок и откат исключали её с самого
+# начала, а заливка нет: каталог игнорируется гитом, поэтому и в список
+# неотслеживаемых (`--exclude-standard` ниже) он не попадал. Вылезло
+# 21.09.2026: на проде каталог принадлежит другому пользователю, rsync не смог
+# завести в нём подкаталоги и упал с Permission denied — выкатка встала уже
+# после того, как залила код, но до `bun install` и перезапуска сервиса.
 RSYNC_EXCLUDES=(
   --exclude 'node_modules' --exclude 'data' --exclude '.env' --exclude '.env.*'
-  --exclude 'memory'
+  --exclude 'memory' --exclude '.eliza'
   --exclude 'backups' --exclude 'miniapp/node_modules' --exclude 'miniapp/dist'
   --exclude '.DS_Store' --exclude 'debug-*.ts' --exclude 'probe-*.ts' --exclude 'smoke-*.ts'
 )
