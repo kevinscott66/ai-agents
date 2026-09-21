@@ -125,7 +125,6 @@ describe("runApprovedPublish: состояние после сбоя хвост�
     let cleared = 0;
     const r = io({ failMessageAt: 1 });
     const deps: PublishDeps = {
-      ingest: async () => "id-1",
       renderBanner: async () => banner,
       // Транспорт публикации — это sendDigest: медиа ушло, хвост нет.
       send: async (text) => sendDigest(text, banner, r.io, 200),
@@ -149,7 +148,6 @@ describe("runApprovedPublish: состояние после сбоя хвост�
     // пост в публичном канале не отличить от целого.
     const r = io({ failMessageAt: 1 });
     const res = await runApprovedPublish(pending(), {
-      ingest: async () => "id-1",
       renderBanner: async () => banner,
       send: async (text) => sendDigest(text, banner, r.io, 200),
       savePending: () => {},
@@ -163,7 +161,6 @@ describe("runApprovedPublish: состояние после сбоя хвост�
   test("хвост доставлен полностью — tailIncomplete не выставляется", async () => {
     const r = io();
     const res = await runApprovedPublish(pending(), {
-      ingest: async () => "id-1",
       renderBanner: async () => banner,
       send: async (text) => sendDigest(text, banner, r.io, 200),
       savePending: () => {},
