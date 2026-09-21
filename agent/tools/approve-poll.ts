@@ -4,16 +4,19 @@
  * Читает /opt/web3-puls/drafts/pending.json (его пишет daily-draft.ts). Если на
  * превью-сообщении в Saved Messages стоит реакция ✅ ИЛИ владелец ответил на него
  * текстом с «+», «✅» или «опубликов» — считаем ЧЕРНОВИК одобренным:
- *   1) ингест каждой статьи на сайт (POST $SITE_INGEST_URL, Bearer $SITE_INGEST_TOKEN)
- *      → получаем id → ссылка https://delabs.space/digest/<id>;
- *   2) собираем финальный текст дайджеста + ensureChannelFooter, рендерим баннер,
+ *   1) собираем финальный текст дайджеста + ensureChannelFooter, рендерим баннер,
  *      публикуем в канал (sendFile, formatting + custom-emoji entities);
- *   3) удаляем pending.
+ *   2) удаляем pending.
  * Pending старше MAX_AGE_MS (20ч, не 24 — инцидент 2026-08-14) → expire
  *   (удаляем, выходим). Иначе — выходим тихо (ждём след. поллинга).
  *
+ * До 21.09.2026 шагом 1 был ингест статей на backend сайта ради ссылок вида
+ * /digest/<id>. Backend мёртв, а живой сайт собирает страницу выпуска из
+ * корпуса уже ПОСЛЕ поста, поэтому пост ведёт на списки разделов
+ * (lib/delabs-sections.ts). Подробности — tests/audit-2026-09-21-approve-poll-no-ingest.
+ *
  * Запуск (каждые ~30 мин): bun tools/approve-poll.ts   (из /opt/agent-team).
- * Нужны env: USERBOT_SESSION_PATH/KEY, TELEGRAM_API_ID/HASH, SITE_INGEST_URL, SITE_INGEST_TOKEN.
+ * Нужны env: USERBOT_SESSION_PATH/KEY, TELEGRAM_API_ID/HASH.
  */
 import {
   readFileSync,
@@ -37,6 +40,7 @@ import {
 } from "../lib/telegram-actions.ts";
 import { buildCustomEmojiEntities } from "../lib/custom-emoji-map.ts";
 import { CHANNEL_FOOTER, ensureChannelFooter } from "../lib/channel-footer.ts";
+import { sectionsLine } from "../lib/delabs-sections.ts";
 import { extractMessageId } from "../lib/userbot.ts";
 import { delabsChannelId, delabsSiteBase } from "../lib/delabs-env.ts";
 import { PENDING_PATH, ruDate, endSentence, itemEmoji, plainInline } from "./daily-draft.ts";
@@ -251,82 +255,8 @@ export async function isApproved(
   return d.approved;
 }
 
-const INGEST_TIMEOUT_DEFAULT_MS = 15_000;
-
-/** Бюджет одного POST на сайт. Пустая строка из EnvironmentFile = «не задано». */
-export function _resolveIngestTimeoutMs(
-  raw: string | undefined = process.env.SITE_INGEST_TIMEOUT_MS,
-): number {
-  const v = Number(raw?.trim() || "");
-  return Number.isFinite(v) && v > 0 ? v : INGEST_TIMEOUT_DEFAULT_MS;
-}
-
-/** Ингест одной статьи на сайт → вернуть id (slug). null при ошибке. */
-export async function ingestArticle(
-  a: DraftArticle,
-  opts: { _timeoutMs?: number } = {},
-): Promise<string | null> {
-  const url = process.env.SITE_INGEST_URL;
-  const token = process.env.SITE_INGEST_TOKEN;
-  if (!url || !token) {
-    console.error("[approve-poll] SITE_INGEST_URL/TOKEN not set — cannot ingest");
-    return null;
-  }
-  // Аудит 2026-08-29: тут стоял голый `await fetch(url, …)` без сигнала.
-  // Зависший сайт (не отдаёт ни ответа, ни RST) держал этот await столько,
-  // сколько позволит ядро, то есть съедал весь TimeoutStartSec юнита. Дальше
-  // прилетал SIGTERM — и если он заставал шаг 3 уже ПОСЛЕ
-  // `pending.publishStartedAt`, выпуск умирал: каждый следующий тик отвечал
-  // `publish_already_attempted`, а через 20 часов TTL стирал одобренный
-  // черновик. Ограничиваем каждый POST явно, как давно сделано в
-  // `lib/site-ingest.ts`.
-  const timeoutMs = opts._timeoutMs ?? _resolveIngestTimeoutMs();
-  const controller = new AbortController();
-  /** Оборвали ли МЫ запрос: таймаут и «сайт закрыл соединение» — разные аварии. */
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, timeoutMs);
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        title: a.title,
-        date: a.date,
-        summary: a.summary,
-        body: a.body,
-        items: a.items,
-        sourceCount: a.sourceCount,
-      }),
-      signal: controller.signal,
-    });
-    if (!res.ok) {
-      console.error("[approve-poll] ingest non-ok", res.status, "for", a.title);
-      return null;
-    }
-    const j: any = await res.json();
-    return typeof j?.id === "string" ? j.id : null;
-  } catch (e) {
-    if (timedOut) {
-      console.error(
-        `[approve-poll] ingest таймаут ${timeoutMs}ms для «${a.title}» — сайт не ответил, публикацию отменяем и повторим на следующем тике`,
-      );
-    } else {
-      console.error("[approve-poll] ingest failed:", (e as Error).message);
-    }
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 /**
- * Одобренный черновик: ингест статей на сайт → публикация в канал.
+ * Одобренный черновик → публикация в канал.
  *
  * Вынесено из main() и работает на инжектируемых зависимостях, потому что
  * шаги здесь НЕОБРАТИМЫ (публичные страницы + рассылка подписчикам), а вся
@@ -334,7 +264,6 @@ export async function ingestArticle(
  * тестов на publish-путь не существовало, а живой прогон стоит публикации.
  */
 export interface PublishDeps {
-  ingest: (a: DraftArticle) => Promise<string | null>;
   /**
    * Всё, что готовится ДО отправки и потому свободно повторяется: рендер
    * баннера. Держим отдельно от send именно поэтому — сбой рендера не должен
@@ -358,7 +287,7 @@ export interface PublishDeps {
     head: string,
     banner: Uint8Array,
   ) => Promise<DigestSendResult>;
-  /** Сохранить pending обратно (прогресс ингеста, отметка попытки). */
+  /** Сохранить pending обратно (отметка начатой публикации). */
   savePending: (p: PendingDraft) => void;
   clearPending: () => void;
   log?: (msg: string) => void;
@@ -369,12 +298,10 @@ export interface PublishOutcome {
   msgId?: number;
   /** Машиночитаемая причина отказа — она же ключ в логах. */
   reason?:
-    | "ingest_failed"
     | "banner_failed"
     | "prepare_failed"
     | "publish_failed"
-    | "publish_already_attempted"
-    | "progress_unsaved";
+    | "publish_already_attempted";
   /** Пост в канале, но не все части хвоста доставлены. published при этом
    *  остаётся true: медиа с подписью ушло, повторять публикацию нельзя. */
   tailIncomplete?: { sent: number; total: number };
@@ -386,66 +313,23 @@ export async function runApprovedPublish(
 ): Promise<PublishOutcome> {
   const say = deps.log ?? ((m: string) => console.log(m));
 
-  // 1) Ингест статей. Уже проингесченные (с siteId) пропускаем — не потому,
-  // что повтор опасен (сайт дедуплицирует по заголовку, см. разбор в catch
-  // ниже), а потому что это лишний сетевой вызов на каждом тике.
-  for (const a of pending.articles) {
-    if (a.siteId) continue;
-    const id = await deps.ingest(a);
-    say(`[approve-poll] ingested ${a.title} → id ${id}`);
-    if (id) {
-      a.siteId = id;
-      // Пишем прогресс сразу: если следующая статья или публикация упадёт,
-      // следующий тик не должен ингестить эту заново.
-      try {
-        deps.savePending(pending);
-      } catch (e) {
-        // Статья уже на сайте, а siteId на диск не лёг (ENOSPC на data/,
-        // EACCES, отвалившийся том). Через 30 минут апрув всё ещё стоит и
-        // `if (a.siteId) continue` не сработает — та же статья уедет на сайт
-        // повторно.
-        //
-        // Аудит 2026-08-28: ровно этого раньше и боялись — ветка звала
-        // `clearPending()` и писала «выпуск за этот день потерян», исходя из
-        // того, что «ингест не идемпотентен, ключа дедупликации в POST нет».
-        // Посылка неверна. Дедупликация на сайте идёт по ЗАГОЛОВКУ:
-        // `site/server/index.ts` определяет занятость как
-        // `existing !== null && existing.title !== title`, то есть «занято» =
-        // «под этим id лежит ДРУГОЙ материал». Повтор того же title+date
-        // возвращает ТОТ ЖЕ id двумя путями — `reusableDigestId`
-        // (`findLatestDigestByTitle`, окно 12 ч, а `a.date` в pending
-        // зафиксирован) и `freeSlug(slugFromTitle(title, dateIso), taken)`.
-        // Запинено на стороне сайта: `site/server/ingest-slug.test.ts` —
-        // «повторная отправка той же статьи обновляет её, а не плодит копии».
-        //
-        // Значит цена повтора — обновление страницы на месте, а цена
-        // `clearPending()` — уничтоженный выпуск, одобренный владельцем, и
-        // сгоревший ресёрч. Ведём себя как ветка отметки публикации ниже:
-        // логируем и выходим, pending НЕ трогаем. Обычный тик через 30 минут
-        // доведёт дело до конца, как только диск починится.
-        say(
-          `[approve-poll] прогресс ингеста не сохранён (${(e as Error).message}) — статья «${a.title}» уже на сайте. Pending оставляем: повторный ингест обновит ту же страницу (дедуп по заголовку), а не создаст дубль. Чините диск, следующий тик доведёт публикацию.`,
-        );
-        return { published: false, reason: "progress_unsaved" };
-      }
-    }
-  }
-
-  // 2) Провал ингеста — НЕ публикуем.
+  // Ингеста на сайт здесь больше нет, и это не упрощение, а исправление.
   //
-  // Раньше отсутствующий id молча превращался в ссылку на главную: дайджест
-  // уходил подписчикам, обещая «детали по ссылкам на сайте», каждое «Подробнее
-  // →» вело на главную, статей на сайте не было, а pending стирался. Владелец
-  // одобрил не то, что опубликовалось, и откатить это уже нечем.
-  const missing = pending.articles.filter((a) => !a.siteId);
-  if (missing.length) {
-    say(
-      `[approve-poll] ингест не прошёл для ${missing.length} из ${pending.articles.length} статей — публикация отменена, повторим на следующем тике`,
-    );
-    return { published: false, reason: "ingest_failed" };
-  }
+  // Шаг 1 постил каждую статью на прежний backend сайта и получал id её
+  // страницы; шаг 2 на любом провале ОТМЕНЯЛ публикацию — правильно, потому
+  // что пост обещал «детали по ссылкам на сайте», а страниц бы не было.
+  // Backend'а больше нет: хост из SITE_INGEST_URL не резолвится, значит id не
+  // вернётся никогда, значит одобренный владельцем выпуск не выходил бы
+  // вовсе, а через MAX_AGE_MS TTL стирал бы его вместе со сгоревшим ресёрчем
+  // (AUD-20260921-033).
+  //
+  // Живой сайт страницу выпуска до публикации и не может отдать: /digest/[slug]
+  // строится из корпуса, а корпус догоняется из снапшота канала уже ПОСЛЕ
+  // поста. Поэтому пост ведёт на списки разделов (lib/delabs-sections.ts) —
+  // они существуют всегда, — и ждать от сайта нечего: отменять публикацию
+  // стало не из-за чего.
 
-  // 3) Публикация. Отметку ставим ДО отправки: сбой sendFile неотличим от
+  // 1) Публикация. Отметку ставим ДО отправки: сбой sendFile неотличим от
   // «доставлено, но ответ потерян», а таймер запускается каждые 30 минут — то
   // есть автоповтор мог положить подписчикам второй экземпляр поста. Всё, что
   // падает до этой точки (рендер баннера, резолв пира и разметка в
@@ -489,8 +373,7 @@ export async function runApprovedPublish(
   } catch (e) {
     // Отметка — единственное, что защищает подписчиков от второго экземпляра
     // поста. Не легла на диск → отправлять нельзя. Pending НЕ трогаем: в канал
-    // ничего не ушло, ингест уже сохранён, следующий тик повторит публикацию
-    // штатно и без дубля.
+    // ничего не ушло, следующий тик повторит публикацию штатно и без дубля.
     say(
       `[approve-poll] отметку публикации не удалось сохранить (${(e as Error).message}) — не отправляем: без неё следующий тик положил бы в канал второй экземпляр`,
     );
@@ -654,7 +537,7 @@ export function headline(pending: PendingDraft): string {
   return pending.dayTitle.replace(/^Дайджест:\s*/, "");
 }
 
-/** Финальный текст канального дайджеста с реальными ссылками на сайт + футер. */
+/** Финальный текст канального дайджеста: новости, строка разделов, футер. */
 export function buildFinalText(pending: PendingDraft): string {
   // T-741. Недельный пост собран целиком ещё в черновике — тем самым текстом,
   // который владелец видел в превью и одобрил. Пересобирать его здесь нечем:
@@ -672,20 +555,25 @@ export function buildFinalText(pending: PendingDraft): string {
   lines.push(`📰 **${headline(pending)}**`);
   lines.push(`🗓️ ${ruDate(draftDate(pending))}`);
   lines.push("");
-  lines.push("Коротко о главном — детали по ссылкам на сайте.");
+  lines.push("Коротко о главном — разделы сайта под постом.");
   lines.push("");
   pending.articles.forEach((a) => {
-    // siteId проставлен ингестом; сюда мы доходим только когда он есть у всех
-    // (см. runApprovedPublish) — ветка с ссылкой на главную убрана намеренно.
-    const link = `${SITE_BASE}/digest/${a.siteId}`;
+    // «Подробнее →» у пункта больше нет. Оно вело на страницу выпуска, адрес
+    // которой выдавал ингест; на живом сайте этой страницы в момент
+    // публикации не существует (см. lib/delabs-sections.ts). Ссылка на
+    // список вместо неё стоит ОДНА, под постом: двадцать одинаковых
+    // «Подробнее →» — это не навигация, а шум.
+    //
     // plainInline: единственный шаг между внешним текстом и разметкой поста.
     // Без него `title` вида «Дроп [жми сюда](https://evil.tld)» публиковался
     // настоящей ссылкой на чужой домен, а в превью на апруве была видна только
     // подпись «жми сюда» — владелец одобрял, не видя куда (аудит 2026-08-28).
     lines.push(`${itemEmoji(a.emoji)} **${plainInline(a.title)}**`);
-    lines.push(`${endSentence(plainInline(a.blurb ?? ""))} [Подробнее →](${link})`);
+    lines.push(endSentence(plainInline(a.blurb ?? "")));
     lines.push(""); // отступ между новостями (эталон #75) + перед футером
   });
+  lines.push(sectionsLine(SITE_BASE));
+  lines.push("");
   lines.push(FOOTER);
   return ensureChannelFooter(lines.join("\n"));
 }
@@ -768,14 +656,13 @@ async function main(): Promise<void> {
     return;
   }
 
-  console.log("[approve-poll] APPROVED — ingesting + publishing");
+  console.log("[approve-poll] APPROVED — publishing");
 
   // Пир резолвится в prepareSend и переиспользуется в send — так сетевой
   // вызов остаётся ДО отметки публикации.
   let channelPeer: Awaited<ReturnType<typeof client.getInputEntity>> | null = null;
 
   const outcome = await runApprovedPublish(pending, {
-    ingest: ingestArticle,
     renderBanner: (head) =>
       renderBannerPng({
         title: head,

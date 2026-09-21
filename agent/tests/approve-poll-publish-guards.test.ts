@@ -36,6 +36,7 @@ import {
 } from "../tools/approve-poll.ts";
 import { ruDate } from "../tools/daily-draft.ts";
 import type { PendingDraft } from "../tools/daily-draft.ts";
+import { DELABS_SECTIONS } from "../lib/delabs-sections.ts";
 import { plainTelegramLength } from "../lib/telegram-format.ts";
 
 function pendingWith(count: number, blurbLen: number): PendingDraft {
@@ -76,13 +77,13 @@ describe("подпись к баннеру против лимита Telegram", 
     }
   });
 
-  test("ни одна новость и ни одна ссылка не теряются", () => {
+  test("ни одна новость и ни один раздел не теряются", () => {
     const pending = pendingWith(4, 220);
     const joined = splitForCaption(buildFinalText(pending)).join("\n");
-    for (const a of pending.articles) {
-      expect(joined).toContain(a.title);
-      expect(joined).toContain(`/digest/${a.siteId}`);
-    }
+    for (const a of pending.articles) expect(joined).toContain(a.title);
+    // Строка разделов стоит одна и последней перед футером — если резка по
+    // абзацам уронит именно её, пост выйдет вовсе без ссылок на сайт.
+    for (const s of DELABS_SECTIONS) expect(joined).toContain(s.href);
     expect(joined).toContain("Copyright");
   });
 

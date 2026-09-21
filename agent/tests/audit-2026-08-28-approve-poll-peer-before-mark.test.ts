@@ -62,7 +62,6 @@ function harness(opts: { failPrepares: number; failSend?: boolean }) {
     disk: null as PendingDraft | null,
   };
   const deps: PublishDeps = {
-    ingest: async (a) => `${a.date}-id`,
     renderBanner: async () => {
       h.order.push("banner");
       return banner;
@@ -100,13 +99,13 @@ describe("approve-poll: сетевая подготовка исполняетс
     const first = await runApprovedPublish(structuredClone(onDisk), deps);
     expect(first.published).toBe(false);
     expect(first.reason).toBe("prepare_failed");
-    // Ни отправки, ни отметки, ни стирания: следующий тик увидит тот же pending.
-    // На диске только прогресс ингеста (шаг 1) — отметки публикации там нет,
-    // значит `publish_already_attempted` не сработает и повтор разрешён.
+    // Ни отправки, ни отметки, ни стирания: следующий тик увидит тот же
+    // pending. На диск вообще ничего не легло — значит
+    // `publish_already_attempted` не сработает и повтор разрешён.
     expect(h.sent).toBe(0);
     expect(h.cleared).toBe(0);
-    expect(h.disk?.publishStartedAt).toBeUndefined();
-    expect(h.order).toEqual(["save", "banner", "prepare"]);
+    expect(h.disk).toBeNull();
+    expect(h.order).toEqual(["banner", "prepare"]);
 
     // Второй тик — пир резолвится, выпуск уходит.
     const second = await runApprovedPublish(structuredClone(onDisk), deps);
@@ -120,9 +119,9 @@ describe("approve-poll: сетевая подготовка исполняетс
     const { h, deps } = harness({ failPrepares: 0 });
     const res = await runApprovedPublish(pending(), deps);
     expect(res.published).toBe(true);
-    // Порядок и есть инвариант: всё повторяемое слева от save, отправка справа.
-    // Первый save — прогресс ингеста (шаг 1), второй — отметка публикации.
-    expect(h.order).toEqual(["save", "banner", "prepare", "save", "send"]);
+    // Порядок и есть инвариант: всё повторяемое слева от save, отправка
+    // справа. Единственный save — отметка публикации.
+    expect(h.order).toEqual(["banner", "prepare", "save", "send"]);
   });
 
   test("сбой самой отправки по-прежнему оставляет отметку на диске", async () => {
