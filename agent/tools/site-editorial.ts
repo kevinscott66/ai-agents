@@ -152,10 +152,11 @@ export const EDITORIAL_BATCH: Record<Kind, number> = { digests: 5, activities: 3
  * Бюджет ходов на один материал.
  *
  * Здесь не ресёрч с нуля, как в daily-draft: тема, цифры и ссылки уже есть в
- * посте, агенту нужно их проверить и развернуть. Две-три ходки на источники
- * поста плюс запас на поиск недостающей детали.
+ * посте, агенту нужно их проверить и развернуть. Было 12, но на постах с
+ * тремя-четырьмя источниками и поиском (Plasma, Miden, X Money, 22.09.2026)
+ * агент упирался в лимит и материал не писался вовсе; 24 хватает с запасом.
  */
-export const EDITORIAL_MAX_TURNS = 12;
+export const EDITORIAL_MAX_TURNS = 24;
 
 export const EDITORIAL_SYSTEM = [
   "Ты — редактор сайта delabs.space (крипта, airdrop, AI×Web3).",
