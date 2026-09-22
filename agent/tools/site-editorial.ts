@@ -1,5 +1,5 @@
 /**
- * site-editorial.ts — ежедневная редактура сайта delabs.space.
+ * site-editorial.ts — автоматическая редактура сайта delabs.space.
  *
  * Зачем. Сайт с 20.09.2026 догоняет канал сам: таймер `delabs-site-refresh`
  * дважды в час забирает посты и пересобирает корпус. Но канал пишет для канала —
@@ -10,7 +10,7 @@
  * Разницу делал редакционный слой, и делался он руками. Пока руки не дошли,
  * свежий материал висит текстом поста.
  *
- * Этот инструмент — те же руки, только ежедневные и агентские. Через Claude
+ * Этот инструмент — те же руки, только агентские и без выходных. Через Claude
  * Agent SDK (подписка, WebSearch/WebFetch) он берёт материалы канала, у которых
  * редактуры ещё нет, читает первоисточники поста и переписывает их по образцу
  * самого сайта.
@@ -135,8 +135,11 @@ export const AUTO_PATH =
  * Сколько материалов берём за прогон, по видам.
  *
  * Бюджет считается от таймаута юнита: один материал — это открыть 1-3 источника
- * и написать два-три поля, ~1.5-2 минуты. Восемь штук укладываются в
- * TimeoutStartSec=1800 с запасом.
+ * и написать два-три поля, 30-60 секунд по журналу юнита (21.09.2026), вдвое
+ * больше, если понадобился повтор (EDITORIAL_ATTEMPTS). Восемь штук даже с
+ * повторами укладываются в TimeoutStartSec=1800. С 22.09.2026 таймер ходит
+ * каждые полчаса, так что лимит почти никогда не упирается: канал за полчаса
+ * столько не пишет.
  *
  * Виды разведены намеренно. Канал даёт 3-7 новостей в день и активность-другую;
  * с одним общим числом новости съедали бы весь бюджет, и активности не
@@ -160,15 +163,35 @@ export const EDITORIAL_SYSTEM = [
   "Ты не сочиняешь новость, а разворачиваешь уже случившуюся: факты берёшь из поста и его первоисточников.",
   "Ни одной цифры, даты или имени, которых нет в посте или в открытом тобой источнике. Нет факта — не пиши его.",
   "Ссылки не выдумываешь никогда.",
+  "Источник факта — первоисточник: сайт, документация или официальный X проекта, либо серьёзное СМИ. Утверждение, которое есть только в посте канала и не подтвердилось, — не пиши вовсе и не ссылайся на канал как на источник.",
+  "Реферальные ссылки и коды в текст не переносишь: в тексте — чистые адреса официальных страниц.",
+  "Если официальный источник противоречит посту, пишешь по источнику.",
 ].join(" ");
 
 /** Заголовок-ярлык из канала: «Проект: Фраза». Ровно то, что мы заменяем. */
 export const LABEL_TITLE = /^[\p{L}\p{N}_]+:\s/u;
 
-export const TITLE_MIN = 40;
-export const TITLE_MAX = 160;
-export const SUMMARY_MIN = 80;
-export const BODY_MIN = 300;
+/**
+ * Границы для выпусков сняты с 250 выпусков, написанных руками: заголовки
+ * 70-116 символов (медиана 93), лид 181-270 (медиана 221), тело 284-1359
+ * (медиана 796). До 22.09.2026 здесь стояли 40/80/300 — «чтобы не было
+ * пусто», — и агент честно писал по нижней границе: выпуск на две строки
+ * среди соседей на три абзаца. Нижняя граница — это то, что агент считает
+ * нормой, поэтому она взята у десятого процентиля написанного, а не у нуля.
+ */
+export const TITLE_MIN = 70;
+export const TITLE_MAX = 130;
+export const SUMMARY_MIN = 180;
+export const SUMMARY_MAX = 340;
+export const BODY_MIN = 500;
+export const BODY_MAX = 1600;
+
+/**
+ * Сколько раз переспрашиваем модель, если текст не прошёл проверки. Причины
+ * отказа уходят ей же: «лид 120 символов, нужно от 180» исправляется со второй
+ * попытки почти всегда, а без повтора выпуск ещё полчаса висит текстом поста.
+ */
+export const EDITORIAL_ATTEMPTS = 2;
 
 /**
  * Границы для активностей сняты с того, что человек уже написал: 162 карточки,
@@ -195,8 +218,19 @@ export const ACT_TITLE_DASH = " — ";
  */
 export function styleExamples(manual: EditorialFile, kind: Kind = "digests", n = 2): EditorialEntry[] {
   const body = (e: EditorialEntry) => (kind === "digests" ? e.body : e.intro);
+  // Образец задаёт агенту норму, поэтому берём только тексты, которые сами
+  // проходят нынешние границы: короткий образец рядом с требованием «от 500»
+  // агент читает как разрешение писать коротко.
+  const fits = (e: EditorialEntry) => {
+    const b = String(body(e)).length;
+    const t = e.title.length;
+    return kind === "digests"
+      ? t >= TITLE_MIN && t <= TITLE_MAX && b >= BODY_MIN && b <= BODY_MAX &&
+          String(e.summary ?? "").length >= SUMMARY_MIN
+      : t >= ACT_TITLE_MIN && t <= ACT_TITLE_MAX && b >= INTRO_MIN && b <= INTRO_MAX;
+  };
   const all = Object.values(manual[kind] ?? {}).filter(
-    (e) => e && typeof e.title === "string" && typeof body(e) === "string" && String(body(e)).length > INTRO_MIN,
+    (e) => e && typeof e.title === "string" && typeof body(e) === "string" && fits(e),
   );
   return all.slice(-n);
 }
@@ -216,7 +250,7 @@ export function editorialPrompt(d: RawDigest, examples: EditorialEntry[]): strin
         `Образец ${i + 1}:`,
         `title: ${e.title}`,
         `summary: ${e.summary}`,
-        `body: ${String(e.body).slice(0, 600)}`,
+        `body: ${e.body}`,
       ].join("\n"),
     )
     .join("\n\n");
@@ -236,10 +270,11 @@ export function editorialPrompt(d: RawDigest, examples: EditorialEntry[]): strin
     "Что нужно:",
     `- title: ${TITLE_MIN}-${TITLE_MAX} символов, «кто что сделал — деталь с цифрой», без точки в конце.`,
     "  Форму «Проект: Фраза» не используй: именно её мы и заменяем.",
-    `- summary: 2 предложения, от ${SUMMARY_MIN} символов, начинается с даты события полужирным (**20 сентября**),`,
+    `- summary: 2 предложения, ${SUMMARY_MIN}-${SUMMARY_MAX} символов, начинается с даты события полужирным (**20 сентября**),`,
     "  ключевые числа тоже полужирным.",
-    `- body: 2-3 абзаца Markdown, от ${BODY_MIN} символов. Первый абзац объясняет, что это за проект и что произошло,`,
-    "  дальше — детали, сроки, условия. Числа полужирным, ссылки в тексте — обычным Markdown.",
+    `- body: 2-3 абзаца Markdown, ${BODY_MIN}-${BODY_MAX} символов. Первый абзац объясняет, что это за проект и что произошло,`,
+    "  второй — детали, сроки, условия и что сделать читателю, третий (если есть что сказать) — оговорки и риски.",
+    "  Числа полужирным, ссылки в тексте — обычным Markdown. Длину набирай фактами из источников, а не водой.",
     "- items: список источников {text,url}. ВСЕ ссылки поста обязаны остаться (текст можно переписать),",
     "  к ним можно добавить те, что ты открыл сам.",
     "",
@@ -339,8 +374,11 @@ export function checkEntry(e: Partial<EditorialEntry>, d: RawDigest): string[] {
   if (title.endsWith(".")) bad.push("заголовок с точкой в конце");
   if (LABEL_TITLE.test(title)) bad.push("заголовок остался ярлыком «Проект: Фраза»");
   if (title && title === d.title.trim()) bad.push("заголовок не изменился");
-  if (summary.length < SUMMARY_MIN) bad.push(`лид ${summary.length} символов, нужно от ${SUMMARY_MIN}`);
-  if (body.length < BODY_MIN) bad.push(`тело ${body.length} символов, нужно от ${BODY_MIN}`);
+  if (summary.length < SUMMARY_MIN || summary.length > SUMMARY_MAX)
+    bad.push(`лид ${summary.length} символов, нужно ${SUMMARY_MIN}-${SUMMARY_MAX}`);
+  if (body.length < BODY_MIN || body.length > BODY_MAX)
+    bad.push(`тело ${body.length} символов, нужно ${BODY_MIN}-${BODY_MAX}`);
+  else if (body.split(/\n\s*\n/).filter((p) => p.trim()).length < 2) bad.push("тело одним абзацем, нужно 2-3");
 
   const items = Array.isArray(e.items) ? e.items : [];
   for (const it of items) {
@@ -451,12 +489,42 @@ async function ask(prompt: string): Promise<string> {
 
 const stamp = () => ({ at: new Date().toISOString(), by: "site-editorial" });
 
+/** Приписка к промпту для повторной попытки: что именно не прошло. */
+export function retryNote(bad: string[]): string {
+  return [
+    "",
+    "Предыдущий вариант отклонён проверкой:",
+    ...bad.map((b) => `- ${b}`),
+    "Исправь именно это, остальные требования те же. Верни снова один JSON-объект.",
+  ].join("\n");
+}
+
+/**
+ * Спросить, проверить, при отказе переспросить с причинами. Бросает с
+ * причинами последней попытки — в журнале юнита видно, чего не хватило.
+ */
+async function askChecked<T>(prompt: string, check: (p: T) => string[]): Promise<T> {
+  let bad: string[] = [];
+  for (let i = 0; i < EDITORIAL_ATTEMPTS; i++) {
+    let parsed: T;
+    try {
+      parsed = extractJson(await ask(bad.length ? prompt + retryNote(bad) : prompt)) as T;
+    } catch (err) {
+      bad = [(err as Error).message];
+      continue;
+    }
+    bad = check(parsed);
+    if (!bad.length) return parsed;
+  }
+  throw new Error(bad.join("; "));
+}
+
 /** Один выпуск. Возвращает запись или бросает с причиной. */
 export async function writeOne(d: RawDigest, examples: EditorialEntry[]): Promise<EditorialEntry> {
-  const parsed = extractJson(await ask(editorialPrompt(d, examples))) as Partial<EditorialEntry>;
-  if (Array.isArray(parsed.items)) parsed.items = dropSelfLink(parsed.items, d);
-  const bad = checkEntry(parsed, d);
-  if (bad.length) throw new Error(bad.join("; "));
+  const parsed = await askChecked<Partial<EditorialEntry>>(editorialPrompt(d, examples), (p) => {
+    if (Array.isArray(p.items)) p.items = dropSelfLink(p.items, d);
+    return checkEntry(p, d);
+  });
   return {
     title: String(parsed.title).trim(),
     summary: String(parsed.summary).trim(),
@@ -468,9 +536,7 @@ export async function writeOne(d: RawDigest, examples: EditorialEntry[]): Promis
 
 /** Одна активность. Пишем только заголовок и интро — остальное не наше. */
 export async function writeActivity(a: RawActivity, examples: EditorialEntry[]): Promise<EditorialEntry> {
-  const parsed = extractJson(await ask(activityPrompt(a, examples))) as Partial<EditorialEntry>;
-  const bad = checkActivity(parsed, a);
-  if (bad.length) throw new Error(bad.join("; "));
+  const parsed = await askChecked<Partial<EditorialEntry>>(activityPrompt(a, examples), (p) => checkActivity(p, a));
   return { title: String(parsed.title).trim(), intro: String(parsed.intro).trim(), ...stamp() };
 }
 
