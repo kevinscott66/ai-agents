@@ -1,31 +1,32 @@
 # DOBROPALM Virtual Office — target architecture
 
-Статус: целевая архитектура после принятого checkpoint A/B. Первый mock runtime C/D реализован; точный scope и отличия — в [IMPLEMENTATION_STATUS](IMPLEMENTATION_STATUS.md). Основание: [исследование](EXISTING_SYSTEM.md), [протокол](EVENT_MODEL.md), [состояния](AGENT_STATE_MODEL.md), [план](IMPLEMENTATION_PLAN.md).
+Status: target architecture after accepted checkpoint A/B. The first mock C/D increment is implemented; see [implementation status](IMPLEMENTATION_STATUS.md) for delivered scope and deviations. Sources: [discovery](EXISTING_SYSTEM.md), [protocol](EVENT_MODEL.md), [states](AGENT_STATE_MODEL.md), [plan](IMPLEMENTATION_PLAN.md). This design record predates the later [live integration](LIVE_INTEGRATION.md).
 
-## Решение о движке
+## Engine decision
 
-**Выбираем React + React Three Fiber + Three.js для размещения на сайте**, согласно уточнению пользователя после первого предложения UE. Gateway и агенты работают на сервере, браузер — интерфейс. UE не входит в текущий implementation scope.
+**React + React Three Fiber + Three.js for web hosting**, following the user's clarification after an initial Unreal proposal. Agents/gateway run on the server; the browser is the interface. Unreal is outside the current implementation scope.
 
-| Критерий | Unreal | React + R3F + Three.js |
-|---|---|---|
-| Персонажи и анимация | более полный готовый skeletal/IK pipeline | PBR/glTF, animation mixer; IK/locomotion требуют отдельной интеграции |
-| Размещение на сайте | GPU server + Pixel Streaming для полноценного UE клиента | обычная доставка web assets + WSS |
-| Нагрузка пользователя | при streaming в основном декодирование видео | локальный WebGL GPU/CPU rendering |
-| Серверные затраты | выделенный GPU, streaming sessions, bandwidth | статические assets и небольшой gateway, без GPU для rendering |
-| UI | streamed UMG | читаемый DOM overlay |
-| Навигация и мебель | встроенные engine systems | navmesh/steering, collision и animation anchors интегрируем отдельно |
+| Criterion | Unreal | React + R3F + Three.js |
+| --- | --- | --- |
+| Characters/animation | More complete skeletal/IK pipeline | PBR/glTF and animation mixer; separate IK/locomotion integration |
+| Website delivery | GPU server and Pixel Streaming | Web assets and WSS |
+| Client load | Primarily video decoding with streaming | Local WebGL GPU/CPU rendering |
+| Server cost | GPU, sessions and bandwidth | Static assets and small gateway; no rendering GPU |
+| UI | Streamed UMG | Readable DOM overlay |
+| Navigation/furniture | Engine systems | Separate navigation, collision and anchor integration |
 
-**Сайт не переносит WebGL-рендеринг на сервер автоматически.** Текущее решение минимизирует локальную нагрузку, но не исключает её: ограничение 30 FPS, adaptive DPR, LOD, baked lightmaps, пауза скрытой вкладки и опциональный 2D режим. Если требование означает полностью удалённый рендеринг, нужен отдельный GPU streaming deployment; его стоимость, задержку и доступность надо оценить до реализации. Не обещаем нулевую нагрузку от browser 3D.
+**Web hosting does not automatically move WebGL rendering to the server.** Reduce client load with a 30 FPS cap, adaptive DPR, LOD, baked lighting, hidden-tab pause and optional 2D. Fully remote rendering would require a separately evaluated GPU streaming deployment with its own cost, latency and availability. Do not promise zero client load.
 
-На исследованной машине M1 Pro / 16 GB; используем её как нижний профиль тестирования браузерного клиента. Начальные персонажи — rigged glTF с PBR и hair cards, не декоративные low-poly фигуры. Реалистичность повышаем после проверки animation pipeline и бюджета. UE остаётся архитектурной альтернативой для будущего GPU streaming, но не параллельной реализацией. Для веб-персонажей нужны лицензированные модели и sit/stand/walk/typing clips с единым skeleton; библиотеку IK/navigation выбираем небольшим spike и фиксируем версии перед внедрением.
+The inspected M1 Pro / 16 GB machine is the initial lower test profile. Target initial characters are rigged PBR glTF with hair cards; improve realism after validating animation and performance budgets. Unreal remains a future streaming alternative, not a parallel build. Web assets need licenses and compatible sit/stand/walk/typing skeletons. Evaluate IK/navigation in a bounded spike and pin versions before integration.
 
-Официальные источники, проверены 2026-09-23:
-- [UE macOS requirements](https://dev.epicgames.com/documentation/en-us/unreal-engine/macos-development-requirements-for-unreal-engine).
-- [MetaHuman hardware/platform requirements](https://dev.epicgames.com/documentation/metahuman/metahuman-hardware-requirements-in-unreal-engine?lang=en-US).
+Official references checked on 2026-09-23:
+
+- [Unreal macOS requirements](https://dev.epicgames.com/documentation/en-us/unreal-engine/macos-development-requirements-for-unreal-engine).
+- [MetaHuman requirements](https://dev.epicgames.com/documentation/metahuman/metahuman-hardware-requirements-in-unreal-engine?lang=en-US).
 - [IK Rig](https://dev.epicgames.com/documentation/unreal-engine/unreal-engine-ik-rig), [Motion Matching](https://dev.epicgames.com/documentation/unreal-engine/motion-matching-in-unreal-engine).
 - [R3F introduction](https://r3f.docs.pmnd.rs/getting-started/introduction), [performance](https://r3f.docs.pmnd.rs/advanced/scaling-performance).
 
-## Независимые слои
+## Independent layers
 
 ```mermaid
 flowchart TD
@@ -40,36 +41,36 @@ flowchart TD
   I --> A
 ```
 
-Gateway — отдельный Bun/TypeScript service с собственной SQLite projection/journal. На первом этапе mock-only, loopback. Один writer сериализует события и обновление WorldState в одной транзакции. Kafka/Redis не нужны для одного офиса. Engine-neutral protocol schemas не импортируют Bun, Three.js, Telegram или LLM SDK.
+The proposed gateway is a separate Bun/TypeScript service with its own SQLite projection/journal, initially mock-only on loopback. One writer serializes events and WorldState in a transaction. A single office does not need Kafka/Redis. Engine-neutral schemas import no Bun, Three.js, Telegram or LLM SDK.
 
-Минимально инвазивная real integration: backend отдаёт узкую owner-scoped read projection и notifications после commit; адаптер перечитывает committed данные. Backend-local hook только кладёт sanitised invalidation в ограниченную очередь, никогда не ждёт office network. Gateway outage не останавливает агента. Потеря очереди выставляет degraded и требует reconciliation; не выдаём best-effort events за полный audit. Более точные lifecycle hooks добавляются отдельно после тестов. Напрямую импортировать `db.ts` в gateway нельзя: импорт создаёт/инициализирует DB.
+Minimally invasive integration exposes a narrow owner-scoped projection and post-commit invalidation notifications; the adapter rereads committed state. Backend hooks enqueue sanitized invalidations without waiting on office networking. Gateway outages cannot stop agents. Queue loss marks degraded state and triggers reconciliation; best-effort events are not a full audit. Add finer lifecycle hooks separately with tests. Never import `db.ts` directly into the gateway: importing it initializes the database.
 
 ## WorldState
 
 `{schemaVersion, streamId, seq, generatedAt, sourceHealth, agents, tasks, communications, meetings, infrastructure, projects}`.
 
-Карты имеют стабильные ID и revision. AgentState описан отдельно; Task содержит подтверждённый backend status, ownership, assignment, nullable progress; Communication — отправитель/получатель, task correlation и безопасная сводка; Meeting — backend intent, participants/topics/status; Project — display name и проверенные repository references. Infrastructure по умолчанию `capability: unavailable`, без выдуманного uptime. Удаление сущности — tombstone. Ограниченные recent actions и communications, пагинируемая история; raw logs в snapshot не включаем.
+Maps use stable IDs/revisions. Tasks carry confirmed backend state, ownership, assignment and nullable progress. Communications carry sender/recipient, task correlation and safe summaries. Meetings represent backend intent with participants/topics/status. Projects contain display names and verified repository references. Infrastructure defaults to unavailable without invented uptime. Deletions use tombstones. Bound recent actions/communications and paginate history; exclude raw logs from snapshots.
 
-Позиции, позы, кофе, gaze и маршруты — локальная PresentationWorld, вне авторитетного WorldState. Несколько клиентов могут показать разные ambient движения при одинаковой реальной работе.
+Positions, poses, coffee, gaze and paths belong to local PresentationWorld. Clients may show different ambient movement for the same actual work.
 
-## Клиент и взаимодействие
+## Client interaction
 
-`OfficeConnection` принимает и проверяет transport; `WorldStateStore` применяет reducer; `AgentController` выбирает visual intent; `AgentCharacter` исполняет locomotion/animation. Конфигурация связывает agentId, workstationId, avatar asset, seat anchors. Gameplay logic не знает prompts/credentials/providers.
+`OfficeConnection` validates transport; `WorldStateStore` applies the reducer; `AgentController` selects visual intent; `AgentCharacter` handles locomotion/animation. Configuration binds agentId, workstationId, avatar and seat anchors. Gameplay has no provider credentials or prompts.
 
-Third-person player: kinematic player controller, collision, follow camera и независимый input abstraction для будущих first-person/mobile/VR. NPC: navmesh, avoidance, chair reservations, align/sit/stand animation clips, gaze limits и плавный blend. Подход игрока (~2 м, настраиваемый радиус + line-of-sight) даёт E/Talk; gaze сам по себе не вызывает backend. UI focus отключает movement input.
+The third-person player uses kinematic movement, collision and follow camera, with input abstraction for future first-person/mobile/VR. NPC navigation includes avoidance, seat reservation, alignment/sit/stand clips, bounded gaze and blending. Nearby interaction uses a configurable roughly two-meter radius and line of sight. Gaze never calls the backend; UI focus disables movement input.
 
-Inspect screen открывает читаемый DOM overlay с role/task/status/project/file/repo/branch/actions/tools/tests/progress/blockers, freshness и provenance. Неизвестное поле показывается «нет данных». Дальний монитор — дешёвый материал, не desktop capture. Repository URL разрешается только для проверенного HTTPS host; никаких shell/file URL.
+Inspect overlays expose role/task/status/project/file/repository/branch/actions/tools/tests/progress/blockers with freshness/provenance. Unknown values display no data. Distant monitors use cheap materials, not desktop capture. Repository links require validated HTTPS hosts; no shell/file URLs.
 
-Direct chat: office command адресован конкретному roleId; новый backend ingress обязан использовать тот же role execution boundary и ACL без обязательного Lead-hop. Разговор не отменяет активную работу: очередь по существующему policy, явные queued/accepted/completed/failed. Mock chat помечен MOCK и не изображает реальный LLM. До real ingress UI capability directChat=false.
+Direct chat targets a roleId through the existing execution/ACL boundary, without a mandatory Lead hop. Conversation does not cancel active work: queue under existing policy with explicit accepted/queued/completed/failed states. Mock chat is labeled MOCK; before real ingress, directChat capability is false.
 
-Планировка: современный офис в реальном масштабе, 12 specialist slots + место Lead, сейчас 11 занятых specialist slots; стеклянная переговорная, lounge/kitchen, server room shell. PBR, дерево/металл/стекло, естественный свет, без cyberpunk. Начинаем с рабочего места одного агента, масштабируем после vertical slice.
+Initial layout: a realistically scaled modern office, twelve specialist slots plus Lead, with eleven specialist slots occupied; glass meeting room, lounge/kitchen and server-room shell. PBR wood/metal/glass and natural lighting. Start with one workstation and scale after the vertical slice.
 
-## Trust boundary и риски
+## Trust boundaries and risks
 
-Gateway auth: отдельная owner-scoped сессия, TLS вне loopback, short-lived WS ticket; auth до snapshot/replay, revocation закрывает сокет. Scope применяется до создания stream, а не только при отрисовке. Reconnect не повышает права. Backend credentials никогда не выдаются клиенту.
+Use an owner-scoped session, TLS outside loopback and short-lived WebSocket tickets. Authenticate before snapshot/replay; revocation closes sockets. Apply scope before stream creation, not only rendering. Reconnect never increases privileges. Backend credentials stay server-side.
 
-DTO строится allowlist-проекцией. Запрещены system prompts, hidden reasoning, raw tool args/results, env, keys, signed URLs и сырой terminal output. Даже task title и filename могут содержать секреты: bounded sanitization и explicit visibility policy; небезопасное поле omitted. Summary — публичная наблюдаемая сводка, не извлечённый chain-of-thought.
+Build DTOs through allowlists. Exclude system prompts, hidden reasoning, raw tool arguments/results, environment, keys, signed URLs and raw terminal output. Task titles and filenames may also contain secrets: bounded sanitization plus explicit visibility policy; omit unsafe fields. Summaries describe observable activity, not chain-of-thought.
 
-Команды отделены от событий. Deploy/stop/restart/delete требуют существующей backend approval policy; подтверждение связано с actor/action/payload hash/expiry, одноразово. Клиентская кнопка не является разрешением. Phase MVP не включает эти действия.
+Commands are separate from events. Deploy/stop/restart/delete require existing backend approval bound to actor/action/payload digest/expiry and used once. A button is not authorization. These actions are outside the MVP.
 
-Главные риски: неполная телеметрия (unknown/stale вместо фантазии), неоднозначная concurrent role activity (runId), потеря process-local событий (reconcile), утечка текста (allowlist), дубли команд (idempotency), тяжёлые ассеты на M1 (profile gate), direct-role ingress пока отсутствует. Прод и существующие клиенты изменяются только отдельными тестируемыми шагами.
+Risks: incomplete telemetry (unknown/stale), concurrent role activity (run IDs), lost process-local events (reconciliation), text leakage (allowlists), duplicate commands (idempotency), heavy assets (performance gates), and initially absent role ingress. Deliver production/client changes as separate tested increments.

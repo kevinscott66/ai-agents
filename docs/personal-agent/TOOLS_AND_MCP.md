@@ -1,36 +1,36 @@
-# Инструменты и MCP личного агента
+# Personal-agent tools and MCP
 
-## Добавлено
+## Implemented additions
 
-GET_CAPABILITIES: конфигурация подключений, Mac heartbeat и зарегистрированные для роли инструменты. Конфигурация не доказывает вход в аккаунт или реальную готовность сервиса. Фильтр конкретного хода может дополнительно ограничивать инструменты.
+`GET_CAPABILITIES` reports connection configuration, Mac heartbeat and tools registered for the role. Configuration does not prove account login or service readiness. A particular turn may apply additional tool filtering.
 
-GITHUB_MCP_READ: официальный remote GitHub MCP, операции file (path/ref), issue и pull_request (number). Фиксированы endpoint, repository из GITHUB_REPO и read-only method. Общая TOOLS-схема подключает инструмент к raw runtime и внутреннему team MCP. Только Lead в личном чате проверенного владельца; штатные role/pause/locked/rate-limit gates остаются.
+`GITHUB_MCP_READ` uses the official remote GitHub MCP for file reads (path/ref), issues and pull requests (number). Endpoint, `GITHUB_REPO` and read-only method selection are fixed server-side. The shared TOOLS schema exposes it to raw runtime and internal team MCP. Access is limited to Lead in the verified owner's private chat; normal role/pause/locked/rate-limit gates still apply.
 
-Включение: GITHUB_MCP_ENABLED=true и существующий серверный GITHUB_READ_TOKEN. По умолчанию отключён. PAT должен давать только чтение выбранного repo. Не копировать OAuth/секреты из Codex. Новый публичный MCP/shell endpoint на VPS не открывается.
+Enable with `GITHUB_MCP_ENABLED=true` and the existing server-side `GITHUB_READ_TOKEN`. Disabled by default. Scope the PAT to reading the selected repository. Do not copy Codex OAuth credentials or secrets. This does not expose a new public MCP/shell endpoint on the VPS.
 
-Transport: https://api.githubcopilot.com/mcp/readonly, redirects запрещены, X-MCP-Readonly=true, только get_file_contents/issue_read/pull_request_read. JSON/SSE; 512 КиБ на ответ, 40 тысяч символов выдачи, 30 секунд на вызов. Готовый SSE-ответ не ждёт закрытия потока. Результат считается недоверенными данными. Ни URL, ни токен, ни repo, ни произвольный remote method модель не выбирает.
+Transport: `https://api.githubcopilot.com/mcp/readonly`, no redirects, `X-MCP-Readonly=true`, and only `get_file_contents`, `issue_read`, `pull_request_read`. JSON/SSE responses are bounded to 512 KiB, output to 40,000 characters and a call to 30 seconds. A complete SSE response does not wait for connection closure. Results are untrusted data. The model cannot choose the URL, token, repository or arbitrary remote method.
 
-Официальные источники: https://github.com/github/github-mcp-server/blob/main/docs/remote-server.md и https://github.com/github/github-mcp-server/blob/main/docs/server-configuration.md .
+Official references: [remote server](https://github.com/github/github-mcp-server/blob/main/docs/remote-server.md), [server configuration](https://github.com/github/github-mcp-server/blob/main/docs/server-configuration.md).
 
-## Набор по сценариям
+## Tools by scenario
 
-| Сценарий | Средства | Условие исполнения |
+| Scenario | Tools | Prerequisites |
 | --- | --- | --- |
-| Интернет | Штатные web search/fetch | Флаг, доменная политика, бюджет и доступность провайдера |
-| GitHub | GET_GITHUB_STATUS, новый GITHUB_MCP_READ, ограниченный CODE_TASK | PAT/repo; публикация/merge отдельно |
-| Файлы/код/CLI | MAC_RUN_CLAUDE | Доступный Mac, разрешённый проект и команды |
-| Компьютер | MAC_CONTROL, календарь/workspace | Разрешения ОС и список операций |
-| Серверы | Существующий проектный исполнитель + SSH | Точный разрешённый target и согласованный deploy |
-| DNS | CLOUDFLARE_DNS_LIST / CLOUDFLARE_DNS | Разрешённая зона, credential, approval |
-| Яндекс | quote/checkout/status/order/cancel, order-watch | Mac browser, login, селекторы, подпись и лимиты |
-| Медиа | Генераторы + Higgsfield MCP | Личный OAuth, стоимость, лимиты, status |
-| Команда/память | tasks/delegation/knowledge/approvals/reminders | Owner/chat scope и policy |
-| Т-Банк личный | Локальная iPhone-подготовка; EXECUTION_DESIGN.md | Банковский executor ещё не реализован |
+| Web | Existing search/fetch | Feature flag, domain policy, budget and provider availability |
+| GitHub | GET_GITHUB_STATUS, GITHUB_MCP_READ, constrained CODE_TASK | PAT/repository; publication and merge remain separate |
+| Files/code/CLI | MAC_RUN_CLAUDE | Available Mac, authorized project and commands |
+| Computer | MAC_CONTROL, calendar/workspace | OS permissions and supported operations |
+| Servers | Existing project executor and SSH | Explicitly authorized target and deployment |
+| DNS | CLOUDFLARE_DNS_LIST / CLOUDFLARE_DNS | Allowed zone, credential and approval |
+| Yandex | Quote/checkout/status/order/cancel, order-watch | Mac browser, login, selectors, signatures and limits |
+| Media | Generators and Higgsfield MCP | Personal OAuth, cost, limits and status checks |
+| Team/memory | Tasks, delegation, knowledge, approvals, reminders | Owner/chat scope and policy |
+| Personal T-Bank | Local iPhone preparation; [execution design](EXECUTION_DESIGN.md) | Banking executor not yet implemented |
 
-Инструменты приложения Codex не становятся автоматически инструментами серверного агента. Для дополнительного сервиса нужен ограниченный адаптер и собственная авторизация. Автоустановка произвольного MCP по инструкции сайта/репозитория не предусмотрена.
+Codex app tools do not automatically become server-agent tools. Each additional service requires a scoped adapter and its own authorization. Website/repository instructions cannot trigger arbitrary MCP installation.
 
-## Проверка и поставка
+## Verification and delivery
 
-Тесты: JSON/SSE и незакрытый поток, фиксированные URL/repo/method, чужой владелец/группа/роль, неверные параметры, размер, protocol ID, отзыв доступа и отсутствие секрета в статусе. Дополнительно штатные role/locked/rate-limit/SDK тесты. Реальная read-only приёмка фиксируется в приватном handoff.
+Tests cover JSON/SSE including an open stream, fixed URL/repository/method, foreign owner/group/role, invalid arguments, size limits, protocol IDs, revoked access and secret-free status. Existing role/locked/rate-limit/SDK tests also apply. Live read-only acceptance is recorded in the private handoff.
 
-Код не развёрнут. Для включения нужны CI и отдельное разрешение на production-коммит. Эта поставка не подключает все сторонние аккаунты и не реализует банковский executor или серверный браузер.
+At the time of this change, the code is not deployed. Activation requires CI and separate authorization for the production commit. This change neither connects every third-party account nor implements the bank executor or server browser.

@@ -42,7 +42,7 @@ The user reported a “This page crashed” tab while the local HTTP page and ga
 
 ## Appearance presets
 
-Sixteen selectable male/female looks differ in hair, clothing and footwear. The player and Backend have independent selectors under «Персонажи». Validated local preferences survive reload; safe startup still remains 2D. Models load on selection, and changing looks produces no gateway event or role change. Source alpha channels are preserved in PNG for hair/glasses; body/normal maps use JPEG. The converter retains all material slots. Full appearance and rendering verification is documented in [visual assets](VISUAL_ASSETS.md).
+Sixteen selectable male/female looks differ in hair, clothing and footwear. The player and Backend have independent selectors under Characters. Validated local preferences survive reload; safe startup still remains 2D. Models load on selection, and changing looks produces no gateway event or role change. Source alpha channels are preserved in PNG for hair/glasses; body/normal maps use JPEG. The converter retains all material slots. Full appearance and rendering verification is documented in [visual assets](VISUAL_ASSETS.md).
 
 ## Russian young-adult roster
 

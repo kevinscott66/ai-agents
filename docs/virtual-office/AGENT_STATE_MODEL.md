@@ -1,55 +1,55 @@
-# AgentState и визуальное поведение
+# AgentState and visual behavior
 
-Статус: проектируемый engine-independent контракт.
+Status: proposed engine-independent contract.
 
-## Авторитетное состояние
+## Authoritative state
 
 AgentState = `{agentId, role, availability, lifecycle, activity, activeRuns, primaryRunId, taskId, projectId, progress, currentFile, repository, branch, tests, blockers, recentActionIds, updatedAt, evidence, freshness, capabilities}`.
 
-availability = online/offline/unknown; lifecycle = enabled/paused/disabled; freshness = fresh/stale/unknown. activity nullable: отсутствие наблюдения не равно IDLE. У каждого activeRun собственные state/task/updatedAt, чтобы concurrent jobs одной роли не затирали друг друга. UI показывает количество работ и выбирает primaryRun детерминированно (user-selected, иначе последний подтверждённый активный); не смешивает task одного run и tool другого.
+Availability: online/offline/unknown. Lifecycle: enabled/paused/disabled. Freshness: fresh/stale/unknown. Activity is nullable: lack of observation does not imply IDLE. Each activeRun has its own state/task/updatedAt, so concurrent jobs of one role cannot overwrite each other. The UI shows the run count and deterministically selects a primary run: user-selected first, otherwise the latest confirmed active run. Never mix one run's task with another run's tool.
 
-| activity | Требуемое подтверждение |
-|---|---|
-| OFFLINE | подтверждённая недоступность execution runtime; потеря socket даёт stale, не OFFLINE |
-| IDLE | backend подтвердил отсутствие активных runs при доступном исполнителе |
-| THINKING | generation started без активного tool; только lifecycle, без hidden reasoning |
-| READING | инструмент чтения действительно started |
-| RESEARCHING | search/research tool started |
-| CODING | наблюдаемая операция редактирования started |
-| TERMINAL | разрешённый shell process started |
-| TESTING | явно классифицированный test run started |
-| REVIEWING | backend review job started |
-| WAITING | queue, approval или явный blocker; reason обязателен |
-| WAITING_TOOL | ожидание tool result при отсутствии более точного activity |
-| COMMUNICATING | реальная отправка/handoff с correlation |
-| MEETING | backend meeting intent active; не обычное NPC сближение |
-| ERROR | подтверждённый run failure с безопасной причиной |
-| DONE | подтверждённое завершение конкретного run |
+| Activity | Required evidence |
+| --- | --- |
+| OFFLINE | Confirmed executor unavailability; socket loss means stale, not OFFLINE |
+| IDLE | Backend confirms no active runs and an available executor |
+| THINKING | Generation started without an active tool; lifecycle only, no hidden reasoning |
+| READING | A read tool actually started |
+| RESEARCHING | A search/research tool started |
+| CODING | An observed editing operation started |
+| TERMINAL | An authorized shell process started |
+| TESTING | An explicitly classified test run started |
+| REVIEWING | A backend review job started |
+| WAITING | Queue, approval or explicit blocker; reason required |
+| WAITING_TOOL | Waiting for a tool result without a more precise activity |
+| COMMUNICATING | Actual send/handoff with correlation |
+| MEETING | Active backend meeting intent, not NPC proximity |
+| ERROR | Confirmed run failure with a safe reason |
+| DONE | Confirmed completion of a specific run |
 
-Эти значения поддерживаются протоколом, но **не все доступны из текущей телеметрии**. Existing task running → active run, activity=null; action.executed → recent action, не длительное CODING. Telegram bot health → channel health, не гарантия idle/runtime ready. paused/disabled хранятся отдельно. Процент null до надёжного producer.
+The protocol supports these values, but **current telemetry does not provide all of them**. A running task establishes an active run with activity=null; `action.executed` establishes a recent action, not sustained CODING. Telegram bot health is channel health, not executor readiness. Paused/disabled are separate fields. Progress stays null until supplied by a reliable producer.
 
-## Переходы
+## Transitions
 
-Общий путь run: queued/WAITING → generation/THINKING → tool activity → generation → DONE/ERROR. Из любого active состояния возможен WAITING/WAITING_TOOL при явном сигнале. Tool finish восстанавливает актуальную родительскую фазу, не безусловный IDLE. DONE/ERROR терминальны для run, новый run имеет новый ID. Новая authoritative snapshot может корректно перескочить через пропущенные фазы.
+Typical run: queued/WAITING → generation/THINKING → tool activity → generation → DONE/ERROR. Explicit signals can move any active phase to WAITING/WAITING_TOOL. Tool completion restores the actual parent phase, not unconditional IDLE. DONE/ERROR terminate a run; a new run has a new ID. An authoritative snapshot may legitimately skip missed intermediate phases.
 
-Reducer проверяет schema, identity, revision и run correlation. Запоздалое событие завершённого run не меняет новый. Unknown activity расширения отображается нейтрально. Stale timeout не завершает задачу: сохраняет последнее наблюдение с возрастом и отключает claim «сейчас работает».
+The reducer checks schema, identity, revision and run correlation. Late events for a finished run cannot change a newer run. Unknown extension activities render neutrally. Staleness does not finish a task: retain the last observation with its age and stop claiming current activity.
 
-## PresentationState (только клиент)
+## PresentationState: client only
 
-`{location, locomotion, posture, interaction, visualActivity, gazeTarget, seatReservation, ambientSeed, nextAmbientAt}`. Не отправляется как AgentState.
+`{location, locomotion, posture, interaction, visualActivity, gazeTarget, seatReservation, ambientSeed, nextAmbientAt}` is never submitted as AgentState.
 
-Locomotion: idle → start → walk → decelerate → stop → turn-in-place → idle. Kinematic controller задаёт acceleration/deceleration, animation mixer смешивает скорость/поворот; navigation управляет путём, не teleport. Seat FSM: reserve → approach → align → sit → seated → stand → release. Ошибка пути/занятое кресло → безопасный standing idle и повтор с backoff; backend task не затрагивается.
+Locomotion: idle → start → walk → decelerate → stop → turn-in-place → idle. A kinematic controller sets acceleration/deceleration; the animation mixer blends speed/turning. Navigation follows a path rather than teleporting. Seat FSM: reserve → approach → align → sit → seated → stand → release. Failed paths or occupied seats fall back to standing idle and retry with backoff, without affecting backend tasks.
 
-CODING допускает typing/read-monitor/mouse/pause. IDLE допускает stretch/coffee/phone/window/kitchen. WAITING — спокойное ожидание с честным статусом. Разные seeded delays и клипы исключают синхронные idle loops. Не отвлекать активно работающего персонажа длинным ambient маршрутом.
+CODING can visualize typing, reading a monitor, mouse use and pauses. IDLE can visualize stretching, coffee, phone, window or kitchen activity. WAITING uses a quiet pose with accurate status. Seeded delays/clips avoid synchronized idle loops. Long ambient routes must not distract an actively working avatar.
 
-MVP: ходьба, сидение, вставание, working/idle/waiting blend. Phase 2: foot IK, hand anchors, head/eye tracking, turn-in-place refinement, grasp/release object attachment, chair/body turn, mocap variation. IK компенсирует контакт, не заменяет отсутствующий sit/stand clip. Для каждого ассета нужны compatible skeleton/retarget profile и лицензия.
+MVP: walking, sitting, standing and working/idle/waiting blends. Phase 2: foot IK, hand anchors, head/eye tracking, refined turns, object grasp/release, chair/body turning and mocap variation. IK adjusts contact; it does not replace missing sit/stand clips. Every asset needs a compatible skeleton/retarget profile and license.
 
-## Awareness, talk, meetings
+## Awareness, conversation and meetings
 
-Близость игрока запускает ограниченный gaze с плавным весом. E/Talk прерывает interruptible visual animation: typing stop → hands off keyboard → body/head turn → conversation pose. Input в UI не вызывает повторную отправку. После закрытия инспектора controller выбирает поведение из **текущего**, а не сохранённого до разговора AgentState.
+Player proximity triggers bounded gaze with smooth blending. E/Talk interrupts eligible visual activity: stop typing → hands off keyboard → body/head turn → conversation pose. UI input must not resubmit messages. On inspector close, choose behavior from **current** AgentState, not the state saved before conversation.
 
-Communication отображается сразу как уведомление, независимо от скорости NPC. Walk-to-colleague — необязательная визуализация. Meeting intent: завершить interruptible ambient → stand → reserve meeting seat → navigate → sit. Неуспевший NPC не блокирует реальный meeting. После завершения возвращается к своему месту. Ambient разговор обязательно помечен визуальным; он не создаёт communication event backend.
+Communication appears immediately regardless of NPC travel speed. Walking to a colleague is optional visualization. Meeting intent: finish interruptible ambient activity → stand → reserve meeting seat → navigate → sit. A late NPC cannot block the real meeting. Return to the workstation afterward. Ambient conversation is explicitly visual and cannot create backend communication events.
 
-## Инварианты и acceptance
+## Invariants and acceptance
 
-Ни movement, ни кофе, ни gaze не вызывают LLM или меняют task status. Нет роста progress от animation time. Stale feed виден пользователю. Chat по конкретной роли не заменяется ответом Lead без явного объяснения. 13 мест не порождают 13 identities. Проверки reducer используют fake clock и concurrent run fixtures; motion acceptance — наблюдаемый playtest с препятствиями, повторным E, занятым seat и потерей соединения.
+Movement, coffee and gaze neither invoke an LLM nor change task status. Animation time cannot advance progress. Stale feeds are visible. Role-directed chat cannot silently substitute Lead. Thirteen seats do not imply thirteen identities. Reducer tests use fake clocks and concurrent runs; motion acceptance covers obstacles, repeated E, occupied seats and disconnection.

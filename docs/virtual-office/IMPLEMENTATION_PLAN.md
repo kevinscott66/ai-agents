@@ -1,26 +1,25 @@
-# Implementation plan и checkpoint
+# Implementation plan and checkpoint
 
-Текущий результат: A/B checkpoint принят сообщением «приступай»; реализован первый C/D increment. См. [IMPLEMENTATION_STATUS](IMPLEMENTATION_STATUS.md) для выполненных проверок и отличий от целевой архитектуры. Production и чужие изменения не менялись.
+Historical checkpoint: the user accepted A/B and the first C/D increment was implemented. See [implementation status](IMPLEMENTATION_STATUS.md) for checks/deviations and [live integration](LIVE_INTEGRATION.md) for later delivery. At this checkpoint, production and other sessions' changes were untouched.
 
-## Инкременты и критерии выхода
+## Increments and exit criteria
 
-| Фаза | Доставка | Gate |
-|---|---|---|
-| A Discovery | EXISTING_SYSTEM, roster, источники и integration gaps | каждое утверждение отделяет code/config/live |
-| B Architecture | остальные четыре документа | engine decision, protocol, trust boundary и scope понятны |
-| C Skeleton | Vite/React/R3F web app, player/camera, одна комната, contract fixtures, loopback mock gateway | production web build и запуск в браузере; screenshot/playtest, reconnect smoke |
-| D One-agent vertical slice | один Backend NPC + рабочее место + навигация/seat + inspect/chat | mock event → gateway → snapshot/delta → NPC → interaction → mock chat; reset/reconnect без ложных состояний |
-| E Scale / MVP | config-driven персонажи реального roster, все места, basic zones | 12 существующих агентов (Lead включён), reserved slot, полный checklist MVP ниже |
-| F Real integration | owner-scoped projection, passive adapter, lifecycle hooks, direct-role ingress | read-only shadow compare, ACL/security tests, затем один реальный agent и масштабирование |
-| G Polish / Phase 2 | realistic assets, advanced IK, eyes/faces, objects/kitchen, meetings, infrastructure/Git views | asset licenses, animation QA, performance budget; инфраструктура только при наличии API |
-| Phase 3 | voice/lip sync/spatial audio, mobile, notifications, rooms/customization/day-night, VR | отдельные spikes, input/audio/security acceptance |
+| Phase | Deliverable | Gate |
+| --- | --- | --- |
+| A Discovery | Existing system, roster, sources and gaps | Distinguish code, configuration and live evidence |
+| B Architecture | Engine, protocol, states and plan | Clear engine decision, trust boundaries and scope |
+| C Skeleton | Vite/React/R3F, player/camera, room, fixtures, loopback mock gateway | Production build, browser playtest/screenshots and reconnect smoke |
+| D One-agent slice | Backend NPC/workstation, navigation/seat, inspect/chat | Mock event → gateway → snapshot/delta → NPC → interaction → chat; accurate reset/reconnect |
+| E Scale / MVP | Config-driven real roster, workstations and basic zones | Twelve existing agents including Lead, reserved slot and MVP checklist |
+| F Real integration | Owner projection, passive adapter, lifecycle hooks, direct-role ingress | Read-only shadow comparison, ACL/security tests, one real agent then scale |
+| G Polish / Phase 2 | Realistic assets, IK, faces/eyes, objects, meetings, infrastructure/Git views | Licenses, animation QA and performance; infrastructure only with an API |
+| Phase 3 | Voice/lip sync/spatial audio, mobile, notifications, rooms/customization/day-night, VR | Separate input/audio/security spikes and acceptance |
 
-MVP gate E: office, third-person movement/collision, 12-agent roster workstations, initial rigged characters, navigation, sitting/walking, real-state/visual FSM separation, mock gateway, WebSocket simulation, statuses, approach/E, inspect overlay, direct mock chat, working/idle/waiting animations. Все mock элементы заметно помечены. Никакого live inference до F. Масштабирование запрещено до демонстрации D.
+MVP E requires third-person movement/collision, twelve workstations, initial rigged characters, navigation and seat transitions, separate real/visual FSMs, mock gateway/WebSocket simulation, statuses, approach/E interaction, inspect overlay, direct mock chat and working/idle/waiting animation. Label simulation clearly. No live inference before F; demonstrate D before scaling.
 
-## Планируемые repository changes
+## Proposed repository layout
 
 ```text
-# checkpoint — создаются сейчас
 docs/virtual-office/
   EXISTING_SYSTEM.md
   ARCHITECTURE.md
@@ -28,45 +27,44 @@ docs/virtual-office/
   AGENT_STATE_MODEL.md
   IMPLEMENTATION_PLAN.md
 
-# после checkpoint, отдельные инкременты
 virtual-office/
-  contracts/                 # JSON schemas + fixtures; без engine/runtime imports
-  gateway/                   # Bun service, projection, journal, WSS, auth
-  adapters/mock/             # deterministic scenarios; никогда live dispatch
-  adapters/agent-team/       # F only; scoped backend client
-  tests/                     # protocol, reducers, isolation, replay
-  web/                       # React/R3F/Three.js, DOM overlay, glTF assets
-  assets/manifest.json       # source, license, skeleton, texture/LOD budgets
+  contracts/                 # Schemas/fixtures without engine/runtime imports
+  gateway/                   # Bun, projection, journal, WSS and authentication
+  adapters/mock/             # Deterministic scenarios; never live dispatch
+  adapters/agent-team/       # Phase F scoped backend client
+  tests/                     # Protocol, reducers, isolation and replay
+  web/                       # React/R3F/Three.js, DOM overlay, glTF
+  assets/manifest.json       # Source, license, skeleton and texture/LOD budgets
 
-# F only, точные diff paths после review
-agent/lib/office-observer.ts       # sanitised projection and lifecycle seam
-agent/lib/office-api.ts            # scoped ingress/read API
-agent/lib/miniapp-server.ts        # явная регистрация новой auth boundary
-agent/orchestrator/message-handler.ts # shared direct-role execution seam
+# Phase F proposed seams, exact paths subject to review:
+agent/lib/office-observer.ts
+agent/lib/office-api.ts
+agent/lib/miniapp-server.ts
+agent/orchestrator/message-handler.ts
 agent/tests/office-*.test.ts
 ```
 
-Это план имён файлов, не существующий API. Office имеет отдельные зависимости, lockfile и scripts; существующий package.json не трогаем на C–E. Build outputs/cache не коммитим; лицензии и delivery budget ассетов фиксируем до добавления тяжёлых glTF/textures. Не используем site/web как hosting root. Новый код — feature branch `codex/virtual-office-*` из проверенной базы или isolated worktree; не переключать dirty checkout другой сессии. Каждый завершённый инкремент — адресный commit; не broad stage и не auto-push.
+These are proposed filenames, not an existing API. Office dependencies, lockfile and scripts are separate; C–E do not change existing package.json. Do not commit build/cache output. Record asset licenses and budgets before adding heavy models/textures. Do not use `site/web` as the hosting root. Use `codex/virtual-office-*` from a verified base or isolated worktree, preserving another session's dirty checkout. Commit each finished increment with scoped staging; no automatic push.
 
-## Spike C: инструменты и производительность
+## Phase C spike and performance
 
-Проверить WebGL2 в целевых браузерах, выбрать и зафиксировать совместимые версии React/R3F/Three.js. Сделать spike загрузки rigged glTF, animation blending, navigation/collision и sit/stand. Проверить production build и browser playtest. Размещение: отдельный static web deployment/CDN и WSS gateway за TLS proxy; конкретный hostname/hosting выбрать перед публикацией. Существующий site/web не менять. Серверный GPU не требуется для этого варианта: 3D рендерится браузером. Если пользователь требует полностью удалённый рендеринг, пересмотреть решение до C и отдельно оценить GPU streaming.
+Verify WebGL2 and compatible pinned React/R3F/Three.js versions. Test rigged glTF loading, blending, navigation/collision and sit/stand, then production build/browser playtest. Plan a separate static deployment/CDN and TLS-protected WSS gateway; select hosting before publishing. Existing `site/web` remains untouched. No server GPU is needed because rendering is client-side; fully remote rendering requires reevaluating GPU streaming before C.
 
-Начальные измеряемые цели (не результаты): 1080p, >=30 FPS, p95 frame <=33.3 ms при полном initial roster, без длительных hitch >100 ms при обычном event burst. На D измеряем одного NPC, на E полный roster, 10 минут движения/inspect/reconnect. Записываем total memory, CPU/GPU frame, draw calls и startup. Бюджеты meshes/textures/LOD выбираем по этим замерам; 1–2K textures и animation LOD вне фокуса как исходная настройка. Качество героя важнее дальних лиц. Не полагаться на аппаратные функции, отсутствующие на M1.
+Initial **targets, not results**: 1080p, at least 30 FPS, p95 frame time at most 33.3 ms with the full roster, and no sustained hitches above 100 ms under normal event bursts. Measure one NPC at D and full roster at E over ten minutes of movement/inspect/reconnect. Record memory, CPU/GPU frame times, draw calls and startup. Tune mesh/texture/LOD budgets from measurements; start with 1–2K textures and off-focus animation LOD. Prioritize foreground character quality and avoid hardware assumptions unsupported on M1.
 
-## Тесты по инкрементам
+## Verification by increment
 
-C/D: schema validation, reducer causality, snapshot barrier, gap/replay/epoch, heartbeat/reconnect, mock/live isolation; ручной browser playtest sit/walk/E/overlay/chat.
+C/D: schemas, reducer causality, snapshot barrier, gaps/replay/epochs, heartbeat/reconnect, mock/live isolation and sit/walk/E/overlay/chat playtest.
 
-E: roster completeness, identity uniqueness, seat contention, concurrent updates, performance scene. F: owner isolation, token revocation, redaction canaries, duplicate command, approval binding, observer failure/overflow и отсутствие задержки реального turn; task transaction rollback и multi-process reconciliation. Backend changes требуют `cd agent && bun test tests` и `bun run typecheck` по `.ai/QUALITY_GATES.md`, плюс targeted tests. PR для auth/dispatch изменений, независимое review соответствующей границы.
+E: roster completeness, identity uniqueness, seat contention, concurrent updates and performance. F: owner isolation, revocation, redaction canaries, duplicate commands, approval binding, observer failure/overflow without delaying actual turns, transaction rollback and multi-process reconciliation. Backend changes require `cd agent && bun test tests`, `bun run typecheck` and targeted checks. Authentication/dispatch changes require PR and independent boundary review.
 
-Rollback: отключить office observer/route feature flag, остановить gateway; существующие Telegram/iOS/Mini App продолжают работу. Office DB производная, восстановима; backend DB не мигрировать ради visual state. Production activation — отдельный шаг, не следствие локального MVP.
+Rollback disables office observer/routes, stops the gateway and preserves existing Telegram/iOS/Mini App operation. The office database is derived/rebuildable; do not migrate the backend database merely for visual state. Production activation is a separate step.
 
-## Решения и ограничения checkpoint
+## Checkpoint decisions
 
-- Выбран Web/R3F по уточнению пользователя о сайте; backend engine-independent.
-- Реальный состав 12 включая Lead; 13-е место reserved. Если нужен ещё один специалист, сначала определить его реальную роль/права в backend.
-- Live runtime/models/infra не проверены; точные состояния потребуют hooks.
-- Direct-role office chat пока отсутствует; используем mock на D, реальный ingress только F.
-- Веб-размещение не устраняет локальную GPU-нагрузку; обязательны adaptive quality, 30 FPS cap, pause hidden tab и доступный 2D режим.
-- One-agent glTF/animation spike выполнен: см. VISUAL_ASSETS.md. Следующий шаг — подтвердить визуальное направление, reusable controller/configuration, индивидуальные модели и измерения полного roster, затем E. Production auth ещё не реализован.
+- Web/R3F selected for website delivery; backend contract remains engine-independent.
+- Twelve actual agents including Lead; a thirteenth seat is reserved. New identities require backend role/permission definitions first.
+- Live runtime/models/infrastructure were not verified; precise state requires hooks.
+- Direct-role chat was initially absent: mock in D, real ingress in F.
+- Client GPU load remains; adaptive quality, 30 FPS cap, hidden-tab pause and 2D fallback are required.
+- The one-agent glTF/animation spike is documented in [visual assets](VISUAL_ASSETS.md). At this historical checkpoint, visual direction, reusable controller/configuration, individual models and full-roster measurements were next; production authentication had not yet been implemented.

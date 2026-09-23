@@ -1,64 +1,52 @@
-# Автономный цикл на VPS (замена GitHub Actions)
+# Autonomous VPS cycle (GitHub Actions replacement)
 
-Минуты GitHub Actions приватного репо `kevinscott66/ai-agents` исчерпаны → автономный
-цикл перенесён на всегда-включённый VPS как systemd-таймер (по образцу `delabs-daily-draft`).
+Historical deployment notes: the cycle moved from exhausted private-repository GitHub Actions minutes to an always-on VPS systemd timer, following `delabs-daily-draft`. **Installing these files does not authorize activation.** The timer's recorded state below is disabled.
 
-## Что делает
-После явного readiness-gate и далее каждые 2 часа `autonomous-cycle.sh`:
-1. Обновляет изолированный clone `/opt/agent-autonomous` до `origin/main`.
-2. Режет свежую ветку `agent/<role>-vps-<ts>`.
-3. Запускает заранее авторизованный локальный `claude` headless с role-scoped
-   промптом из внутреннего collaboration contract. GitHub Actions workflow не
-   используется как scheduler или executor.
-4. Коммитит → пушит ветку → открывает **PR с лейблом `needs-human-review`**.
+## Behavior
 
-**Никогда не пушит в main.** Все изменения идут через PR на ревью.
+After an explicit readiness gate, `autonomous-cycle.sh` runs every two hours:
 
-## Readiness gate и управление циклом
+1. Updates isolated `/opt/agent-autonomous` to `origin/main`.
+2. Creates `agent/<role>-vps-<ts>`.
+3. Runs a preauthenticated local headless `claude` with a role-scoped collaboration prompt. GitHub Actions is neither scheduler nor executor.
+4. Commits, pushes the branch and opens a PR labeled `needs-human-review`.
 
-Установка unit/timer сама по себе не даёт циклу права запускать Claude. Скрипт
-перед чтением `.env` требует файл `/etc/agent-autonomous/readiness` с одной
-строкой `ready` или `green`. Отсутствующий файл и любое другое содержимое дают
-успешный no-op и JSONL-событие `readiness_missing_or_red`. Этот файл создаётся
-только после финального зелёного quality-gate всех текущих проектов и отдельного
-решения владельца; в репозитории и на VPS он заранее не создаётся.
+**It never pushes to main.** All changes require PR review.
 
-Дополнительные предохранители:
+## Readiness and control
 
-- `/etc/agent-autonomous/disabled` или `AUTO_DISABLED=1` — disable/no-op;
-- атомарный lock `/run/lock/agent-autonomous-cycle` — второй цикл не стартует;
-- `/var/lib/agent-autonomous/{failures,next-run}` — экспоненциальный backoff после
-  ошибки, с пределом 6 часов;
-- отчёт каждой ошибки сохраняется как JSON в
-  `/var/log/agent-autonomous-reports/`, без prompt, env или stderr;
-- `DRY_RUN=1` сохраняет существующий режим без commit/push/PR;
-- `AUTO_ROLLBACK=1` возвращает только изолированный `$AUTO_WORKDIR` к
-  `origin/main`, не касаясь `/opt/agent-team` и production;
-- child Claude получает только явный безопасный базовый env и не получает
-  `GH_TOKEN`, `GITHUB_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_*` или другие
-  секреты. Для запуска нужен заранее авторизованный локальный Claude CLI.
+Before reading `.env`, the script requires `/etc/agent-autonomous/readiness` containing exactly `ready` or `green`. Missing/other content produces a successful no-op and the JSONL event `readiness_missing_or_red`. Only the owner's separate decision after all current project quality gates pass authorizes creating this file; it is not precreated in source or on the VPS.
 
-Скрипт и timer оставляются установленными, но не активируются этим изменением.
-Перед будущей активацией нужно отдельно проверить readiness-файл, dry-run,
-rollback, права на state/log directories и non-root deployment path.
+Additional controls:
 
-## Безопасность
-- Изолирован в `/opt/agent-autonomous`, не трогает прод `/opt/agent-team`.
-- `permission-mode=acceptEdits` + явный allowedTools; systemd запускает цикл от
-  отдельного непривилегированного пользователя `agent-autonomous`.
-- timeout 540s на claude-итерацию.
-- Промпт запрещает читать секреты/трогать прод-сервис/БД/systemd.
-- node_modules — симлинк на прод-деплой (экономия 566M; не коммитится).
+- `/etc/agent-autonomous/disabled` or `AUTO_DISABLED=1`: disabled/no-op.
+- Atomic `/run/lock/agent-autonomous-cycle`: prevents a second cycle.
+- `/var/lib/agent-autonomous/{failures,next-run}`: exponential failure backoff, capped at six hours.
+- JSON failure reports in `/var/log/agent-autonomous-reports/`, excluding prompts, environment and stderr.
+- `DRY_RUN=1`: no commit, push or PR.
+- `AUTO_ROLLBACK=1`: resets only isolated `$AUTO_WORKDIR` to `origin/main`, never production `/opt/agent-team`.
+- Child Claude receives an explicit safe base environment, without `GH_TOKEN`, `GITHUB_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_*` or other secrets. Local CLI authentication must already exist.
 
-## Установка (нужны секреты только для обёртки)
+Before any future activation, check readiness, dry-run, rollback, state/log directory permissions and non-root deployment.
 
-### 1. Создать fine-grained GitHub PAT (только владелец)
-GitHub → Settings → Developer settings → **Fine-grained tokens** → Generate:
-- **Repository access:** только `kevinscott66/ai-agents`
-- **Permissions:** `Contents` → Read and write, `Pull requests` → Read and write
-- Скопировать токен (`github_pat_...`).
+## Security
 
-### 2. Создать service account и credentials на VPS
+- Isolated working directory; production is not modified.
+- `permission-mode=acceptEdits`, explicit allowed tools and the unprivileged `agent-autonomous` service user.
+- 540-second Claude iteration timeout.
+- Prompt prohibits secret reads and production service/database/systemd changes.
+- `node_modules` is an untracked symlink to the production dependency installation, historically saving 566 MB.
+
+## Installation
+
+Commands use a documentation IP; substitute an authorized target. Only the wrapper needs deployment secrets.
+
+### 1. Owner creates a fine-grained GitHub PAT
+
+Limit repository access to `kevinscott66/ai-agents`; grant Contents and Pull requests read/write. Keep the generated token private.
+
+### 2. Service account and credentials
+
 ```bash
 ssh root@203.0.113.10
 useradd --system --home-dir /var/lib/agent-autonomous --create-home --shell /usr/sbin/nologin agent-autonomous || true
@@ -72,11 +60,11 @@ EOF
 chown root:agent-autonomous /etc/agent-autonomous/credentials
 chmod 0640 /etc/agent-autonomous/credentials
 ```
-Установите Claude CLI в `/usr/local/bin/claude` с владельцем `root:root` и без
-права записи для service account. Эти credentials читаются только обёрткой;
-дочернему Claude они не передаются.
 
-### 3. Поставить скрипт + юниты (делает ассистент после шага 2)
+Install the Claude CLI as root-owned `/usr/local/bin/claude`, not writable by the service account. Credentials are read by the wrapper and are not forwarded to child Claude.
+
+### 3. Install wrapper and units
+
 ```bash
 ssh root@203.0.113.10 'mkdir -p /opt/vps-autonomous'
 scp deploy/vps-autonomous/autonomous-cycle.sh     root@203.0.113.10:/opt/vps-autonomous/
@@ -84,156 +72,96 @@ scp deploy/vps-autonomous/scan-staged-secrets.sh  root@203.0.113.10:/opt/vps-aut
 scp deploy/vps-autonomous/agent-autonomous.*      root@203.0.113.10:/etc/systemd/system/
 ssh root@203.0.113.10 'chmod +x /opt/vps-autonomous/*.sh && systemctl daemon-reload'
 ```
-`scan-staged-secrets.sh` обязателен: без него обёртка отказывается коммитить.
-Лежать он должен именно **рядом с обёрткой**, а не браться из рабочего дерева —
-в дереве его только что мог переписать сам агент (у него Write).
 
-### 4. Dry-run (одна итерация вручную) → проверка → readiness → enable таймера
-`DRY_RUN=1` прогоняет весь путь (clone → ветка → claude → стейдж), но **не коммитит,
-не пушит и не открывает PR** — печатает список файлов и diffstat. Только так и
-проверять: без него «прогон» сразу создаёт PR.
+`scan-staged-secrets.sh` must sit **beside the wrapper**, not be loaded from the agent-editable working tree. Without it, the wrapper refuses to commit.
+
+### 4. Dry-run, verification, readiness, then owner-approved activation
+
+`DRY_RUN=1` performs clone → branch → Claude → staging, but only prints changed files and diffstat; it does not commit, push or create a PR. Without it, a test iteration can create a PR.
+
 ```bash
 ssh root@203.0.113.10 'sudo -u agent-autonomous env DRY_RUN=1 AUTO_ENV_FILE=/etc/agent-autonomous/credentials bash /opt/vps-autonomous/autonomous-cycle.sh qa "smoke test"'
-cat /var/log/agent-autonomous/agent-autonomous.log      # staged files + diffstat
+cat /var/log/agent-autonomous/agent-autonomous.log      # staged files and diffstat
 ```
-Сначала убедиться, что readiness отсутствует или цикл отключён, затем проверить,
-что в staged **нет** `agent/node_modules` и что диф осмысленный. После финального
-зелёного quality-gate всех проектов владелец может явно создать readiness-файл:
+
+First ensure readiness is absent or the cycle is disabled. Confirm `agent/node_modules` is not staged and the diff is appropriate. After final project quality gates pass, the owner may explicitly create readiness:
 
 ```bash
 printf 'green\n' | ssh root@203.0.113.10 'umask 077; mkdir -p /etc/agent-autonomous; cat > /etc/agent-autonomous/readiness'
 ```
 
-Только после отдельного подтверждения владельца разрешено:
+Only after separate owner approval:
 
 ```bash
 ssh root@203.0.113.10 'systemctl enable --now agent-autonomous.timer'
 ```
 
-Проверено вживую 2026-08-02 (роль qa): подписка ОК, PR не создан, симлинк не в стейдже.
-Учти — агент попутно создаёт черновые файлы, а `git add -A` метёт их в PR; ловится
-на ревью (лейбл `needs-human-review`).
+Recorded QA dry-run on 2026-08-02: subscription worked, no PR was created and the symlink was not staged. The agent may produce draft files; wrapper-wide staging can include them, so `needs-human-review` remains essential.
 
-## Петля обратной связи (обязательна, добавлена 2026-08-13)
+## Feedback loop (added 2026-08-13)
 
-Первая редакция цикла её не имела, и это стоило 114 открытых PR за 11 дней:
-итерация делала задачу и открывала PR → PR никто не мержил → задача в TASKS.md
-оставалась открытой → следующая итерация видела её сверху и делала заново.
-`tools-schema.ts` переписан десять раз, `self-diag.ts` семь.
+The original cycle created 114 open PRs in eleven days: unmerged work left tasks open, so later runs repeated them. `tools-schema.ts` was rewritten ten times and `self-diag.ts` seven times.
 
-Четыре слоя, в порядке надёжности:
+Four defenses:
 
-1. **Потолок открытых PR — `AUTO_MAX_OPEN_PRS` (по умолчанию 5).** Проверяется
-   ДО запуска claude: если очередь не разобрана, итерация не тратит ни токена и
-   выходит с `[skip]`. Единственный слой, не зависящий от поведения агента.
-   Не удалось спросить GitHub — тоже стоп (`[fatal]`), а не «ну и ладно».
-2. **Список занятых задач в промпте.** Обёртка собирает id из заголовков
-   открытых PR цикла и отдаёт агенту блоком ALREADY TAKEN.
-3. **Очередь роли (YOUR QUEUE).** Обёртка сама разбирает TASKS.md
-   (`queue-filter.awk`), выкидывает закрытые / `needs-human:` / `dropped:` /
-   `deferred:` / уже занятые и отдаёт агенту до пяти готовых id.
-   Фильтр берётся рядом с обёрткой, а не из рабочего дерева — там его мог
-   переписать сам агент. Файла нет — не фатал: очередь это удобство, без неё
-   агент выбирает сам, как выбирал раньше.
-   **Очередь пуста → claude не запускается вообще** (`[skip]`, ноль трат).
-   Раньше пустая очередь значила «выбирай сам» — и это тот самый режим, из
-   которого выросли ~75 PR без единой строки кода: своей задачи агент не нашёл,
-   но итерация уже оплачена, и он правил `.claude/memory/**` и TASKS.md, лишь бы
-   не выйти пустым. Пропускаем только когда фильтр отработал и вернул ноль; нет
-   TASKS.md или фильтра — это «неизвестно», а не «пусто», и итерация идёт. Явный
-   HINT человека сильнее очереди.
-4. **Отказ открыть дубликат.** Агент пишет взятую задачу в `.autonomous-task-id`
-   (одна строка `T-<число>`); обёртка её санитизирует, сверяет со списком и при
-   совпадении PR не создаёт — ветка остаётся локально в `$WORKDIR`.
+1. **Open-PR ceiling:** `AUTO_MAX_OPEN_PRS`, default 5, checked before Claude starts. A full queue returns `[skip]` with no model cost; a GitHub read failure returns `[fatal]`.
+2. **ALREADY TAKEN prompt block:** task IDs extracted from open cycle PR titles.
+3. **YOUR QUEUE:** trusted adjacent `queue-filter.awk` parses TASKS.md, excluding closed, `needs-human:`, `dropped:`, `deferred:` and already-taken tasks, and supplies up to five IDs. A known-empty queue skips Claude entirely. Missing TASKS.md/filter means unknown, not empty, and preserves previous selection behavior. An explicit human HINT overrides the queue. Previously, empty queues produced roughly 75 documentation-only PRs because the agent sought any work after the iteration had already started.
+4. **Duplicate rejection:** the agent writes one `T-<number>` in `.autonomous-task-id`. The wrapper sanitizes it and refuses a duplicate PR, leaving the branch locally in `$WORKDIR`.
 
-Почему нужны все: слой 2 живёт в промпте, а промпт собирается из TASKS.md и
-файлов памяти — текста, который правит тот же агент. Слой 4 полагается на то,
-что агент вообще написал файл, и написал в нужном формате. Мержить очередь всё
-равно надо руками — потолок лишь не даёт ей расти.
+Prompt-based controls can be influenced by editable task/memory text, and task-ID files may be missing or malformed. The deterministic PR ceiling remains necessary; humans still review/merge the queue.
 
-Слой 3 появился после живого прогона: на просьбу «напиши id задачи» агент
-записал слаг `loop-dedup`. Санитайзер его отбраковал (fail-safe: PR получил бы
-лейбл `no-task-id`), но дедупликация для такой итерации не работает. Точную
-строку неоткуда взять, если агент не сматчил заголовок сам — теперь id лежит
-готовым в промпте. **Подставлять id за агента нельзя:** он может уйти работать
-не туда, и PR получит чужой номер — это хуже, чем отсутствие номера.
+A live run wrote `loop-dedup` rather than a task ID. Sanitization rejected it safely (`no-task-id`), but deduplication could not identify the work. Supplying candidate IDs in the prompt reduces that ambiguity. Do not invent an ID on the agent's behalf: it may have worked on something else.
 
-### Проверка промпта без трат
+### Inspect the prompt without a model call
 
-`PROMPT_ONLY=1` печатает собранный промпт и выходит, не запуская claude. Блоки
-ALREADY TAKEN и YOUR QUEUE берутся из GitHub и TASKS.md, то есть меняются сами
-по себе — смотреть на них полным прогоном значит платить $1.5 и девять минут за
-просмотр двух списков.
+`PROMPT_ONLY=1` prints the assembled prompt and exits. ALREADY TAKEN and YOUR QUEUE are read from GitHub/TASKS.md, avoiding a paid iteration merely to inspect them.
 
 ```bash
 ssh root@203.0.113.10 'PROMPT_ONLY=1 bash /opt/vps-autonomous/autonomous-cycle.sh backend ""'
 ```
 
-### Грязное дерево больше не заклинивает цикл
+### Dirty-tree recovery
 
-Любой ранний выход (`DRY_RUN`, отказ по дубликату, красный гейт секретов)
-оставлял рабочее дерево грязным, а следующая итерация падала на
-`checkout -B main` с «local changes would be overwritten» — и так каждый раз,
-навсегда. Поймано живьём 2026-08-13 сразу после dry-run. Теперь
-`reset --hard HEAD` + `clean -fd` идут ДО checkout.
+Early exits after dry-run, duplicate detection or secret-check failure previously blocked the next checkout forever. The isolated runner now performs `reset --hard HEAD` and `clean -fd` before checkout. These commands apply to the disposable runner, not a developer checkout.
 
-Следствие: наработки в грязном дереве живут ровно до следующего запуска. Поэтому
-на пути «дубликат» они сохраняются локальным коммитом (после гейта секретов, не
-до), а красный гейт секретов прямо пишет, что смотреть надо сейчас — коммитить
-флагнутое им нельзя даже локально.
+Dirty changes survive only until the next run. Duplicate-task work is preserved in a local commit **after** the secret gate. Secret-check failure explicitly requires immediate inspection; flagged material must not be committed even locally.
 
-### Что проверено вживую (2026-08-13)
+### Recorded live checks on 2026-08-13
 
-| Слой | Как проверен | Результат |
-|---|---|---|
-| 1 потолок | `AUTO_MAX_OPEN_PRS=0` | `[skip]`, exit 0, claude не запускался |
-| 1 fail-closed | `GH_TOKEN=ghp_invalid…` | `[fatal]`, exit 1, итерация не начата |
-| 2 ALREADY TAKEN | синтетический `gh pr list --json` | два PR на одну задачу схлопнулись в `T-742 — PR #401, #404` |
-| 3 очередь | греп по боевому TASKS.md | `role:qa` → `T-805`; `T-80` не съеден фильтром `T-802` |
-| 4 санитайзер | `DRY_RUN=1`, агент написал `loop-dedup` | отбраковано, `no-task-id`, PR не создан |
-| 4 инъекция | `.autonomous-task-id` = `"T-1; rm -rf /"` | отбраковано регуляркой до `gh pr create` |
-| промпт целиком | `PROMPT_ONLY=1 … backend ""` | YOUR QUEUE = 5 задач role:backend, ALREADY TAKEN = «(none)» |
-| грязное дерево | тот же стейдж, что уронил `checkout` | exit 0, дерево сброшено, заклин снят |
-| 3 фильтр очереди | 12 ролей на боевом TASKS.md | отсеклись 8 протухших rework-задач; T-735 (открытая) осталась |
-| 3 пустая очередь | `role:design` (очередь 0) | `[skip]`, exit 0, claude не запускался |
+| Control | Check | Result |
+| --- | --- | --- |
+| PR ceiling | `AUTO_MAX_OPEN_PRS=0` | `[skip]`, exit 0, no Claude |
+| Fail closed | Invalid test GitHub token | `[fatal]`, exit 1, no iteration |
+| Taken tasks | Synthetic PR-list JSON | Duplicate task combined as `T-742 — PR #401, #404` |
+| Role queue | Existing TASKS.md | QA selected `T-805`; `T-80` was not confused with `T-802` |
+| ID sanitizer | Dry-run wrote `loop-dedup` | Rejected, `no-task-id`, no PR |
+| Injection rejection | Malformed task ID containing shell syntax | Regex rejected before PR creation |
+| Full prompt | `PROMPT_ONLY=1 … backend ""` | Five Backend tasks and no taken tasks |
+| Dirty checkout | Previously blocking staging state | Exit 0; next checkout recovered |
+| Queue filtering | Twelve roles | Eight stale rework tasks excluded; open T-735 retained |
+| Empty queue | Design role with no tasks | `[skip]`, exit 0, no Claude |
 
-Про фильтр очереди отдельно: первая редакция грепала только заголовок, а
-`needs-human:` в TASKS.md стоит в заголовке ноль раз и в теле — семь, то есть
-задачи «только для человека» уходили боту. Вторая редакция смотрела всё тело до
-следующего `###` и отсекала открытую T-735 (audit_logs пуст) по чужой сводке в
-конце секции. Итог: заголовок + первые шесть непустых строк. Смещение
-неравноценно — лишняя задача в очереди хуже недостающей, поэтому при сомнении
-исключаем.
+The filter examines the heading and first six nonempty body lines. Heading-only matching missed `needs-human:` markers in the body; scanning the entire section incorrectly excluded an open task due to an unrelated trailing summary. When uncertain, excluding an extra task is safer than sending a human-only task to the agent.
 
-**id задачи вшивается в заголовок PR**, а не в тело: тело правят руками, и
-дедупликация сломалась бы молча. PR без объявленной задачи получает лейбл
-`no-task-id` — дедупликация для него не работает, это видно на списке PR.
+**Task IDs belong in PR titles**, not editable bodies. A PR without an ID gets `no-task-id`, making lack of deduplication visible.
 
-Перед каждым новым запуском VPS-обёртка выполняет T-513 control loop
-(`bun run agent --role orchestrator --mode review`). Он проверяет свежие PR,
-пропускает уже отмеченные маркером control-loop комментарии и оставляет даже
-зелёные PR для человеческого approval: control-loop не имеет merge-capability.
-При недоступности GitHub итерация останавливается. `AUTO_CONTROL_LOOP=0` —
-только явное временное отключение владельцем.
+Before each new run, the wrapper invokes the T-513 control loop (`bun run agent --role orchestrator --mode review`). It checks fresh PRs, skips previously marked control-loop comments and leaves even green PRs for human approval; it has no merge capability. GitHub failure stops the iteration. `AUTO_CONTROL_LOOP=0` requires an explicit temporary owner override.
 
-## Управление
-- Логи: `/var/log/agent-autonomous/agent-autonomous.log`
-- Разовый запуск роли: `systemctl start agent-autonomous.service` (роль задаётся
-  drop-in'ом, а readiness-gate остаётся обязательным)
-- Пауза: `systemctl disable --now agent-autonomous.timer`
-- Сменить частоту: править `OnCalendar` в `agent-autonomous.timer`.
-- Поднять потолок разово: `AUTO_MAX_OPEN_PRS=8 bash /opt/vps-autonomous/autonomous-cycle.sh`
+## Operations
 
-## Состояние на 2026-08-13
+- Logs: `/var/log/agent-autonomous/agent-autonomous.log`.
+- One run: `systemctl start agent-autonomous.service`; a drop-in chooses the role, and readiness still applies.
+- Pause: `systemctl disable --now agent-autonomous.timer`.
+- Frequency: edit `OnCalendar` in `agent-autonomous.timer`.
+- Temporary queue ceiling: `AUTO_MAX_OPEN_PRS=8 bash /opt/vps-autonomous/autonomous-cycle.sh`.
 
-Таймер **выключен** (`systemctl disable --now agent-autonomous.timer`) по просьбе
-владельца. Скрипт с петлёй выкачен и готов; включение — решение владельца:
+## Recorded state on 2026-08-13
+
+The timer was **disabled** at the owner's request. The feedback-loop script was deployed; enabling it remains an owner decision:
 
 ```
 systemctl enable --now agent-autonomous.timer
 ```
 
-Отдельно: до 2026-08-13 на VPS лежала редакция от 02.08, а ужесточения аудита
-12.08 (чтение из `.env` ровно двух переменных вместо всего файла, `env -u
-GH_TOKEN` для headless-claude, гейт `scan-staged-secrets.sh` перед коммитом)
-туда не выкатывались. Теперь версии сверены по sha256.
+Before that date the VPS still had the August 2 revision. The August 12 hardening—reading only two specific variables instead of all `.env`, stripping `GH_TOKEN` from headless Claude and running `scan-staged-secrets.sh` before commit—was subsequently deployed and compared by SHA-256. These historical notes do not authorize enabling the timer now.

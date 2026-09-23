@@ -1,84 +1,84 @@
-# Личный агент: исполнение задач и российские сервисы
+# Personal agent: execution and Russian services
 
-Статус: проработанная архитектура и поведенческая инструкция Lead. Новые банковские исполнители, серверный браузер, планировщик долговременных целей и универсальное управление устройствами **не реализованы этим документом**. Изменение промпта не создаёт полномочия или API.
+Status: architecture and Lead behavior policy. This document **does not implement** a banking executor, server browser, durable-goal scheduler or universal device control. A prompt change creates neither authority nor an API.
 
-## Пользовательский сценарий
+## User experience
 
-Пользователь задаёт цель одним сообщением или голосом. Агент узнаёт контекст, готовит конкретный результат, запрашивает только недостающие существенные данные, выполняет разрешённые шаги и возвращает подтверждённый итог. Целевое требование: одна задача сохраняет идентичность между iPhone, веб-чатом и офисом. Сейчас общими являются native-диалоги; универсальная связь цели, задачи и хода ещё требует реализации. Публичная Telegram-группа получает только предназначенные ей события, не копию банковского/личного диалога.
+The user states a goal by text or voice. The agent resolves context, prepares a concrete result, asks only for material missing information, executes authorized steps and returns a verified outcome. Target requirement: one task retains identity across iPhone, web chat and office. Native conversations are already shared; a universal goal/task/turn relationship still requires implementation. Public Telegram groups receive only events intended for them, not copies of private or banking conversations.
 
-«Закажи ужин домой до 1500 ₽» означает проверку известного адреса, предпочтений и бюджета, реальный ассортимент, состав с обязательными опциями, итог с доставкой и комиссией, одобрение точного заказа, исполнение и наблюдение за результатом. Если бюджет не соблюдается, агент предлагает конкретную альтернативу до оплаты. Неизвестные аллергии и замены не выдумывает.
+“Order dinner home for up to RUB 1,500” requires checking the known address, preferences and budget; real menu availability and required options; the total including delivery/fees; approval of the exact order; execution and outcome monitoring. If the budget cannot be met, offer a concrete alternative before payment. Do not invent allergies or permitted substitutions.
 
-## Существующие возможности
+## Existing capabilities
 
-| Область | Реальная опора в коде | Граница |
+| Area | Implementation basis | Boundary |
 | --- | --- | --- |
-| Яндекс Go, Еда, Лавка, Маркет, Доставка | `taxi.ts`, `shop.ts`, `delivery.ts`, dispatch, Mac browser, signed-actions, order-watch | Нужны работающий Mac, доступный профиль, вход и поддерживаемая страница; код не равен живой приёмке |
-| Т-Банк — личный счёт | iOS локальная подготовка реквизитов и переход в интернет-банк | Банковского executor пока нет |
-| Компьютер | MAC_CONTROL и MAC_RUN_CLAUDE | Управление в рамках команд, проекта, прав и доступности Mac; не произвольное управление iOS |
-| GitHub | чтение статуса, ограниченный CODE_TASK, проектный исполнитель | PR, merge и production deploy — отдельные состояния и разрешения |
-| Серверы/домены | существующие CLI/SSH через доступный исполнитель, ограниченные DNS actions | Каждый target, окружение и изменение должны быть разрешены; само наличие ключа не выдаёт полномочия |
-| Память/команда | chat-scoped tasks, native conversations, knowledge, approvals, роли | taskId, turnId, conversationId и external operation ID различаются |
+| Yandex Go, Eats, Lavka, Market, Delivery | `taxi.ts`, `shop.ts`, `delivery.ts`, dispatch, Mac browser, signed-actions, order-watch | Requires available Mac/profile/login and supported pages; code is not live acceptance |
+| Personal T-Bank | Local iPhone details preparation and opening internet banking | No banking executor yet |
+| Computer | MAC_CONTROL and MAC_RUN_CLAUDE | Supported commands, project permissions and Mac availability; not arbitrary iOS control |
+| GitHub | Status reads, constrained CODE_TASK and project executor | PR, merge and production deployment have separate states/permissions |
+| Servers/domains | Existing CLI/SSH through an available executor, constrained DNS actions | Each target/environment/change must be authorized; possessing a key does not grant authority |
+| Memory/team | Chat-scoped tasks, native conversations, knowledge, approvals, roles | taskId, turnId, conversationId and external operation ID are distinct |
 
-Проверять доступность исполнителя и сервисную сессию перед обещанием. Нельзя при отказе специализированного инструмента поручать универсальному shell/browser обойти его ограничения.
+Check executor availability and service session before promising execution. A specialized-tool rejection must not be bypassed through a general shell/browser.
 
-## Целевая модель исполнения
+## Target execution model
 
-Один контроллер связывает намерение, задачи, операции и подтверждения. Lead планирует, специалист исполняет ограниченный шаг; ни один LLM не выдаёт себе capability.
+A controller links intent, tasks, operations and approvals. Lead plans; specialists execute bounded steps. No LLM grants itself capabilities.
 
-1. **Контекст:** доверенный owner, исходный канал и область видимости; цель, ограничения, разрешённые targets.
-2. **План:** шаги и зависимости, выбранные инструменты, критерии результата, бюджет и срок. Простые операции не требуют длинного плана.
-3. **Подготовка:** чтение фактических данных, проверка сессии и прав, draft/quote с TTL.
-4. **Разрешение:** существующие policy/approval/signature gates на точный объект и параметры. Безопасная подготовка продолжается самостоятельно.
-5. **Исполнение:** атомарный claim операции, один исполнитель, неизменяемые одобренные параметры, учёт внешнего ID.
-6. **Проверка:** provider status/чек/запись результата, не текстовое обещание модели.
-7. **Восстановление:** после timeout/restаrt сверять существующую операцию. Не создавать новую необратимую операцию автоматически.
-8. **Завершение:** результат с доказательством, оставшиеся шаги и ограничения; лог без секретов.
+1. **Context:** trusted owner, source channel/visibility, goal, constraints and permitted targets.
+2. **Plan:** dependencies, tools, outcome criteria, budget and deadline. Simple operations do not require lengthy plans.
+3. **Preparation:** actual data, session/permission checks and a draft/quote with TTL.
+4. **Authorization:** existing policy/approval/signature gates bound to exact objects and parameters. Independent safe preparation continues autonomously.
+5. **Execution:** atomic operation claim, one executor, immutable approved parameters and external ID tracking.
+6. **Verification:** provider status, receipt or recorded outcome rather than a model's promise.
+7. **Recovery:** after timeout/restart, reconcile the existing operation. Never automatically create another irreversible operation.
+8. **Completion:** evidence, remaining steps/limits and a secret-free log.
 
-Предлагаемая долговременная запись (нужна отдельная реализация/миграция): owner, goal/task/step IDs, source scope, capability ID/version, executor, immutable parameter digest, preparation expiry, approval reference, operation ID, external reference, execution state, receipt reference, created/updated timestamps. Секреты и полные банковские реквизиты в этой записи не хранятся. Существующие задачи и native turns связывать внешними ключами/таблицей связей, не подменять одно другим.
+Proposed durable record, requiring separate implementation/migration: owner; goal/task/step IDs; source scope; capability ID/version; executor; immutable parameter digest; preparation expiry; approval reference; operation ID; external reference; state; receipt reference; timestamps. Do not store secrets or complete bank details here. Link existing tasks and native turns through foreign keys/link tables rather than treating them as interchangeable.
 
-Состояния: requires_input → preparing → prepared → awaiting_approval → ready → executing → verifying → succeeded. Отдельно: awaiting_owner_in_service, unavailable, rejected, expired, failed, unknown, cancelled. `unknown` не переходит к новой отправке без сверки результата. Отмена после отправки — новая разрешаемая операция, а не rollback денежного перевода.
+States: requires_input → preparing → prepared → awaiting_approval → ready → executing → verifying → succeeded. Additional states: awaiting_owner_in_service, unavailable, rejected, expired, failed, unknown, cancelled. `unknown` cannot trigger another submission before reconciliation. Cancellation after submission is a separately authorized operation, not a bank-transfer rollback.
 
-## Т-Банк: тот же принцип двух фаз, отдельный банковский адаптер
+## T-Bank: two phases, a separate banking adapter
 
-Выбор владельца: **личный счёт**, браузерный сценарий по аналогии с Яндексом. Это целевой дизайн, не объявление работающего банковского подключения.
+The owner selected a **personal account** and a browser workflow analogous to Yandex. This is a target design, not an active banking connection.
 
-Официальный T-API описывает интеграцию для ИП/организаций: https://developer.tbank.ru/docs/api/t-api . Он не является установленным способом управления личным счётом. Банк описывает личный интернет-банк: https://www.tbank.ru/bank/help/interfaces/online-banking/start/enter/ . Эти страницы не гарантируют стабильный DOM или возможность полной автоматизации; допустимость и техническую работоспособность адаптера нужно проверить отдельно.
+Official [T-API documentation](https://developer.tbank.ru/docs/api/t-api) describes business/sole-trader integrations; it is not an established personal-account interface. The bank also documents [personal internet banking](https://www.tbank.ru/bank/help/interfaces/online-banking/start/enter/). Neither source guarantees stable DOM or complete automation. Adapter feasibility and permitted use require separate verification.
 
-### Подготовка
+### Preparation
 
-- Отдельный закрытый браузерный профиль банка, без общего профиля Яндекса и без удалённого публичного debugging endpoint. Вход выполняет владелец непосредственно в банке. Пароли, OTP и cookies не передаются модели/Telegram/GitHub.
-- Локальный банковский процесс видит только разрешённый origin и явный активный аккаунт. Смена origin, аккаунта или непонятная страница останавливает операцию.
-- Получатель разрешается однозначно: телефон+банк либо реквизиты; имя сверяется с отображаемым банком. Если совпадение не установлено — вопрос владельцу. Не выбирать однофамильца/банк автоматически.
-- Подготовка читает сумму, комиссию, валюту и итог списания с банковского review-экрана, не нажимает кнопку, которая может отправить деньги. Если UI не даёт безопасной границы подготовки, автоматическая отправка не поддерживается.
-- Все суммы — целые копейки, никакой плавающей арифметики и округления после подписи. Карточка содержит отправляющий счёт (маскированно), получателя, банк, сумму, комиссию, итог и срок действия.
+- Use a separate protected bank-browser profile, without shared Yandex sessions or a public remote-debugging endpoint. The owner signs in directly. Passwords, OTPs and cookies never go to the model, Telegram or GitHub.
+- The local banking process is limited to the allowed origin and explicit active account. Origin/account changes or unfamiliar pages stop the operation.
+- Resolve the recipient unambiguously by phone plus bank or account details; compare the name shown by the bank. Ask the owner when identity is unclear; never guess a matching name or bank.
+- Read amount, fee, currency and total debit from the bank's review page without pressing a potentially submitting button. If no safe preparation boundary exists, automated submission is unsupported.
+- Use integer kopecks, never floating-point amounts or post-signature rounding. The review card includes masked source account, recipient, bank, amount, fee, total and expiry.
 
-### Подтверждение и отправка
+### Approval and submission
 
-- Владелец подписывает точный снимок. В отличие от такси допуска роста цены нет: сумма, комиссия, получатель, валюта и отправляющий счёт должны совпасть. Любое изменение сбрасывает подготовку и подпись.
-- Текущий signed-actions ориентирован на покупки; банковская версия требует отдельного сервиса, валидации копеек, лимитов и TTL, **не** переиспользования допуска цены такси. До реализации остаётся disabled, без model-callable инструмента.
-- Одноразовый claim фиксируется долговременно до потенциально списывающего действия. Повторная подпись/повторный HTTP-запрос не создаёт второй перевод. Общая блокировка счёта предотвращает конкурирующие исполнители.
-- Банк может требовать отдельное подтверждение/SMS/app step. Подпись нашего приложения его не заменяет; агент переходит в awaiting_owner_in_service. Нельзя вычитывать OTP из уведомлений или управлять подтверждением вместо владельца.
-- После отправки сохраняется банковский идентификатор и проверяется именно эта операция. Если ID не получен и нет надёжного способа сопоставления — unknown и ручная сверка владельцем, без «повторить перевод».
-- Успех требует фактического подтверждения банка с согласованными параметрами. Чек хранится отдельно с ограниченным доступом; в общий чат не отправляется. «Отменить» не обещать: завершённый перевод может быть необратимым.
+- The owner signs the exact snapshot. Unlike taxi pricing, no price increase is allowed: amount, fee, recipient, currency and source account must match. Any change invalidates preparation and signature.
+- Current signed-actions serve purchases. Banking needs a separate service, integer-amount validation, limits and TTL; do not reuse taxi price tolerance. Until implemented, it stays disabled without a model-callable tool.
+- Persist a single-use claim before any potentially debiting action. Repeated signatures/HTTP requests must not create another transfer. An account-wide lock prevents concurrent executors.
+- A bank may require its own SMS/app confirmation. Our signature does not replace it; transition to `awaiting_owner_in_service`. Do not extract OTPs from notifications or approve on the owner's behalf.
+- Save the bank operation ID and reconcile that operation. If no ID or reliable match exists, return `unknown` for owner reconciliation, without retrying the transfer.
+- Success requires bank evidence matching approved parameters. Store receipts separately with restricted access, never in a group chat. Do not promise cancellation of a potentially irreversible transfer.
 
-### Приёмка адаптера до реальных денег
+### Acceptance before real money
 
-На локальных фикстурах: изменение получателя/счёта/суммы/комиссии, истёкшая подготовка, неверная подпись, два параллельных исполнителя, crash до/после claim, timeout после клика, задержанный receipt, отсутствие ID, повтор webhook/команды, смена owner, OTP/капча и потеря сессии. Все неоднозначные результаты прекращают отправку и не повторяются. Реальный DOM исследуется с владельцем без отправки платежа. Затем отдельная согласованная проверка конкретной операции; пока этого нет, статус функции — «не подключено».
+Fixtures must cover changed recipient/account/amount/fee, expired preparation, invalid signature, concurrent executors, crashes before/after claim, timeout after click, delayed receipt, missing ID, duplicate webhook/command, changed owner, OTP/CAPTCHA and lost session. Ambiguous outcomes stop submission and are not retried. Inspect real DOM with the owner without transferring money, then separately authorize a specific live acceptance operation. Until then, status remains not connected.
 
-## Серверное исполнение и выключенный Mac
+## Server execution with the Mac offline
 
-Основная координация, память, очередь и работа через доступные API — на сервере. Управление физическим компьютером требует его работающего локального исполнителя. Сейчас Яндекс-браузер также зависит от Mac. Перенос браузерных сервисов на сервер — отдельный изолированный worker с закрытыми профилями и наблюдаемой сессией владельца, не прямой перенос cookie-файлов на общий VPS. Банковскую сессию на общий VPS автоматически не переносить.
+Coordination, memory, queues and available API work run on the server. Physical computer control needs its active local executor. Yandex browser execution currently also depends on the Mac. Moving browser services requires an isolated server worker, protected profiles and an observable owner session, not copying cookie files to a shared VPS. Never automatically migrate banking sessions there.
 
-## Что меняется сейчас, что ещё требуется
+## Implemented policy and remaining work
 
-В код Lead добавлена поведенческая политика выбора исполнителя, минимальных уточнений, доказанного завершения, запрета обхода gates и действий при неизвестном исходе. Существующие инструментальные ограничения не ослаблены. Это не новый durable workflow engine и не доказательство качества LLM на всех сценариях.
+Lead now has behavior rules for executor selection, minimal clarification, verified completion, no gate bypass and uncertain outcomes. Existing tool restrictions are unchanged. This is not a new durable workflow engine or proof of LLM reliability across all scenarios.
 
-Следующие самостоятельные реализации: read-only capability readiness API; долговременная таблица operations и reconciliation; банковский adapter с фикстурами; secure browser worker; связь goal/task/turn/approval в интерфейсах. Каждая поставляется с независимой проверкой и конкретной приёмкой. До неё агент использует только уже подключённые инструменты и честно обозначает границы.
+Separate implementation areas: read-only capability/readiness inspection; durable operations and reconciliation; fixture-tested bank adapter; secure browser worker; linked goal/task/turn/approval UI. Configuration-level capability discovery has since been added; see [tools and MCP](TOOLS_AND_MCP.md), which distinguishes configuration from readiness. Each area requires independent checks and concrete acceptance. Until then, the agent uses connected tools and reports actual boundaries.
 
-Официальный API Яндекс Go для корпоративных клиентов: https://yandex.ru/dev/taxi/taxicorp/ . API Яндекс Еды, изученный здесь, относится к интеграциям партнёров, а не к потребительской корзине: https://yandex.ru/dev/eda-vendor/doc/ru/ref/ . Поэтому пользовательскую браузерную автоматизацию нельзя объявлять подключённым публичным consumer API.
+The official [Yandex Go API](https://yandex.ru/dev/taxi/taxicorp/) targets corporate clients. The reviewed [Yandex Eats API](https://yandex.ru/dev/eda-vendor/doc/ru/ref/) serves partners, not consumer carts. Browser workflows must not be presented as a connected public consumer API.
 
-## Уточнение владельца: настойчивость вместо преждевременного отказа
+## Persistence instead of premature refusal
 
-Lead должен находить и исполнять рабочий путь, как инструментальный coding assistant: исследовать доступные средства, проверить документацию/код, выбрать API/browser/CLI/специалиста, устранить техническую причину отказа и проверить результат. При необходимости и в пределах поручения — подготовить недостающий адаптер через разрешённый инструмент разработки. Отсутствие готовой кнопки не является основанием прекращать задачу.
+Lead should find and execute a working route: inspect tools/docs/code, choose API/browser/CLI/specialist, resolve technical failures and verify results. Within authorization, use development tools to prepare a missing adapter. Absence of a ready-made button is not grounds to abandon a task.
 
-Остановка допустима при конкретном подтверждённом препятствии: нужен вход владельца, обязательное подтверждение, недостающий существенный выбор, недоступный физический исполнитель либо исчерпанный runtime budget. К этому моменту независимая подготовка выполнена; сообщается один конкретный следующий шаг и фактическое состояние, а не общий отказ. Техническая альтернатива не обходит права, подпись, лимиты, ограничения публикации или неизвестный результат платежа. Это поведенческая политика; новые исполнители и гарантированное фоновое возобновление по-прежнему требуют реализации.
+Stop only for a verified blocker: owner login, mandatory approval, a material missing choice, an unavailable physical executor or exhausted runtime budget. Complete independent preparation first, then report the actual state and one concrete next step. Alternatives cannot bypass permissions, signatures, limits, publishing restrictions or an unknown payment outcome. This behavior policy does not itself implement new executors or guaranteed background resumption.

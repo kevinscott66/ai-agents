@@ -4,7 +4,7 @@ The five user references establish a realistic office direction: human proportio
 
 ## Appearance presets
 
-The «Персонажи» menu selects complete looks independently for the player and Backend, with hair/clothes/footwear descriptions. Validated preferences persist in localStorage. The default player wears a light shirt; Backend uses the young adult red long-sleeve look. A look does not change agent identity, role, task, permission or gateway state.
+The Characters menu selects complete looks independently for the player and Backend, with hair/clothes/footwear descriptions. Validated preferences persist in localStorage. The default player wears a light shirt; Backend uses the young adult red long-sleeve look. A look does not change agent identity, role, task, permission or gateway state.
 
 | Preset | Source model | Appearance |
 | --- | --- | --- |

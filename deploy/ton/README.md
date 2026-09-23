@@ -1,92 +1,68 @@
-# TON Site — `cryptodelabs.ton` → сайт DeLabs
+# TON Site: `cryptodelabs.ton` → DeLabs
 
-Развёрнуто 2026-08-06 на VPS `203.0.113.10` (prod-host).
+Recorded deployment: 2026-08-06. Commands below use the documentation host `203.0.113.10`; substitute an authorized deployment target. These dated observations are not a current infrastructure check.
 
-## Что это
+## Overview
 
-У TON DNS нет A-записи. Домен `.ton` указывает на **ADNL-адрес**, а не на IP.
-Чтобы `.ton` отдавал обычный сайт, на сервере должен крутиться прокси, который
-принимает соединения по ADNL (UDP) и перекладывает их в локальный HTTP.
+TON DNS maps a `.ton` domain to an **ADNL address**, not an IP A record. A reverse proxy accepts ADNL over UDP and forwards requests to local HTTP.
 
-Такой сайт **не открывается в обычном Chrome**. Доступ — только через клиент с
-поддержкой TON Proxy (расширение, MyTonWallet, Tonutils-Proxy). Конкретный
-список проверенных клиентов — в разделе «Совместимость клиентов» ниже; он важнее,
-чем кажется: у неподдерживающего клиента симптом — белый экран без ошибки.
+An ordinary Chrome browser cannot open it without TON Proxy support. Supported clients are listed below; an unsupported client often shows a blank page. This is a protocol limitation, not a server configuration issue. `delabs.space` remains the canonical web address; `.ton` is an additional channel.
 
-Это ограничение протокола, а не конфигурации. `delabs.space` остаётся основным
-адресом для обычного веба — `.ton` идёт вторым каналом, а не заменой.
+## Architecture
 
-## Схема
-
-```
-Tonkeeper / TON Proxy
-        │  ADNL over UDP :13104
-        ▼
-tonutils-reverse-proxy  (systemd: ton-proxy.service, user tonproxy)
-        │  HTTP
-        ▼
-127.0.0.1:8790   ← Bun-сервер сайта (site/server), тот же, что за nginx
-                   для delabs.space
+```text
+TON Proxy client
+        | ADNL over UDP :13104
+        v
+tonutils-reverse-proxy (ton-proxy.service, user tonproxy)
+        | HTTP
+        v
+127.0.0.1:8790 (site/server Bun backend, also used by delabs.space through nginx)
 ```
 
-nginx в этой цепочке не участвует: прокси ходит прямо в Bun. Так не нужно
-подбирать `server_name` под `.ton` и не нужен сертификат — ADNL шифрует
-транспорт сам.
+nginx is not involved in the TON route. The proxy connects directly to Bun, avoiding `.ton` server-name and TLS-certificate configuration; ADNL encrypts transport.
 
-## Установленное
+## Recorded installation
 
-| Что | Значение |
-|---|---|
-| Бинарь | `tonutils-reverse-proxy` v0.5.0 linux-amd64 |
-| Источник | `github.com/tonutils/reverse-proxy` releases |
-| sha256 | `ee245c2caf73ba8b479216000d4f042a531652b36c9e4a3cb7e358c67b7556b1` |
-| Каталог | `/opt/ton-proxy` (owner `tonproxy:tonproxy`) |
-| Юнит | `/etc/systemd/system/ton-proxy.service` (копия — рядом в этом каталоге) |
-| Порт | UDP `13104`, `listen_ip 0.0.0.0`, `external_ip 203.0.113.10` |
-| proxy_pass | `http://127.0.0.1:8790/` |
-| ADNL | `vaivnibaeepoh72qnsypxbghmn3kzbq7zub7efgsybsddjepxtmxm6x` |
-| ADNL hex | `408ab5010108f71ffa836587dc263b1bb56430fe681f90a69603218d247de6cb` |
+| Item | Value |
+| --- | --- |
+| Binary | `tonutils-reverse-proxy` v0.5.0 linux-amd64 |
+| Source | `github.com/tonutils/reverse-proxy` releases |
+| SHA-256 | `ee245c2caf73ba8b479216000d4f042a531652b36c9e4a3cb7e358c67b7556b1` |
+| Directory | `/opt/ton-proxy`, owned by `tonproxy:tonproxy` |
+| Unit | `/etc/systemd/system/ton-proxy.service`; template in this directory |
+| Port | UDP `13104`, `listen_ip 0.0.0.0`; configure the actual `external_ip` privately |
+| Upstream | `http://127.0.0.1:8790/` |
+| Public ADNL | `vaivnibaeepoh72qnsypxbghmn3kzbq7zub7efgsybsddjepxtmxm6x` |
+| Public ADNL hex | `408ab5010108f71ffa836587dc263b1bb56430fe681f90a69603218d247de6cb` |
 
-Ключ ротирован 2026-08-06 (прежний ADNL `waz6osna…` скомпрометирован — попал в
-транскрипт вместе с `config.json`; он больше нигде не действует). Актуальный
-ADNL всегда можно перечитать из журнала, не трогая приватный ключ:
+The key was rotated on 2026-08-06 after the previous configuration was exposed. Read the current public ADNL from logs without displaying the private key:
 
 ```bash
 ssh root@203.0.113.10 'journalctl -u ton-proxy --no-pager | grep -i "Server.s ADNL address" | tail -1'
 ```
 
-`/opt/ton-proxy/config.json` содержит **приватный ключ ADNL** — режим `600`,
-владелец `tonproxy`. В git его нет и быть не должно. Не выводите файл целиком:
-кроме ADNL там `TunnelServerKey`, `ADNLServerKey`, `PaymentsNodeKey` и
-`WalletPrivateKey`. Потеря ключа не катастрофична: генерируется новый ADNL, и
-домен перепривязывается (см. ниже) — но это ончейн-транза и ручная подпись
-владельца, так что дешевле файл не светить.
+`/opt/ton-proxy/config.json` contains the **ADNL private key**, is owned by `tonproxy`, and must be mode `600`. Never commit or print the whole file: it can also contain `TunnelServerKey`, `ADNLServerKey`, `PaymentsNodeKey` and `WalletPrivateKey`. Losing the key requires a new ADNL and owner-signed on-chain domain rebinding.
 
-## Привязка домена (делает владелец кошелька)
+## Domain binding: wallet owner only
 
-Запись `site` в TON DNS ставится ончейн-транзакцией с кошелька-владельца NFT.
-Из репозитория/CI это невозможно — только вручную из кошелька.
+The TON DNS `site` record requires an on-chain transaction signed by the wallet holding the domain NFT. Repository/CI access does not grant that authority.
 
 ```bash
 ssh root@203.0.113.10 'systemctl stop ton-proxy && cd /opt/ton-proxy && ./tonutils-reverse-proxy --domain cryptodelabs.ton'
 ```
 
-Бинарь покажет QR — отсканировать Tonkeeper'ом с кошелька-владельца, подтвердить
-(~0.02 TON комиссии). Через ~10 секунд прокси сам увидит запись. После этого:
+Scan the QR code with the owning wallet and confirm. The recorded fee was approximately 0.02 TON and detection took about ten seconds; these are historical observations, not guaranteed current values. Then start the service:
 
 ```bash
 ssh root@203.0.113.10 'systemctl start ton-proxy'
 ```
 
-Флаг `--domain` нужен **только на привязку**. Дальше сервис стартует без него —
-запись живёт в блокчейне.
+`--domain` is needed only for binding; subsequent service starts omit it because the record is on-chain. `-tx-url` prints a `ton://` link instead of a QR code.
 
-Флаг `-tx-url` вместо QR печатает `ton://`-ссылку, если сканировать неудобно.
+### Key rotation
 
-### Ротация ключа
-
-Если приватный ключ утёк — новый ADNL и повторная привязка. Делалось 2026-08-06,
-процедура рабочая:
+After exposure, generate a new ADNL and rebind. The recorded 2026-08-06 procedure:
 
 ```bash
 ssh root@203.0.113.10 'systemctl stop ton-proxy && cd /opt/ton-proxy && \
@@ -95,125 +71,78 @@ ssh root@203.0.113.10 'systemctl stop ton-proxy && cd /opt/ton-proxy && \
   rm config.json && ./tonutils-reverse-proxy -domain cryptodelabs.ton -tx-url'
 ```
 
-Бинарь без `config.json` генерирует новый ключ, печатает новый ADNL и ссылку на
-транзакцию. Дальше: вернуть в свежий `config.json` прежние `proxy_pass`,
-`external_ip`, `listen_ip`, `port` (их печатает команда выше), выставить
-`chmod 600` + `chown tonproxy`, подписать транзакцию из кошелька-владельца,
-проверить резолв (раздел «Проверка»), и только потом `shred -u
-config.json.old`. Пока транзакция не подтверждена, старый конфиг — единственный
-способ откатиться.
+Without `config.json`, the binary generates a new key and prints the public ADNL and transaction link. Restore `proxy_pass`, `external_ip`, `listen_ip` and `port` from the sanitized output; set mode 600 and ownership `tonproxy`. The wallet owner signs, verifies resolution, and only then removes the old configuration with `shred -u config.json.old`. Until confirmation, the old configuration is the rollback path.
 
-Проверять, что подпись прошла, надо **ончейн**, а не по ощущениям: у транзакции
-должно быть `op 0x4eb1f0f9`, `exit=0`, и новый ADNL в теле сообщения.
+Verify on-chain: operation `0x4eb1f0f9`, exit code 0, and the new ADNL in the message body.
 
-### Привязка без остановки сервиса — `dns-tool/`
+### Binding without stopping the service
 
-Альтернатива QR-флоу бинаря: `dns-tool/build-site-record.mjs` строит payload
-`change_dns_record` локально из hex ADNL (таблица выше / журнал юнита) — прокси
-останавливать не нужно, транзакция уходит из кошелька напрямую:
+`dns-tool/build-site-record.mjs` builds a local `change_dns_record` payload from the public hexadecimal ADNL. The proxy can stay running while the owner sends the wallet transaction:
 
 ```bash
 cd deploy/ton/dns-tool && npm install
-node build-site-record.mjs --adnl <ADNL hex> --nft <адрес NFT домена>
+node build-site-record.mjs --adnl <ADNL hex> --nft <domain NFT address>
 ```
 
-Печатает base64-payload и следом готовую `ton://`-ссылку (открыть
-кошельком-владельцем, 0.02 TON). Формат сверен с tonutils-go `resolve.go` и
-TEP-81, есть `--self-test`. Версии зависимостей запинены точно — инструмент
-строит ончейн-payload, плавающие версии тут ни к чему.
+The tool prints a base64 payload and a `ton://` link. The recorded payload format was checked against tonutils-go `resolve.go` and TEP-81; `--self-test` is available. Dependencies are exactly pinned because this constructs an on-chain payload.
 
-### Rate-limit и .ton-трафик
+### Rate limiting and wallet tools
 
-Весь `.ton`-трафик приходит в Bun с петли БЕЗ клиентских заголовков — лимитер
-сайта складывает его в одно общее ведро `ip:127.0.0.1` (60 req/мин по
-умолчанию). Чтобы `.ton`-аудитория не упиралась в потолок, на VPS в окружение
-юнита `web3-puls` добавляется `SITE_LOOPBACK_RL_CAPACITY=600` (drop-in по
-аналогии с `ingest.conf`). Без переменной поведение прежнее. base64-вариант пригоден для агентских кошелёк-тулов с
-`payload.type=base64` — например, официальный My Wallet плагин для Claude Code
-(`/plugin marketplace add mytonwallet-org/mywallet-agents-plugins`,
-`/plugin install mywallet-claude-code`, тул `mywallet_submit_transfer`) — но
-это сработает, только если кошелёк агента сам владеет NFT домена; плагин
-ставить в локальный Claude Code, не в облачную сессию (эфемерные ключи).
-Пока NFT в кошельке владельца — `ton://`-ссылка остаётся самым коротким путём.
-Проверка результата — та же ончейн-проверка, что выше.
+TON requests reach Bun through loopback without client headers, sharing the `ip:127.0.0.1` bucket (default 60 requests/minute). The documented service drop-in sets `SITE_LOOPBACK_RL_CAPACITY=600` for the historical `web3-puls` unit; verify the actual current unit before applying. Without the variable, behavior is unchanged.
 
-## Проверка
+The base64 payload can be used with wallet tools accepting `payload.type=base64`, such as the official My Wallet plugin (`/plugin marketplace add mytonwallet-org/mywallet-agents-plugins`, `/plugin install mywallet-claude-code`, `mywallet_submit_transfer`). The connected wallet must itself own the NFT. Install in the local client, not an ephemeral cloud session. Otherwise use the owning wallet's `ton://` link. Verify the resulting transaction on-chain in either case.
 
-Статус сервиса и UDP-сокета:
+## Verification
+
+Service and UDP socket:
 
 ```bash
 ssh root@203.0.113.10 'systemctl is-active ton-proxy; ss -lunp | grep 13104'
 ```
 
-Бэкенд под `.ton`-хостом:
+Backend with the TON Host header:
 
 ```bash
 ssh root@203.0.113.10 "curl -s -o /dev/null -w '%{http_code}\n' -H 'Host: cryptodelabs.ton' http://127.0.0.1:8790/"
 ```
 
-**Резолв записи — только через сам прокси, не через tonapi.** Он читает запись с
-лайтсерверов и сверяет с текущим ADNL:
+**Resolve through the proxy itself**, which reads lite-server records and compares the current ADNL:
 
 ```bash
 ssh root@203.0.113.10 'systemctl stop ton-proxy; cd /opt/ton-proxy && timeout 40 ./tonutils-reverse-proxy -debug -domain cryptodelabs.ton -tx-url; systemctl start ton-proxy'
 ```
 
-Ждём `Domain is already configured to use with current ADNL address. Everything
-is OK!` и строку `DHT ADNL address record ... refreshed successfully on N nodes`.
-Порт один, поэтому юнит на время проверки надо остановить.
+Expect `Domain is already configured to use with current ADNL address. Everything is OK!` and successful DHT record refresh. Stop the service temporarily because the diagnostic instance uses the same port.
 
-`https://tonapi.io/v2/dns/<name>/resolve` для этого **не годится**: поле `sites`
-у него пустое и у заведомо живых сайтов (проверено на `foundation.ton`). Пустой
-`sites: []` ничего не означает — не принимайте его за поломку.
+The recorded `https://tonapi.io/v2/dns/<name>/resolve` response had empty `sites` even for known working sites such as `foundation.ton`; `sites: []` alone did not establish failure.
 
-### Сквозная проверка через ADNL
+### End-to-end ADNL check
 
-Единственный тест, который проверяет весь контур (DNS → ADNL → DHT → RLDP →
-бэкенд) и не зависит от кошелька. Клиент — CLI из
-[xssnick/Tonutils-Proxy](https://github.com/xssnick/Tonutils-Proxy):
+The [Tonutils-Proxy CLI](https://github.com/xssnick/Tonutils-Proxy) exercises DNS → ADNL → DHT → RLDP → backend without a wallet:
 
 ```bash
 ssh root@203.0.113.10 'cd /tmp && curl -sL -o tp https://github.com/xssnick/Tonutils-Proxy/releases/download/v1.8.3/tonutils-proxy-cli-linux-amd64 && chmod +x tp && nohup timeout 90 ./tp -addr 127.0.0.1:18080 >/tmp/tp.log 2>&1 & sleep 25; curl -s -m 45 -x http://127.0.0.1:18080 -w "\ncode=%{http_code} size=%{size_download}\n" http://cryptodelabs.ton/ | tail -3; pkill -x tp; rm -f /tmp/tp /tmp/tp.log'
 ```
 
-Проверено 2026-08-06: `200`, 2806 байт, 264 мс; ассеты (`.js`, `.css`,
-`favicon.svg`) тоже отдаются с верным MIME.
+Recorded on 2026-08-06: HTTP 200, 2806 bytes, 264 ms; JS, CSS and favicon assets had correct MIME types. This command uses a pinned historical client binary and is a documented diagnostic, not an instruction to run it automatically.
 
-Уровень логирования по умолчанию у прокси почти немой — запросы он пишет
-**только под `-debug`** (`Received HTTP request host=... uri=...`). Если надо
-увидеть, доходит ли клиент, временно добавьте флаг в `ExecStart` и не забудьте
-убрать: под `-debug` в журнал сыпется весь RLDP-трейс.
+Requests appear in logs only with `-debug` (`Received HTTP request host=... uri=...`). Enable it temporarily if needed and remove it afterward; it emits the full RLDP trace.
 
-## Совместимость клиентов
+## Recorded client compatibility
 
-`.ton` живёт поверх ADNL, а не HTTP, поэтому нужен клиент с поддержкой TON
-Proxy. Обычный браузер, DNS и CDN тут ни при чём.
+| Client | `.ton` support |
+| --- | --- |
+| Tonutils-Proxy CLI/GUI, TON Proxy extension | Verified |
+| MyTonWallet | Supported in the recorded setup |
+| Tonkeeper embedded browser | Did not work in the 2026-08-06 check |
+| Telegram embedded browser | Did not resolve the scheme |
+| Chrome/Safari without extension | Unsupported |
 
-| Клиент | Открывает `.ton` |
-|---|---|
-| Tonutils-Proxy (CLI/GUI), TON Proxy extension | да — проверено |
-| MyTonWallet | да |
-| Tonkeeper (встроенный браузер) | **нет** — проверено 2026-08-06 |
-| Встроенный браузер Telegram | **нет** — схему не резолвит вовсе |
-| Chrome/Safari без расширения | нет |
+A blank screen can mean the client never resolved the name. If debug logs show no request and `tcpdump -nn -i any udp port 13104` shows no client traffic, the request did not reach the server.
 
-Типичный симптом неподдерживающего клиента — **белый экран без ошибки**:
-приложение не резолвит имя, показывать нечего. Отличить от реальной поломки
-просто: если в логе прокси под `-debug` нет ни одного `Received HTTP request`, а
-в `tcpdump -nn -i any udp port 13104` не видно IP клиента — до сервера запрос не
-дошёл, и чинить надо не сервер.
+## Notes
 
-## Известные мелочи
-
-- `SITE_ORIGIN` в `site/server/index.ts` захардкожен на `https://delabs.space` —
-  RSS с `.ton` будет ссылаться на канонический домен. Это осознанно: `.ton`
-  недоступен из обычного браузера, и уводить RSS-читателя туда нельзя.
-- Сайт привязан и работает с 2026-08-06 (транза `op 0x4eb1f0f9`, `exit=0`).
-  Ключ ротирован в тот же день, 15:42:10 UTC — сквозная проверка через ADNL
-  после ротации прошла (`200`, 2806 байт).
-- Домен оплачен примерно до августа 2027 (`expiring_at` в
-  `https://tonapi.io/v2/dns/cryptodelabs.ton`). TON DNS требует продления —
-  просроченный домен уходит на аукцион.
-- Прокси требует белый IP и открытый UDP-порт. На prod-host `ufw` выключен,
-  политика `INPUT ACCEPT` — работает. Если фаервол будут включать, `13104/udp`
-  надо открыть явно.
+- `SITE_ORIGIN` in `site/server/index.ts` uses `https://delabs.space`; RSS intentionally points to the canonical browser-accessible domain.
+- Domain binding and post-rotation end-to-end checks succeeded on 2026-08-06; the recorded rotation time was 15:42:10 UTC.
+- The recorded domain expiry was around August 2027; inspect current `expiring_at` at `https://tonapi.io/v2/dns/cryptodelabs.ton`. Expired TON DNS domains return to auction.
+- The proxy requires a public IP and accessible UDP port. The historical deployment had no blocking firewall; when enabling one, explicitly allow `13104/udp`. Check current host policy rather than assuming that historical state still applies.
