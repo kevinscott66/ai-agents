@@ -77,10 +77,16 @@ describe("почему это важно", () => {
     let slowTicks = 0;
     const nan = setInterval(() => nanTicks++, NaN as unknown as number);
     const slow = setInterval(() => slowTicks++, 10_000);
-    await new Promise((r) => setTimeout(r, 100));
-    clearInterval(nan);
-    clearInterval(slow);
-    expect(nanTicks).toBeGreaterThan(2);
-    expect(slowTicks).toBe(0);
+    const deadline = Date.now() + 2_000;
+    try {
+      while (nanTicks <= 2 && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      expect(nanTicks).toBeGreaterThan(2);
+      expect(slowTicks).toBe(0);
+    } finally {
+      clearInterval(nan);
+      clearInterval(slow);
+    }
   });
 });

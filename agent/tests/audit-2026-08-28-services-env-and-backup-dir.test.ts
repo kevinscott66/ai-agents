@@ -42,9 +42,17 @@ describe("предпосылки", () => {
     // Именно из-за этого «раз в год» превращается в «257 раз за 300 мс».
     let ticks = 0;
     const t = setInterval(() => ticks++, 3_000_000_000);
-    await new Promise((r) => setTimeout(r, 150));
-    clearInterval(t);
-    expect(ticks).toBeGreaterThan(20);
+    // Проверяем схлопывание, а не скорость загруженного CI-раннера.
+    // Несхлопнувшийся интервал за две секунды не сработает ни разу.
+    const deadline = Date.now() + 2_000;
+    try {
+      while (ticks <= 20 && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      expect(ticks).toBeGreaterThan(20);
+    } finally {
+      clearInterval(t);
+    }
   });
 
   test("fs.mkdirSync('') бросает, а не создаёт cwd", () => {
