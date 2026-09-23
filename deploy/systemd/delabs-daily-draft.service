@@ -2,8 +2,10 @@
 # Этап 1/2 пайплайна контента DeLabs: ежедневный ЧЕРНОВИК.
 # Ресёрчит свежие новости крипты+AI (Agent SDK / подписка, WebSearch), собирает
 # 3-4 мини-статьи, рендерит бренд-баннер, шлёт ПРЕВЬЮ в Saved Messages юзербота
-# и пишет /opt/web3-puls/drafts/pending.json. НЕ постит в публичный канал —
-# публикацию делает delabs-approve-poll после апрува владельца (реакция ✅ / «+»).
+# и пишет /opt/web3-puls/drafts/pending.json. Сам в канал не постит: публикацию
+# делает approve-poll — он вызывается ExecStartPost'ом сразу после ресёрча.
+# С 23.09.2026 при DELABS_AUTO_PUBLISH=1 апрув владельца для этого не нужен;
+# без флага поведение прежнее — ждать реакции ✅ или ответа «+».
 # Oneshot — запускается таймером delabs-daily-draft.timer.
 [Unit]
 Description=DeLabs daily content draft (research + preview to Saved Messages)
@@ -17,8 +19,17 @@ Group=agent-team
 WorkingDirectory=/opt/agent-team
 EnvironmentFile=/opt/agent-team/.env
 Environment=CLAUDE_BIN=/usr/local/bin/claude
+# Публикация без апрува (23.09.2026). Владелец попросил, чтобы черновики
+# уходили в канал сразу: гейт апрува снимается переменной DELABS_AUTO_PUBLISH=1
+# в /opt/agent-team/.env, и approve-poll запускается ExecStartPost'ом здесь же,
+# сразу после ресёрча, — чтобы «сразу» значило сразу, а не «в течение получаса»,
+# как ходит delabs-approve-poll.timer. Явное вето владельца (ответ текстом на
+# превью) режим по-прежнему уважает: approve-poll.decideAuto.
 ExecStart=/usr/local/bin/bun /opt/agent-team/tools/daily-draft.ts
-TimeoutStartSec=600
+ExecStartPost=/usr/local/bin/bun /opt/agent-team/tools/approve-poll.ts
+# 600 -> 1200: в бюджет запуска теперь входит не только ресёрч, но и публикация
+# из ExecStartPost, у которой в своём юните на это заложено 900с.
+TimeoutStartSec=1200
 NoNewPrivileges=true
 UMask=0077
 ProtectSystem=strict

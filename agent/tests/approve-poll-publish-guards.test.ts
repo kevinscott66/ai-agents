@@ -39,6 +39,8 @@ import type { PendingDraft } from "../tools/daily-draft.ts";
 import { DELABS_SECTIONS } from "../lib/delabs-sections.ts";
 import { plainTelegramLength } from "../lib/telegram-format.ts";
 
+// Лид пункта в посте — `summary` (с 23.09.2026), поэтому длину задаём ему;
+// `blurb` остаётся его первым предложением, как в реальных черновиках.
 function pendingWith(count: number, blurbLen: number): PendingDraft {
   return {
     createdAt: "2026-03-04T20:05:00.000Z",
@@ -47,12 +49,12 @@ function pendingWith(count: number, blurbLen: number): PendingDraft {
     articles: Array.from({ length: count }, (_, i) => ({
       title: `Заголовок новости номер ${i + 1} про крипту и искусственный интеллект`,
       date: "2026-03-04T20:00:00.000Z",
-      summary: "s",
+      summary: `Новость ${i + 1}. ` + "Ц".repeat(blurbLen),
       body: "b",
       items: [],
       sourceCount: 3,
       emoji: "🔥",
-      blurb: `Новость ${i + 1}. ` + "Ц".repeat(blurbLen),
+      blurb: `Новость ${i + 1}.`,
       siteId: `2026-03-04-novost-${i + 1}`,
     })),
   } as PendingDraft;

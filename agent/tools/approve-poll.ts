@@ -229,9 +229,71 @@ async function readPreviewReplies(
 }
 
 /**
+ * Публиковать без апрува? Владелец включил это сам: «пускай он всё постит сразу
+ * без апрува» (23.09.2026). Флаг живёт в env, а не в коде, потому что гейт
+ * апрува — это не деталь реализации, а решение владельца канала, и вернуть его
+ * нужно уметь одной строкой в /opt/agent-team/.env, без выкладки.
+ *
+ * Что режим НЕ отменяет: явное вето. Если владелец успел ответить на превью
+ * содержательным текстом («стоп», «переделай второй пункт»), пост не уходит —
+ * см. decideAuto. Нечитаемые ответы в этом режиме публикацию не блокируют:
+ * «сразу» значит сразу, а не «через тик, если Telegram ответит».
+ */
+export function autoPublishEnabled(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  return /^(1|true|yes|on)$/i.test((env.DELABS_AUTO_PUBLISH ?? "").trim());
+}
+
+/** Решение в авто-режиме: публикуем, пока владелец не возразил словами. */
+export function decideAuto(s: ApprovalSignals): ApprovalDecision {
+  const texts = (s.replies ?? []).map((t) => (t ?? "").trim()).filter(Boolean);
+  const veto = texts.find((t) => !isApprovalText(t));
+  if (veto) return { approved: false, reason: "veto", vetoText: veto };
+  return { approved: true, reason: s.reaction ? "reaction" : "no_signal" };
+}
+
+/** Сигналы апрува с превью: реакция и ответы владельца. */
+async function approvalSignals(
+  client: TelegramClient,
+  previewMsgId: number,
+): Promise<ApprovalSignals> {
+  const me = await client.getInputEntity("me");
+  const reaction = await hasApprovalReaction(client, me, previewMsgId);
+  const replies = await readPreviewReplies(client, me, previewMsgId);
+  return { reaction, replies };
+}
+
+/** Авто-режим: публиковать ли этот черновик прямо сейчас. */
+export async function isAutoPublishable(
+  client: TelegramClient,
+  previewMsgId: number,
+): Promise<boolean> {
+  let signals: ApprovalSignals = { reaction: false, replies: [] };
+  try {
+    signals = await approvalSignals(client, previewMsgId);
+  } catch (e) {
+    // Превью не прочиталось — это не повод придержать выпуск: гейта больше нет.
+    console.error(
+      `[approve-poll] AUTO: ответы на превью не прочитаны (${(e as Error).message}) — публикуем`,
+    );
+    return true;
+  }
+  const d = decideAuto(signals);
+  if (!d.approved) {
+    console.log(
+      `[approve-poll] AUTO: владелец возразил на превью — не публикуем: ${String(d.vetoText).slice(0, 120)}`,
+    );
+  }
+  return d.approved;
+}
+
+/**
  * Проверить, одобрено ли превью: реакция ✅ на сообщении ИЛИ reply владельца
  * с «+»/«✅»/«публикуем» — и НИ ОДНОГО содержательного ответа поверх этого.
  * «me»-чат — Saved Messages, все реакции/ответы там наши.
+ *
+ * Путь для выключенного авто-режима (autoPublishEnabled === false).
  */
 export async function isApproved(
   client: TelegramClient,
@@ -569,7 +631,12 @@ export function buildFinalText(pending: PendingDraft): string {
     // настоящей ссылкой на чужой домен, а в превью на апруве была видна только
     // подпись «жми сюда» — владелец одобрял, не видя куда (аудит 2026-08-28).
     lines.push(`${itemEmoji(a.emoji)} **${plainInline(a.title)}**`);
-    lines.push(endSentence(plainInline(a.blurb ?? "")));
+    // Лид пункта — `summary`, тот же текст, что стоит лидом у выпуска на сайте
+    // (180-340 знаков, 2-3 предложения). `blurb` — его первое предложение, и
+    // поста из одних первых предложений владельцу было мало: «пускай постит в
+    // таком же стиле, что и на сайте» (23.09.2026). Длина поста не страдает:
+    // хвост всё равно режется на части по TG_MESSAGE_LIMIT.
+    lines.push(endSentence(plainInline(a.summary || a.blurb || "")));
     lines.push(""); // отступ между новостями (эталон #75) + перед футером
   });
   lines.push(sectionsLine(SITE_BASE));
@@ -638,10 +705,13 @@ async function main(): Promise<void> {
   }
 
   const client = buildClient();
+  const auto = autoPublishEnabled();
   let approved = false;
   try {
     await client.connect();
-    approved = await isApproved(client, pending.previewMsgId);
+    approved = auto
+      ? await isAutoPublishable(client, pending.previewMsgId)
+      : await isApproved(client, pending.previewMsgId);
   } catch (e) {
     console.error("[approve-poll] approval check failed:", (e as Error).message);
     try { await client.disconnect(); } catch {}
@@ -650,13 +720,13 @@ async function main(): Promise<void> {
   }
 
   if (!approved) {
-    console.log("[approve-poll] not approved yet — waiting");
+    console.log(auto ? "[approve-poll] AUTO: вето владельца — ждём" : "[approve-poll] not approved yet — waiting");
     try { await client.disconnect(); } catch {}
     process.exit(0);
     return;
   }
 
-  console.log("[approve-poll] APPROVED — publishing");
+  console.log(auto ? "[approve-poll] AUTO — публикуем без апрува" : "[approve-poll] APPROVED — publishing");
 
   // Пир резолвится в prepareSend и переиспользуется в send — так сетевой
   // вызов остаётся ДО отметки публикации.

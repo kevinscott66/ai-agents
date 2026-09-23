@@ -4,10 +4,11 @@
 # юзербота и кладёт pending с kind:"weekly" в ту же очередь
 # /opt/web3-puls/drafts/pending.json, что и дневной дайджест.
 #
-# В канал НЕ постит. Публикует, как и дайджест, delabs-approve-poll после
-# апрува владельца (реакция ✅ / ответ «+») — своего апрува тут нет намеренно:
-# два механизма подтверждения на один канал означали бы, что один из них
-# владелец не смотрит.
+# Сам в канал не постит: публикует, как и дайджест, approve-poll — он вызывается
+# ExecStartPost'ом ниже. С 23.09.2026 при DELABS_AUTO_PUBLISH=1 апрув владельца
+# для этого не нужен (см. комментарий у ExecStart); без флага поведение прежнее —
+# ждать реакции ✅ или ответа «+». Своего механизма подтверждения тут нет
+# намеренно: два механизма на один канал означали бы, что один владелец не смотрит.
 #
 # Слот очереди один. Если дневной черновик ещё ждёт апрува, недельный прогон
 # выходит с кодом 0, ничего не тронув: перезапись потеряла бы и апрув (его ищут
@@ -19,7 +20,9 @@
 # упадёт с "module not found".
 #
 # Никакого Agent SDK и никаких платных запросов: весь материал берётся из
-# публичного API сайта. Отсюда TimeoutStartSec куда меньше, чем у дневного.
+# публичного API сайта. Отсюда TimeoutStartSec куда меньше, чем у дневного:
+# сборка укладывается в секунды, остальной бюджет — на публикацию из
+# ExecStartPost, которая шлёт в канал столько же сообщений, сколько дневная.
 [Unit]
 Description=DeLabs weekly recap draft (preview to Saved Messages)
 After=network-online.target
@@ -32,8 +35,16 @@ Group=agent-team
 WorkingDirectory=/opt/agent-team
 EnvironmentFile=/opt/agent-team/.env
 Environment=CLAUDE_BIN=/usr/local/bin/claude
+# Публикация без апрува (23.09.2026). Владелец попросил, чтобы черновики
+# уходили в канал сразу: гейт апрува снимается переменной DELABS_AUTO_PUBLISH=1
+# в /opt/agent-team/.env, и approve-poll запускается ExecStartPost'ом здесь же,
+# сразу после сборки, — чтобы «сразу» значило сразу, а не «в течение получаса»,
+# как ходит delabs-approve-poll.timer. Явное вето владельца (ответ текстом на
+# превью) режим по-прежнему уважает: approve-poll.decideAuto.
 ExecStart=/usr/local/bin/bun /opt/agent-team/tools/weekly-draft.ts
-TimeoutStartSec=180
+ExecStartPost=/usr/local/bin/bun /opt/agent-team/tools/approve-poll.ts
+# 180 -> 600: в бюджет запуска теперь входит и публикация из ExecStartPost.
+TimeoutStartSec=600
 NoNewPrivileges=true
 UMask=0077
 ProtectSystem=strict

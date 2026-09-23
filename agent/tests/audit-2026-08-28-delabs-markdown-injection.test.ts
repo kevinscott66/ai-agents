@@ -189,10 +189,13 @@ describe("применение", () => {
     // buildChannelText из approve-poll.ts — то, что реально уходит в канал.
     const ap = code("../tools/approve-poll.ts");
     expect(ap).toContain("**${plainInline(a.title)}**");
-    expect(ap).toContain('endSentence(plainInline(a.blurb ?? ""))');
+    // Лид пункта — `summary` (с 23.09.2026, просьба владельца о посте «в таком
+    // же стиле, что и на сайте»); `blurb` остался запасным. Через plainInline
+    // проходит любой из них.
+    expect(ap).toContain('endSentence(plainInline(a.summary || a.blurb || ""))');
     // Превью черновика обязано показывать ровно то же.
     const dd = code("../tools/daily-draft.ts");
     expect(dd).toContain("**${plainInline(a.title)}**");
-    expect(dd).toContain('endSentence(plainInline(a.blurb ?? ""))');
+    expect(dd).toContain('endSentence(plainInline(a.summary || a.blurb || ""))');
   });
 });
