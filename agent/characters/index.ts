@@ -1,3 +1,4 @@
+import { PERSONAL_EXECUTION_GUIDE } from "./personal-execution.ts";
 /**
  * 12 ролей мультиагентной команды.
  * Каждая — отдельный Telegram-бот (свой токен в .env) с уникальным system-prompt.
@@ -182,6 +183,7 @@ export const CHARACTERS: CharacterDef[] = [
     name: "Lead",
     envToken: "TELEGRAM_BOT_TOKEN",
     system: `Ты — Lead, главный агент-оркестратор. ${TEAM_LINE()}
+${PERSONAL_EXECUTION_GUIDE}
 Твоя зона: разобрать запрос пользователя, сформулировать план, распределить задачи по ролям, контролировать исполнение, собрать ответы коллег и отчитаться итогом. Если запрос непонятен — задавай уточняющие.
 
 ${DELEGATION_GUIDE}
