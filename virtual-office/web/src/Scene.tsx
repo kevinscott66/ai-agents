@@ -1,5 +1,5 @@
 import type { LiveSnapshot } from "./live-client";
-import { ROSTER, type RoleId } from "./roster";
+import { ROSTER, seatNumber, type RoleId } from "./roster";
 import { TeamMembers } from "./TeamMembers";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
@@ -26,29 +26,43 @@ function Label({
     c.height = 128;
     const ctx = c.getContext("2d")!;
     ctx.fillStyle = "#f3f1e8";
-    ctx.beginPath();
-    ctx.roundRect(0, 0, 512, 128, 16);
-    ctx.fill();
+    ctx.fillRect(0, 0, 512, 128);
+    const member = ROSTER.find((m) => m.id === "backend")!;
+    ctx.fillStyle = member.accent;
+    ctx.fillRect(0, 0, 10, 128);
     ctx.fillStyle = "#28392e";
-    ctx.font = "bold 32px system-ui";
-    ctx.fillText("BACKEND", 28, 50);
-    ctx.fillStyle = "#667862";
-    ctx.font = "24px system-ui";
-    ctx.fillText(
-      `${agent.state}  ·  ${agent.source === "mock" ? "MOCK" : "LIVE"}`,
-      28,
-      91,
-    );
+    ctx.font = "bold 31px system-ui";
+    ctx.fillText(member.name + " / " + member.role, 25, 50);
+    ctx.fillStyle = "#707968";
+    ctx.font = "22px system-ui";
+    const status = {
+      OFFLINE: "НЕ В СЕТИ",
+      IDLE: "ДОСТУПЕН",
+      THINKING: "ГОТОВИТ ОТВЕТ",
+      READING: "ЧИТАЕТ",
+      RESEARCHING: "ИССЛЕДУЕТ",
+      CODING: "ПИШЕТ КОД",
+      TERMINAL: "В ТЕРМИНАЛЕ",
+      TESTING: "ТЕСТИРУЕТ",
+      REVIEWING: "ПРОВЕРЯЕТ",
+      WAITING: "ОЖИДАЕТ РЕШЕНИЯ",
+      WAITING_TOOL: "ЖДЁТ ИНСТРУМЕНТ",
+      COMMUNICATING: "ОБЩАЕТСЯ",
+      MEETING: "НА ВСТРЕЧЕ",
+      ERROR: "ОШИБКА",
+      DONE: "ОТВЕТ ГОТОВ",
+    }[agent.state];
+    ctx.fillText("МЕСТО " + seatNumber(member.id) + " · " + status, 25, 93);
     const t = new THREE.CanvasTexture(c);
     t.colorSpace = THREE.SRGBColorSpace;
     return t;
-  }, [agent.state, agent.source]);
+  }, [agent.state]);
   useEffect(() => () => texture.dispose(), [texture]);
   useFrame(() => {
     sprite.current?.position.set(position.current.x, 2.22, position.current.z);
   });
   return (
-    <sprite ref={sprite} scale={[1.45, 0.362, 1]} onClick={onClick}>
+    <sprite ref={sprite} scale={[1.55, 0.388, 1]} onClick={onClick}>
       <spriteMaterial map={texture} depthTest={false} />
     </sprite>
   );
