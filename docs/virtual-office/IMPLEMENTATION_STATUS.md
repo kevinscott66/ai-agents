@@ -1,6 +1,6 @@
 # Virtual Office — implementation status
 
-Updated 2026-09-23. The office now includes twelve role avatars, a player and owner-authenticated direct-role integration. Delivery branch: `codex/virtual-office-live`; operational deployment/pairing state is recorded in the local CURRENT_STATE handoff and server component manifest. See [live integration](LIVE_INTEGRATION.md).
+Updated 2026-09-23. The office now includes twelve role avatars, a player and owner-authenticated direct-role integration. Delivery branch: `codex/virtual-office-live`; operational deployment/pairing state is recorded in the local CURRENT_STATE handoff and server component manifest. See [live integration](LIVE_INTEGRATION.md) and [current ecosystem corrections](ECOSYSTEM_FIXES.md).
 
 The sections below retain the initial C/D demo-slice verification history. Statements about one mock runtime apply to the separate local demo gateway, not to the live `/api/web/` connection.
 
