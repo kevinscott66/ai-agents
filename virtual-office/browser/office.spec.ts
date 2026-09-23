@@ -153,3 +153,76 @@ test("safe entry does not load WebGL or 3D assets and keeps inspection available
     ),
   ).toEqual([]);
 });
+
+test("four appearance presets load on demand, remain independent and survive reload", async ({
+  page,
+}) => {
+  test.setTimeout(65_000);
+  const errors: string[] = [],
+    models: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  page.on("request", (r) => {
+    if (r.url().endsWith(".glb")) models.push(r.url().split("/").at(-1)!);
+  });
+  await page.goto("/");
+  await expect(page.getByText("Gateway подключён")).toBeVisible();
+  await page.getByRole("button", { name: "Пишет код", exact: true }).click();
+  const sequence = await page.locator(".sequence").innerText();
+  await page.getByLabel("Качество отображения").selectOption("low");
+  await expect(page.locator("canvas")).toHaveAttribute(
+    "data-backend-character",
+    "bob",
+  );
+  await expect(page.locator("canvas")).toHaveAttribute(
+    "data-player-character",
+    "shirt",
+  );
+  expect(new Set(models)).toEqual(new Set(["shirt.glb", "bob.glb"]));
+  await page.locator(".appearance-menu summary").click();
+  for (const [player, backend] of [
+    ["bob", "suit"],
+    ["skirt", "shirt"],
+    ["suit", "skirt"],
+    ["shirt", "bob"],
+  ]) {
+    await page.getByLabel("Ваш персонаж", { exact: true }).selectOption(player);
+    await page
+      .getByLabel("Сотрудник Backend", { exact: true })
+      .selectOption(backend);
+    await expect(page.locator("canvas")).toHaveAttribute(
+      "data-player-character",
+      player,
+    );
+    await expect(page.locator("canvas")).toHaveAttribute(
+      "data-backend-character",
+      backend,
+    );
+  }
+  expect(await page.locator(".sequence").innerText()).toBe(sequence);
+  expect(new Set(models)).toEqual(
+    new Set(["shirt.glb", "bob.glb", "suit.glb", "skirt.glb"]),
+  );
+  await page.getByLabel("Ваш персонаж", { exact: true }).selectOption("skirt");
+  await page
+    .getByLabel("Сотрудник Backend", { exact: true })
+    .selectOption("suit");
+  await page.reload();
+  await expect(page.getByLabel("Качество отображения")).toHaveValue("2d");
+  await page.locator(".appearance-menu summary").click();
+  await expect(page.getByLabel("Ваш персонаж", { exact: true })).toHaveValue(
+    "skirt",
+  );
+  await expect(
+    page.getByLabel("Сотрудник Backend", { exact: true }),
+  ).toHaveValue("suit");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(
+    page.getByLabel("Сотрудник Backend", { exact: true }),
+  ).toBeInViewport();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  expect(errors).toEqual([]);
+});

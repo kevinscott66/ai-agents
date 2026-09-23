@@ -1081,3 +1081,121 @@ kbd {
     font-size: 10px;
   }
 }
+
+.appearance-menu {
+  position: relative;
+}
+.appearance-menu summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 11px 15px;
+  border: 1px solid #d0d7c8;
+  border-radius: 4px;
+  font-size: 13px;
+}
+.appearance-menu summary::-webkit-details-marker {
+  display: none;
+}
+.appearance-menu summary::after {
+  content: "⌄";
+  margin-left: 16px;
+}
+.appearance-menu[open] summary {
+  background: #e3e8dc;
+}
+.appearance-panel {
+  position: absolute;
+  top: calc(100% + 14px);
+  right: 0;
+  width: min(360px, calc(100vw - 32px));
+  padding: 24px;
+  border: 1px solid #d0d7c8;
+  border-radius: 6px;
+  background: #f7f7f0;
+  box-shadow: 0 16px 48px #1b2c2929;
+  max-height: calc(100dvh - 110px);
+  overflow-y: auto;
+}
+.appearance-panel h2 {
+  margin: 9px 0 22px;
+  font-size: 23px;
+  font-weight: 500;
+}
+.appearance-choice + .appearance-choice {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid #d9dfd1;
+}
+.appearance-choice label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.appearance-choice select {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px;
+  border: 1px solid #c8d0bf;
+  border-radius: 3px;
+  background: #fffef8;
+  color: #293b30;
+  font: inherit;
+  font-size: 13px;
+}
+.appearance-choice p,
+.appearance-note {
+  font-size: 12px;
+  line-height: 1.7;
+  color: #68755d;
+  margin: 10px 0 0;
+}
+.appearance-note {
+  border-top: 1px solid #d9dfd1;
+  padding-top: 14px;
+  margin-top: 18px;
+}
+@media (max-width: 600px) {
+  .appearance-menu summary {
+    font-size: 11px;
+    padding: 10px 8px;
+  }
+  .appearance-menu summary::after {
+    margin-left: 6px;
+  }
+  .appearance-panel {
+    position: fixed;
+    top: 72px;
+    right: 16px;
+  }
+  .top-actions {
+    gap: 6px;
+  }
+}
+.topbar {
+  position: relative;
+  z-index: 30;
+}
+@media (max-width: 600px) {
+  .topbar {
+    height: auto;
+    min-height: 64px;
+    flex-wrap: wrap;
+    padding: 12px 16px;
+    gap: 10px;
+  }
+  .top-actions {
+    margin-left: auto;
+    gap: 8px;
+  }
+  .quality-label select {
+    width: 160px;
+    max-width: 45vw;
+    padding: 8px;
+    font-size: 11px;
+  }
+  .appearance-panel {
+    top: 112px;
+    max-height: calc(100dvh - 130px);
+  }
+}

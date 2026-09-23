@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import * as THREE from "three";
 import type { Agent } from "../../contracts/protocol";
 import { findPath, slide, type Point } from "./movement";
+import type { Appearance } from "./characters";
 import { OfficeCharacter } from "./OfficeCharacter";
 import { OfficeEnvironment } from "./OfficeEnvironment";
 
@@ -46,6 +47,7 @@ function Label({
   );
 }
 function Simulation({
+  appearance,
   agent,
   interacting,
   onNear,
@@ -55,6 +57,7 @@ function Simulation({
   onMotion,
   stale,
 }: {
+  appearance: Appearance;
   stale: boolean;
   agent: Agent;
   interacting: boolean;
@@ -332,6 +335,7 @@ function Simulation({
   return (
     <>
       <OfficeCharacter
+        model={appearance.player}
         position={player}
         yaw={pyaw}
         sit={psit}
@@ -339,6 +343,7 @@ function Simulation({
         player
       />
       <OfficeCharacter
+        model={appearance.backend}
         position={npc}
         yaw={nyaw}
         sit={nsit}
@@ -418,6 +423,7 @@ function RenderBudget({ onDegrade }: { onDegrade: (value: boolean) => void }) {
   return null;
 }
 export default function Scene(props: {
+  appearance: Appearance;
   stale: boolean;
   agent: Agent;
   interacting: boolean;

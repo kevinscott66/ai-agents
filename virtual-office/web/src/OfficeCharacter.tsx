@@ -1,10 +1,12 @@
-import { useFrame, useLoader } from "@react-three/fiber";
+import { useFrame, useLoader, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, type RefObject } from "react";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { characterUrl, type CharacterId } from "./characters";
 import { clone } from "three/examples/jsm/utils/SkeletonUtils.js";
 
 type Props = {
+  model: CharacterId;
   position: RefObject<THREE.Vector3>;
   yaw: RefObject<number>;
   sit: RefObject<number>;
@@ -15,6 +17,7 @@ type Props = {
 };
 /** Licensed skinned character. All inputs are presentation-only; no backend imports. */
 export function OfficeCharacter({
+  model,
   position,
   yaw,
   sit,
@@ -23,7 +26,15 @@ export function OfficeCharacter({
   look,
   player = false,
 }: Props) {
-  const gltf = useLoader(GLTFLoader, "/assets/characters/backend.glb");
+  const gltf = useLoader(GLTFLoader, characterUrl(model));
+  const { gl } = useThree();
+  useEffect(() => {
+    const attribute = player ? "playerCharacter" : "backendCharacter";
+    gl.domElement.dataset[attribute] = model;
+    return () => {
+      delete gl.domElement.dataset[attribute];
+    };
+  }, [gl, model, player, gltf]);
   const rig = useMemo(() => {
     const object = clone(gltf.scene),
       mixer = new THREE.AnimationMixer(object);

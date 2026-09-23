@@ -44,7 +44,7 @@ Browser tests require installed Google Chrome and the running dev server. They u
 
 ## Scope and security
 
-This is phases C/D, not the complete MVP or production deployment. There is **one** backend NPC, one player and an empty spare desk. The visual spike now uses a licensed Rocketbox skinned character with five animation clips, PBR texture maps, detailed original office furniture and a close conversation camera. NPC and player currently share one model. This is not MetaHuman-level fidelity: identity/wardrobe variation, facial animation, foot IK and final typing motion remain unfinished. See [visual asset notes](../docs/virtual-office/VISUAL_ASSETS.md) for provenance, conversion and measured limits.
+This is phases C/D, not the complete MVP or production deployment. There is **one** backend NPC, one player and an empty spare desk. The visual spike now uses a licensed Rocketbox skinned character with five animation clips, PBR texture maps, detailed original office furniture and a close conversation camera. The **Персонажи** menu selects independent male/female looks for the player and Backend: four complete presets with different hair, clothing and footwear, persisted locally. Only the two selected models load; changing appearance never sends a backend command. This is not MetaHuman-level fidelity: separately interchangeable wardrobe parts, facial animation, foot IK and final typing motion remain unfinished. See [visual asset notes](../docs/virtual-office/VISUAL_ASSETS.md) for provenance, conversion and measured limits.
 
 The local mock gateway deliberately binds only loopback, validates Host/Origin, uses expiring one-use WebSocket tickets, limits frames/connections and rejects unknown command fields. It has no real credentials or agent-system imports. **It has no owner authentication, multi-user isolation or public deployment authorization. Do not expose it through a tunnel/reverse proxy.** Hosted/live mode must add and test those boundaries first. Chat text is shared among local mock clients; do not enter secrets.
 
@@ -59,8 +59,11 @@ The delivered GLB and texture files are already committed; no downloads are need
 ```sh
 bun run assets:fetch   # fetch pinned, checksum-verified source assets
 bun run dev            # leave running in a separate terminal
-bun run assets:build   # isolated Chrome converts FBX/TGA to GLB
+bun run assets:build   # legacy baseline model
+bun run assets:variants # four current appearance presets
 node tools/profile-scene.mjs
 ```
 
 Asset reconstruction requires network access, local Chrome and enough disk space for the ignored source FBX/TGA files. A regenerated GLB can differ across browser image encoders: review it, then deliberately update its hash/size in `assets/manifest.json`. The profiler uses only mock commands; it writes local screenshots and a bounded CPU submission sample into ignored `.runtime/`. It is not a GPU or ten-minute target-device benchmark.
+
+Run the browser suite and scene profiler sequentially: both issue commands to the same mock gateway. Concurrent runs can interrupt the idle walk scenario.

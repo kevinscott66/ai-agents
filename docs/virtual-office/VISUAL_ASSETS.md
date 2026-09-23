@@ -1,31 +1,40 @@
-# Visual asset spike — 2026-09-23
+# Visual assets — 2026-09-23
 
-The five user references establish a realistic office direction: human proportions and clothing, fabric cubicles, wood floors, daylight, dark structural elements, believable chairs/monitors, and close character interaction. Reference images are not redistributed as product assets. This increment improves one NPC/workstation before roster scaling; it does not claim the references' final photorealistic quality.
+The five user references establish a realistic office direction: human proportions and clothing, fabric cubicles, wood floors, daylight, dark structural elements, believable chairs/monitors, and close character interaction. Reference images are not redistributed as product assets. The current increment implements selectable appearances for one NPC and one player; it does not claim the references' final photorealistic quality.
 
-## Delivered
+## Appearance presets
 
-- Microsoft Rocketbox `Business_Male_04`, MIT, fixed repository revision; 7,326 triangles. One shared model, independent cloned skeletons for NPC/player. Not a MetaHuman model and no MetaHuman branding.
-- Five Rocketbox clips: idle breathing, seated breathing, walking, sit down and stand up. Retained 54 body/finger tracks per clip; world navigation controls X/Z, animation controls vertical posture. Limited arm CCD places wrists near the keyboard; small gaze rotation follows proximity. Animation never changes gateway state.
-- Original rounded furniture, swivel chair, keyboard, dual screens, cubicle fabric, mug/papers/lamp, bookcase, plants and suspended ceiling. Static monitor graphics explicitly show MOCK, not fabricated live telemetry.
-- Poly Haven 1K wood color/normal/roughness, fabric normal and wall normal, CC0. Local assets only, no runtime provider calls.
-- Daylight/fill lighting; one shadow-casting light in balanced mode. Close camera during inspection; chair turns with the seated character and floating label hides in close-up. Updated cubicle collision footprints.
+The «Персонажи» menu selects complete looks independently for the player and Backend, with hair/clothes/footwear descriptions. Validated preferences persist in localStorage. The default player wears a light shirt; Backend uses the female bob/jacket look. A look does not change agent identity, role, task, permission or gateway state.
 
-Exact upstream URLs, checksums, transformations and licenses are maintained only in [asset manifest](../../virtual-office/assets/manifest.json). Redistributed MIT notice and texture credit are under `virtual-office/web/public/licenses/`.
+| Preset | Source model | Appearance |
+| --- | --- | --- |
+| suit | Business_Male_01 | Side-parted dark hair, black suit/red tie, leather shoes |
+| shirt | Business_Male_06 | Short dark haircut, light shirt/dark trousers, thicker-soled shoes |
+| bob | Business_Female_02 | Blonde bob/glasses, burgundy jacket/trousers, closed black shoes |
+| skirt | Business_Female_03 | Dark layered haircut, taupe jacket/skirt, heeled shoes |
 
-## Pipeline and budgets
+All models and motion clips are Microsoft Rocketbox, MIT. The original bald `backend.glb` remains as a legacy baseline, outside the current selector. These are complete authored appearance presets, not an editor that independently swaps garments, shoes or hair meshes. Exact source URLs, checksums, transformations, triangle counts, sizes and license paths are maintained in [asset manifest](../../virtual-office/assets/manifest.json).
 
-`tools/fetch-assets.py` fetches and checksum-validates pinned source FBX/TGA into ignored `.runtime/source-assets/`. `tools/build-character.mjs` uses an isolated Chrome page and the browser converter to export GLB. It requires the local dev server. Sources are never imported by the shipped app.
+Each model has idle breathing, seated breathing, walk, sit-down and stand-up clips. Female models use the female motion set; male models use the male set. Body/finger rotation tracks and root vertical motion are retained; controller navigation owns X/Z. Independent skeleton clones share immutable model geometry/materials. Bounded arm CCD places wrists near the keyboard; gaze tracks proximity. No facial animation, foot IK or final production typing animation.
 
-The converter converts TGA DataTextures to canvas-backed textures before GLTF export. In Three r175, the DataTexture exporter path uses `putImageData`, which ignores rescaling/flip transforms and cropped a 2048 atlas to 1024. The canvas path uses `drawImage`, preserving the full atlas and orientation. This was caught in visual inspection and corrected before delivery.
+## Office and conversion
 
-GLB: 2,913,476 bytes with four embedded 1024 JPEG maps. All delivered model/texture assets: 6,387,338 bytes. Guardrails: GLB <4 MB, total assets <8 MB; automated checks verify hashes, embedded images/buffers, licenses and all five clip names. Source downloads are larger and development-only.
+The furniture/monitor/paper graphics are original code; monitors explicitly label mock content. Poly Haven wood/fabric/wall maps are CC0 and served locally. Daylight/fill lighting uses one shadow light in balanced mode. The close interaction camera hides the floating label and swivels the chair with the seated character. Cubicle footprints participate in collision.
 
-The app retains a 30 FPS cap, hidden-tab pause, adaptive resolution, economy mode without shadows, and 2D mode that unmounts WebGL. The economy DPR is controlled by the Canvas owner so renderer reconfiguration cannot reset it; a browser regression assertion verifies the 1080-pixel render width. These controls reduce local work; hosting a WebGL app does not move rendering to the server.
+`tools/fetch-assets.py` fetches checksum-verified sources into ignored `.runtime/source-assets/`. `tools/build-variants.mjs` converts the four current presets using an isolated Chrome page and the shared browser converter. The dev server must be running. `tools/build-character.mjs` rebuilds the legacy model. Source files are development-only and never fetched by the shipped app.
 
-## Verification and limits
+The converter preserves original material slots and alpha channels. Opaque skin/clothing/normal maps export at up to 1024 JPEG; hair/glasses color-alpha maps use up to 512 PNG with double-sided alpha masking. A second alpha map is not multiplied into the already embedded alpha. TGA DataTextures are first converted to canvas-backed textures: Three r175's DataTexture exporter uses `putImageData`, which ignores scaling/flip transforms and previously cropped the atlas. The canvas path preserves the full atlas and orientation.
 
-14 Bun tests (117 assertions), production build/typecheck, and all four Chrome interaction/network/ambient scenarios passed after the visual changes. The existing idle → walk → window → return test also verifies that ambient movement creates no productivity events. Screenshots were inspected at 1440×1000; mobile 2D remains usable.
+## Loading and performance
 
-A repeatable short probe is `node tools/profile-scene.mjs`; raw results/screenshots remain in ignored `.runtime/`. Two approximately 6-second Chrome 153 headless samples at a 1440×1000 viewport: balanced 185 frames/6.17 s (~30 FPS), CPU submission p95 3.1 ms, render resolution 1440×839; economy 184 frames/6.15 s (~30 FPS), p95 2.0 ms, resolution 1080×629. Main-pass counters: 382 draw calls, 97,048 triangles. No page errors; 2D unmount and re-entry verified. CPU submission includes simulation/renderer calls but does not measure GPU completion, total frame latency, energy or memory. This is one NPC plus player, not the complete roster or a target-hardware guarantee.
+Safe startup remains 2D, with no scene/model/material downloads. Enabling 3D fetches the two selected models; other presets load only when chosen and then remain cached. The catalog budget and initial selected-model budget are separate in the manifest. Current defaults plus environment maps transfer about 11 MB, versus about 21 MB for the entire delivered catalog including the legacy asset. Tests check per-model/catalog/default-entry budgets, hashes, licenses, embedded images/buffers, alpha materials and all clip names.
 
-Remaining visual work: distinct identities/wardrobes, finer hands and typing motion, foot planting, facial animation, richer background architecture and final lighting. Some furniture/plants remain procedural. The model's age and low polygon count limit close-up fidelity. Full-roster instancing/LOD and ten-minute target-device profiling are required before claiming final performance. Live backend and public hosting/authentication remain separate increments.
+30 FPS cap, hidden-tab pause, adaptive DPR, economy without shadows and complete WebGL unmount in 2D remain. Hosting a WebGL app does not move rendering to a remote server. Per-model caching is bounded by the four-preset catalog; full-roster loading/LOD remains future work.
+
+A short Chrome 153 headless probe at viewport 1440×1000 with the default two distinct models measured approximately 30 rendered FPS in both modes. Balanced: CPU submission p95 4.0 ms, resolution 1440×839. Economy: p95 2.2 ms, 1080×629. Main-pass counters: 375 draw calls / 97,986 triangles. No page errors. This sample is about 6 seconds per mode and does not measure GPU completion, energy, total frame latency or a full roster. Raw output/screenshots remain in ignored `.runtime/`.
+
+## Verification
+
+Production build/typecheck and 14 Bun tests (227 assertions) passed. Browser coverage includes proximity/chat/task, mobile layout, reconnect, female-character idle walk/return, asset-free safe entry, and switching all four appearances independently on both actors, persistence after reload, lazy asset requests and no gateway events from look changes. Each preset was visually inspected in a close-up; the mobile menu was checked at 390×844. Run the browser suite and profiler sequentially: both mutate the shared mock scenario; an overlapping run interrupted the idle walk and required a sequential rerun.
+
+Remaining work: per-role assignment across the real roster, modular wardrobe if requested, facial animation, finer hands/foot planting, richer environment/final lighting, full-roster performance and owner-authenticated live backend. No public deployment in this increment.

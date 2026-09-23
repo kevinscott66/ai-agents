@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "stage": "single-character-visual-spike",
+  "stage": "four-appearance-presets",
   "runtimeExternalDownloads": false,
   "assets": [
     {
@@ -72,6 +72,86 @@
       "licensePath": "/licenses/polyhaven.txt",
       "bytes": 960241,
       "sha256": "0f1b4ea0c4707ea133f133c020923bddd8610a43a153281dad15d49f39ad9624"
+    },
+    {
+      "id": "suit",
+      "path": "/assets/characters/suit.glb",
+      "source": "https://github.com/microsoft/Microsoft-Rocketbox",
+      "revision": "0943055db6ec570bcef9f2c8b41c9e5467c808f9",
+      "license": "MIT",
+      "licensePath": "/licenses/rocketbox-MIT.txt",
+      "original": "Business_Male_01",
+      "processing": "tools/build-variants.mjs; 1024 JPEG skin/clothing/normal maps; 512 PNG opacity maps; source material slots and alpha preserved; gender-matched five motion clips",
+      "bytes": 3235200,
+      "sha256": "053d1bed66ed9361f74ed2b9121cf47312bf55855206227522be6d959ac8967a",
+      "triangles": 7435,
+      "animations": [
+        "idle",
+        "seated",
+        "walk",
+        "sitdown",
+        "standup"
+      ]
+    },
+    {
+      "id": "shirt",
+      "path": "/assets/characters/shirt.glb",
+      "source": "https://github.com/microsoft/Microsoft-Rocketbox",
+      "revision": "0943055db6ec570bcef9f2c8b41c9e5467c808f9",
+      "license": "MIT",
+      "licensePath": "/licenses/rocketbox-MIT.txt",
+      "original": "Business_Male_06",
+      "processing": "tools/build-variants.mjs; 1024 JPEG skin/clothing/normal maps; 512 PNG opacity maps; source material slots and alpha preserved; gender-matched five motion clips",
+      "bytes": 3009768,
+      "sha256": "f34e29abe8d10454dfc5858ed5cc49450bc00f5c539463faecf4ef802fc5615a",
+      "triangles": 6950,
+      "animations": [
+        "idle",
+        "seated",
+        "walk",
+        "sitdown",
+        "standup"
+      ]
+    },
+    {
+      "id": "bob",
+      "path": "/assets/characters/bob.glb",
+      "source": "https://github.com/microsoft/Microsoft-Rocketbox",
+      "revision": "0943055db6ec570bcef9f2c8b41c9e5467c808f9",
+      "license": "MIT",
+      "licensePath": "/licenses/rocketbox-MIT.txt",
+      "original": "Business_Female_02",
+      "processing": "tools/build-variants.mjs; 1024 JPEG skin/clothing/normal maps; 512 PNG opacity maps; source material slots and alpha preserved; gender-matched five motion clips",
+      "bytes": 4531148,
+      "sha256": "a42b4500fc7333f1f660e257544fba13d646e2dd0310c1fc633237797455624a",
+      "triangles": 8640,
+      "animations": [
+        "idle",
+        "seated",
+        "walk",
+        "sitdown",
+        "standup"
+      ]
+    },
+    {
+      "id": "skirt",
+      "path": "/assets/characters/skirt.glb",
+      "source": "https://github.com/microsoft/Microsoft-Rocketbox",
+      "revision": "0943055db6ec570bcef9f2c8b41c9e5467c808f9",
+      "license": "MIT",
+      "licensePath": "/licenses/rocketbox-MIT.txt",
+      "original": "Business_Female_03",
+      "processing": "tools/build-variants.mjs; 1024 JPEG skin/clothing/normal maps; 512 PNG opacity maps; source material slots and alpha preserved; gender-matched five motion clips",
+      "bytes": 3915184,
+      "sha256": "c7234b14abb8a808bfdd6bc7cfd3cbf387e367beac2b1e9e565bc6aa4939e00d",
+      "triangles": 8438,
+      "animations": [
+        "idle",
+        "seated",
+        "walk",
+        "sitdown",
+        "standup"
+      ]
     }
   ],
   "sourceFiles": [
@@ -124,6 +204,201 @@
       "file": "standup.fbx",
       "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Animations/all_animations_max_motextr_xyz/m_sit_stand_up_chair_01.max.fbx",
       "sha256": "69439ca9df8e330af75e82bd1b4e64e5e6858d3de0761515e67bad649a9989ac"
+    },
+    {
+      "file": "Business_Male_01/character.fbx",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Male_01/Export/Business_Male_01.fbx",
+      "sha256": "c39987e44c031674946c2a6929abceb99b21ef3322023bbf2e31bd1705e8a130"
+    },
+    {
+      "file": "Business_Male_01/m005_body_color.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Male_01/Textures/m005_body_color.tga",
+      "sha256": "d60e18359910606900af6a5eff1aeb46b7e4dcbe981964af53be4a9342e17c14"
+    },
+    {
+      "file": "Business_Male_01/m005_body_normal.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Male_01/Textures/m005_body_normal.tga",
+      "sha256": "602bf01daadd93e65d0c87200f1363c885da984b3fa3a5c657ec03e72f434301"
+    },
+    {
+      "file": "Business_Male_01/m005_body_specular.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Male_01/Textures/m005_body_specular.tga",
+      "sha256": "cfebf9fe037585fe15f4e068366524cccbab43e565e71abe63df0dcb51586b42"
+    },
+    {
+      "file": "Business_Male_01/m005_head_color.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Male_01/Textures/m005_head_color.tga",
+      "sha256": "a0f95b2f4b17b92c6c0bd21c2a76ae7e2b561f6623c33ef3e83c35dba75d210a"
+    },
+    {
+      "file": "Business_Male_01/m005_head_normal.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Male_01/Textures/m005_head_normal.tga",
+      "sha256": "230763a0bb95886e03f623172aeb16daa456c0a47c43c052eccd3cd91608a138"
+    },
+    {
+      "file": "Business_Male_01/m005_head_specular.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Male_01/Textures/m005_head_specular.tga",
+      "sha256": "3c24a87f1856bd4dfd36378645da7f9c4b1b1b6b7f8a38988db6a773f2dc8e5d"
+    },
+    {
+      "file": "Business_Male_01/m005_opacity_color.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Male_01/Textures/m005_opacity_color.tga",
+      "sha256": "7793ea45a31c2153cf1ef7319ce67c60fd6c84d59767ceb3e9f7f88160a720d9"
+    },
+    {
+      "file": "Business_Male_06/character.fbx",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Male_06/Export/Business_Male_06.fbx",
+      "sha256": "f0892405f3193c09c85a8391efd5219d8a6bc45ff293e6356175efd457e67b0b"
+    },
+    {
+      "file": "Business_Male_06/m025_body_color.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Male_06/Textures/m025_body_color.tga",
+      "sha256": "36abf3edc359181188961d24fa59e7140f32e2f328d1ba7b3d644aa8477b3a22"
+    },
+    {
+      "file": "Business_Male_06/m025_body_normal.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Male_06/Textures/m025_body_normal.tga",
+      "sha256": "cc7f8ba1360808bc82d122746f2a76fd38d590bbb92a265040363a4f895124a7"
+    },
+    {
+      "file": "Business_Male_06/m025_body_specular.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Male_06/Textures/m025_body_specular.tga",
+      "sha256": "148eeb11be849c11353db8d20ee1ad89868ca193cd403b41e07cd3050e683d8f"
+    },
+    {
+      "file": "Business_Male_06/m025_head_color.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Male_06/Textures/m025_head_color.tga",
+      "sha256": "5f0ab4b879f0bd8834390a2ad6f3c99b6a7821c6293ec1bcb17fa1ba87f0cf39"
+    },
+    {
+      "file": "Business_Male_06/m025_head_normal.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Male_06/Textures/m025_head_normal.tga",
+      "sha256": "9f699e14d05b13a1823df73e9ed1da11054075df524cbebdce548f02e3d038ff"
+    },
+    {
+      "file": "Business_Male_06/m025_head_specular.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Male_06/Textures/m025_head_specular.tga",
+      "sha256": "f45068b872e5ba3cebf4b0f03101aa02b78a32b98e72589643604d4bc4f1e989"
+    },
+    {
+      "file": "Business_Female_02/character.fbx",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Female_02/Export/Business_Female_02.fbx",
+      "sha256": "0819b017327f4293d522fea3f2dba94d1d8b2d408ec9253fb89f530523e24671"
+    },
+    {
+      "file": "Business_Female_02/f015_body_color.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Female_02/Textures/f015_body_color.tga",
+      "sha256": "60b84f3ba5315a76d324569e4ebee6d6bd7a461344158e5b0ef782d667db8285"
+    },
+    {
+      "file": "Business_Female_02/f015_body_normal.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Female_02/Textures/f015_body_normal.tga",
+      "sha256": "104603dc18c9569e44592c6f168fe7d28e666d1bd1439d72035fe006a6d917ba"
+    },
+    {
+      "file": "Business_Female_02/f015_body_specular.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Female_02/Textures/f015_body_specular.tga",
+      "sha256": "f770fce029c9d484b1e6bba7cfc82da2e10fa65a642e7df1d82333c61089eecb"
+    },
+    {
+      "file": "Business_Female_02/f015_glasses_normal.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Female_02/Textures/f015_glasses_normal.tga",
+      "sha256": "1b40b39bff1898c79e9ddbc0fea240018f0c0950c0ea90d759eb0fd68cb5c4c5"
+    },
+    {
+      "file": "Business_Female_02/f015_glasses_opacity_color.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Female_02/Textures/f015_glasses_opacity_color.tga",
+      "sha256": "f9ece0a65d4771eaf9b6db864bb5898519f84fc23345ad0fa05b9dadb47d3555"
+    },
+    {
+      "file": "Business_Female_02/f015_glasses_specular.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Female_02/Textures/f015_glasses_specular.tga",
+      "sha256": "1e79b1554e562236d4acf97e1dd5a2296fa7361b6af07c13d4982fb078dcfd8e"
+    },
+    {
+      "file": "Business_Female_02/f015_head_color.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Female_02/Textures/f015_head_color.tga",
+      "sha256": "0df4e3f107cb1b06576894617121e53642e5b2d480b88c2a321ba2c4632a1014"
+    },
+    {
+      "file": "Business_Female_02/f015_head_normal.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Female_02/Textures/f015_head_normal.tga",
+      "sha256": "7ff5ade4f86f7fd2f4425f7417515c50491bfefcaada01a11563c9c5e068c65d"
+    },
+    {
+      "file": "Business_Female_02/f015_head_specular.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Female_02/Textures/f015_head_specular.tga",
+      "sha256": "e4f586d6e379ca29a41427d8447ca1eb9574c6b12a003d0ae5a64565c603378b"
+    },
+    {
+      "file": "Business_Female_02/f015_opacity_color.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Female_02/Textures/f015_opacity_color.tga",
+      "sha256": "15cff3cd49521da8679ee0087c8aa2b8414c2b3a0cc9ec775c5225ef1dec6b81"
+    },
+    {
+      "file": "Business_Female_03/character.fbx",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Female_03/Export/Business_Female_03.fbx",
+      "sha256": "5ed65d8591d7117adde33fb6896af98840a7cc52f21db298ae71a1e8ac0cd090"
+    },
+    {
+      "file": "Business_Female_03/f016_body_color.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Female_03/Textures/f016_body_color.tga",
+      "sha256": "25876a06194932b7e36d5b10cf123e6f317e8055dd335690851d23812cf916ea"
+    },
+    {
+      "file": "Business_Female_03/f016_body_normal.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Female_03/Textures/f016_body_normal.tga",
+      "sha256": "5ae33c019ad8319ce69e67c8ad40c4e5d8a5a70681558c976e1450069d239f03"
+    },
+    {
+      "file": "Business_Female_03/f016_body_specular.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Female_03/Textures/f016_body_specular.tga",
+      "sha256": "22df1864ba1fa3b0ba915681c358f88bb3a83ccea4f942a5443ca6778e5dcbd4"
+    },
+    {
+      "file": "Business_Female_03/f016_head_color.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Female_03/Textures/f016_head_color.tga",
+      "sha256": "cd7b9b7fa318866143cb1c5b118455545e36b5ef3cd86155f4096bcacfe2f4e2"
+    },
+    {
+      "file": "Business_Female_03/f016_head_normal.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Female_03/Textures/f016_head_normal.tga",
+      "sha256": "4572172bff449872dd78854f243b1b441cab367732af9b313762cbf9a29dbdda"
+    },
+    {
+      "file": "Business_Female_03/f016_head_specular.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Female_03/Textures/f016_head_specular.tga",
+      "sha256": "8734f566067c1af6f68804627af36f6f2ba51eeeec07b50db28a9f6cc3e6f984"
+    },
+    {
+      "file": "Business_Female_03/f016_opacity_color.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Female_03/Textures/f016_opacity_color.tga",
+      "sha256": "b474fbbead89fbbecf6d05d152295c5fe9e1dab2cc0c76aa7ab49d5da70b24f8"
+    },
+    {
+      "file": "female-motion/idle.fbx",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Animations/all_animations_max_motextr_static/f_idle_breathe_01.max.fbx",
+      "sha256": "e470ba984484149c8269772b7640b754bd996ba83b23ae75535128412997aa45"
+    },
+    {
+      "file": "female-motion/seated.fbx",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Animations/all_animations_max_motextr_static/f_sit_chair_breathe_01.max.fbx",
+      "sha256": "3ca0abad7b573b22b3b9684d96835ce8bdc956e11e7008f86d9c66d3eca38be7"
+    },
+    {
+      "file": "female-motion/walk.fbx",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Animations/all_animations_max_motextr_xy/f_walk_neutral_01.max.fbx",
+      "sha256": "20238709c689d46f5864aebaa58918cc1233cb9045b24aa4d58cf2752786a73b"
+    },
+    {
+      "file": "female-motion/sitdown.fbx",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Animations/all_animations_max_motextr_xyz/f_sit_down_chair_01.max.fbx",
+      "sha256": "6ef5c1d78ed9050e722795cb2edca96e9551647a47729cab1d84a4c8383a3ed5"
+    },
+    {
+      "file": "female-motion/standup.fbx",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Animations/all_animations_max_motextr_xyz/f_sit_stand_up_chair_01.max.fbx",
+      "sha256": "c9e35246ca52ddf85c6a6d9d1da2f064eb0d7089393d3d92667eff6c1da23a20"
     }
   ],
   "environment": {
@@ -131,8 +406,13 @@
     "provenance": "Original geometry and monitor/paper graphics; licensed PBR maps listed above"
   },
   "limitations": [
-    "One shared character asset for NPC and player; not final identity/wardrobe",
-    "No facial animation, foot IK or production-quality typing motion",
-    "13-character target and target hardware not yet validated"
-  ]
+    "Complete appearance presets, not separately interchangeable clothing/hair/shoe meshes",
+    "No facial animation or foot IK; typing uses bounded arm positioning",
+    "Full-roster target and target hardware not yet validated"
+  ],
+  "budgets": {
+    "perCharacterBytes": 5000000,
+    "catalogBytes": 22000000,
+    "initial3DModelAndTextureBytes": 12000000
+  }
 }

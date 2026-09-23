@@ -17,9 +17,9 @@ Updated 2026-09-23. Branch `codex/virtual-office-slice`, isolated checkout `.wor
 
 From `virtual-office/`:
 
-- `bun test tests`: 14 pass, 0 fail, 117 assertions. Includes SQLite restart, rollback, idempotency, schema restrictions, sequence gaps, replay expiry, real HTTP/WS handshake, one-use tickets, origin denial, bounds and navigation.
-- `bun run typecheck` and `bun run build`: passed. Production output approximately 1.2 MB uncompressed, JS approximately 329 KB gzip total (plus 6.39 MB local model/textures); scene is a separate lazy chunk. This is bundle size, not runtime memory.
-- `bun run test:browser`: 4 pass in installed headless Chrome. Third-person approach/E → inspector → direct chat → mock task; mobile 390×844 no horizontal overflow; live socket cut + disabled commands + replay without reload; idle walk/window/return without productivity events. Screenshots examined at desktop 1440×1000 and mobile sizes, stored locally in ignored `.runtime/`.
+- `bun test tests`: 14 pass, 0 fail, 227 assertions. Includes SQLite restart, rollback, idempotency, schema restrictions, sequence gaps, replay expiry, real HTTP/WS handshake, one-use tickets, origin denial, bounds and navigation.
+- `bun run typecheck` and `bun run build`: passed. Production output approximately 1.2 MB uncompressed, JS approximately 329 KB gzip total (plus on-demand local model/textures; see asset notes); scene is a separate lazy chunk. This is bundle size, not runtime memory.
+- `bun run test:browser`: 6 scenarios in installed headless Chrome. Third-person approach/E → inspector → direct chat → mock task; mobile 390×844 no horizontal overflow; live socket cut + disabled commands + replay without reload; idle walk/window/return without productivity events. Screenshots examined at desktop 1440×1000 and mobile sizes, stored locally in ignored `.runtime/`.
 - User-facing native browser automation was unavailable (CUA kernel failed twice). Browser QA used an isolated headless Chrome profile instead, not a personal session.
 
 Found and fixed during validation: Bun-hosted Vite websocket proxy stalled upgrade (Vite now runs on Node); return route restarted before its completion branch (guarded empty path); disconnected animation no longer displays active typing; mobile connection status remains visible. The visual increment also fixed DataTexture atlas cropping during GLB conversion and economy DPR being reset by Canvas reconfiguration.
@@ -28,12 +28,16 @@ Found and fixed during validation: Bun-hosted Vite websocket proxy stalled upgra
 
 The full architecture documents remain target contracts. This slice has one `world.agent`, no authenticated owners, no full WorldState entity maps, 512-event replay retention, mock-only data and commands. The gateway binds loopback and must not be published/tunnelled as-is. No domain or production host was changed.
 
-The visual increment replaces capsule bodies with a licensed Rocketbox model and five animation clips, adds PBR materials and detailed original workstation geometry, and provides a close interaction camera. Provenance, exact budgets and limitations: [visual assets](VISUAL_ASSETS.md). This is an intermediate game-style result, not final photorealism. Foot IK, facial animation, final typing motion, unique identities and the 13-character performance budget remain unvalidated. No ten-minute production performance claim is made.
+The visual increments replace capsule bodies with four selectable male/female Rocketbox appearance presets and gender-matched animation clips, adds PBR materials and detailed original workstation geometry, and provides a close interaction camera. Provenance, exact budgets and limitations: [visual assets](VISUAL_ASSETS.md). This is an intermediate game-style result, not final photorealism. Foot IK, facial animation, final typing motion, separate wardrobe parts and the 13-character performance budget remain unvalidated. No ten-minute production performance claim is made.
 
-Next: confirm the visual direction, extract reusable per-agent configuration, add distinct identities and measure full-scene performance on target hardware; then E roster scaling to the 12 actual identities (including Lead). Keep the 13th workstation reserved. F owner-authenticated gateway/direct-role ingress and passive backend observer come afterwards, with independent boundary review and explicit deployment step. Existing iOS/OpenFlux and site/web changes remain untouched.
+Next: confirm the visual direction, extract reusable per-agent configuration, assign looks across the actual roster and measure full-scene performance on target hardware; then E roster scaling to the 12 actual identities (including Lead). Keep the 13th workstation reserved. F owner-authenticated gateway/direct-role ingress and passive backend observer come afterwards, with independent boundary review and explicit deployment step. Existing iOS/OpenFlux and site/web changes remain untouched.
 
 Local preview and run/verification commands: [prototype README](../../virtual-office/README.md).
 
 ## Safe entry after reported embedded-browser crash
 
 The user reported a “This page crashed” tab while the local HTTP page and gateway both returned successfully. The crash was not reproduced in isolated Chrome; native browser automation also failed to initialize, so its cause is unconfirmed. Startup now defaults to 2D and does not import the lazy scene or request model/material assets. 3D requires an explicit quality selection. This is a recovery path, not a claimed fix for the browser process. A regression scenario checks asset-free entry and working inspection.
+
+## Appearance presets
+
+Four complete male/female looks differ in hair, clothing and footwear. The player and Backend have independent selectors under «Персонажи». Validated local preferences survive reload; safe startup still remains 2D. Models load on selection, and changing looks produces no gateway event or role change. Source alpha channels are preserved in PNG for hair/glasses; body/normal maps use JPEG. The converter retains all material slots. Full appearance and rendering verification is documented in [visual assets](VISUAL_ASSETS.md).

@@ -17,6 +17,7 @@ import {
 } from "../../contracts/protocol";
 import { OfficeConnection, type ConnectionStatus } from "./connection";
 import "./style.css";
+import { CHARACTERS, isCharacterId, readAppearance } from "./characters";
 const Scene = lazy(() => import("./Scene"));
 const LABELS: Record<Activity, string> = {
   OFFLINE: "Не в сети",
@@ -68,6 +69,14 @@ function time(at: string) {
   });
 }
 function App() {
+  const [appearance, setAppearance] = useState(readAppearance);
+  useEffect(() => {
+    try {
+      localStorage.setItem("office.appearance.v1", JSON.stringify(appearance));
+    } catch {
+      /* Optional preference only. */
+    }
+  }, [appearance]);
   const [world, setWorld] = useState<World | null>(null),
     [status, setStatus] = useState<ConnectionStatus>("connecting"),
     [panel, setPanel] = useState<"inspect" | "chat" | "task" | null>(null),
@@ -156,7 +165,56 @@ function App() {
           </span>
         </a>
         <div className="top-actions">
-          <span className="build-tag">ПРОТОТИП 01</span>
+          <details className="appearance-menu">
+            <summary>Персонажи</summary>
+            <div className="appearance-panel">
+              <span className="eyebrow">ВНЕШНОСТЬ</span>
+              <h2>Лица вашего офиса</h2>
+              {(["player", "backend"] as const).map((target) => {
+                const current = CHARACTERS.find(
+                  (c) => c.id === appearance[target],
+                )!;
+                return (
+                  <div className="appearance-choice" key={target}>
+                    <label htmlFor={`look-${target}`}>
+                      {target === "player"
+                        ? "Ваш персонаж"
+                        : "Сотрудник Backend"}
+                    </label>
+                    <select
+                      id={`look-${target}`}
+                      value={appearance[target]}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        if (isCharacterId(value))
+                          setAppearance((previous) => ({
+                            ...previous,
+                            [target]: value,
+                          }));
+                      }}
+                    >
+                      {CHARACTERS.map((character) => (
+                        <option key={character.id} value={character.id}>
+                          {character.label}
+                        </option>
+                      ))}
+                    </select>
+                    <p>
+                      {current.hair}
+                      <br />
+                      {current.clothes}
+                      <br />
+                      {current.shoes}
+                    </p>
+                  </div>
+                );
+              })}
+              <p className="appearance-note">
+                Готовые образы с причёской, одеждой и обувью. Внешность
+                сохраняется в этом браузере.
+              </p>
+            </div>
+          </details>
           <label className="quality-label">
             <span className="sr-only">Качество отображения</span>
             <select
@@ -178,6 +236,7 @@ function App() {
               fallback={<div className="scene-error">Готовим офис…</div>}
             >
               <Scene
+                appearance={appearance}
                 stale={!live}
                 agent={agent}
                 interacting={panel !== null}

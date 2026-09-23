@@ -11,6 +11,7 @@ SOURCE.mkdir(parents=True, exist_ok=True)
 
 for entry in MANIFEST['sourceFiles']:
     target = SOURCE / entry['file']
+    target.parent.mkdir(parents=True, exist_ok=True)
     if not target.exists():
         subprocess.run(['curl', '--fail', '--location', '--retry', '2', entry['url'], '-o', str(target)], check=True)
     digest = hashlib.sha256(target.read_bytes()).hexdigest()
