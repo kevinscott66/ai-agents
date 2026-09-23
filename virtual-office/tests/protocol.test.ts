@@ -161,10 +161,10 @@ test("projection and chat histories bounded", () => {
   s.close();
 });
 test("navigation routes around desk and respects room; sliding cannot pass through it", () => {
-  const path = findPath({ x: -1.65, z: -1.7 }, { x: 0.9, z: -3.8 });
+  const path = findPath({ x: -1.65, z: -1.7 }, { x: 0.9, z: -8.6 });
   expect(path.length).toBeGreaterThan(0);
   expect(path.every((p) => walkable(p, 0.23))).toBe(true);
   const blocked = slide({ x: -1.65, z: -1.8 }, 0, -0.3);
   expect(blocked.z).toBe(-1.8);
-  expect(walkable({ x: 8, z: 0 })).toBe(false);
+  expect(walkable({ x: 10, z: 0 })).toBe(false);
 });

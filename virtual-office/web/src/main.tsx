@@ -1,3 +1,4 @@
+import { ROSTER, seatNumber, type RoleId } from "./roster";
 import {
   Component,
   Suspense,
@@ -69,10 +70,12 @@ function time(at: string) {
   });
 }
 function App() {
+  const [focusedRole, setFocusedRole] = useState<RoleId | null>(null);
+  const focusedMember = ROSTER.find((m) => m.id === focusedRole);
   const [appearance, setAppearance] = useState(readAppearance);
   useEffect(() => {
     try {
-      localStorage.setItem("office.appearance.v1", JSON.stringify(appearance));
+      localStorage.setItem("office.appearance.v2", JSON.stringify(appearance));
     } catch {
       /* Optional preference only. */
     }
@@ -111,7 +114,17 @@ function App() {
   useEffect(() => {
     chatEnd.current?.scrollIntoView({ block: "nearest" });
   }, [world?.messages.length, panel]);
-  const open = useCallback(() => setPanel("inspect"), []);
+  const open = useCallback(() => {
+    setFocusedRole(null);
+    setPanel("inspect");
+  }, []);
+  const selectRole = (id: RoleId) => {
+    if (id === "backend") open();
+    else {
+      setPanel(null);
+      setFocusedRole(id);
+    }
+  };
   const live = status === "live",
     agent = world?.agent;
   const send = async (cmd: Command) => {
@@ -165,6 +178,23 @@ function App() {
           </span>
         </a>
         <div className="top-actions">
+          <label>
+            <span className="sr-only">Команда офиса</span>
+            <select
+              aria-label="Команда офиса"
+              value={focusedRole ?? ""}
+              onChange={(e) => selectRole(e.target.value as RoleId)}
+            >
+              <option value="" disabled>
+                Команда · 12
+              </option>
+              {ROSTER.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {seatNumber(m.id)} · {m.name} / {m.role}
+                </option>
+              ))}
+            </select>
+          </label>
           <details className="appearance-menu">
             <summary>Персонажи</summary>
             <div className="appearance-panel">
@@ -236,6 +266,8 @@ function App() {
               fallback={<div className="scene-error">Готовим офис…</div>}
             >
               <Scene
+                focusedRole={focusedRole}
+                onSelectRole={selectRole}
                 appearance={appearance}
                 stale={!live}
                 agent={agent}
@@ -252,7 +284,7 @@ function App() {
           <div className="flat-view">
             <div className="flat-grid" />
             <div className="flat-card">
-              <span className="eyebrow">РАБОЧЕЕ МЕСТО 01</span>
+              <span className="eyebrow">РАБОЧЕЕ МЕСТО 04</span>
               <div className="flat-monogram">
                 B<span>↗</span>
               </div>
@@ -278,7 +310,7 @@ function App() {
           <h1>
             Рабочее пространство<span>01</span>
           </h1>
-          <p>Один агент. Полный путь взаимодействия.</p>
+          <p>12 характеров. 12 ролей. Своя команда.</p>
         </div>
         <div className="connection">
           <span className={`dot ${live ? "live" : ""}`} />
@@ -418,6 +450,64 @@ function App() {
           </button>
         </div>
       )}
+      {focusedMember && (
+        <div
+          className="panel-layer"
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setFocusedRole(null);
+          }}
+        >
+          <button
+            className="scrim"
+            aria-label="Закрыть карточку"
+            onClick={() => setFocusedRole(null)}
+          />
+          <section
+            className="inspector"
+            role="dialog"
+            aria-modal="true"
+            aria-label={focusedMember.name}
+          >
+            <div className="inspector-top">
+              <span className="eyebrow">
+                МЕСТО {seatNumber(focusedMember.id)} / КОМАНДА
+              </span>
+              <button
+                autoFocus
+                className="close"
+                aria-label="Закрыть карточку"
+                onClick={() => setFocusedRole(null)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="profile">
+              <span className="avatar large">{focusedMember.name[0]}</span>
+              <div>
+                <h2>{focusedMember.name}</h2>
+                <p>{focusedMember.role}</p>
+              </div>
+            </div>
+            <div className="panel-scroll">
+              <h3>{focusedMember.responsibility}</h3>
+              <p>Молодая команда из России. Вымышленный персонаж.</p>
+              <p>
+                {CHARACTERS.find((c) => c.id === focusedMember.model)?.hair}
+              </p>
+              <p>
+                {CHARACTERS.find((c) => c.id === focusedMember.model)?.clothes}
+              </p>
+              <p>
+                {CHARACTERS.find((c) => c.id === focusedMember.model)?.shoes}
+              </p>
+              <div className="offline-note">
+                Не подключён. Рабочее место закреплено за этой ролью; реальные
+                задачи и диалог пока недоступны.
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
       {panel && agent && (
         <div
           className="panel-layer"
@@ -456,7 +546,7 @@ function App() {
             aria-labelledby="agent-title"
           >
             <div className="inspector-top">
-              <span className="eyebrow">РАБОЧЕЕ МЕСТО / 01</span>
+              <span className="eyebrow">РАБОЧЕЕ МЕСТО / 04</span>
               <button
                 ref={closeButton}
                 className="close"

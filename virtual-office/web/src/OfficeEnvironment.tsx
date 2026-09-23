@@ -1,4 +1,6 @@
-import { useFrame, useLoader } from "@react-three/fiber";
+import { ROSTER, type RoleId } from "./roster";
+import { KEYBOARD } from "./workstation";
+import { useFrame, useLoader, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, type RefObject } from "react";
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
@@ -45,6 +47,27 @@ function Block({
           : undefined
       }
     />
+  );
+}
+function KeyboardKeys({ material }: { material: THREE.Material }) {
+  const ref = useRef<THREE.InstancedMesh>(null);
+  useEffect(() => {
+    const matrix = new THREE.Matrix4();
+    for (let row = 0; row < 4; row++)
+      for (let col = 0; col < 14; col++) {
+        matrix.makeTranslation(
+          KEYBOARD.x - 0.26 + col * 0.039,
+          KEYBOARD.keyTop - 0.0065,
+          KEYBOARD.z - 0.07 + row * 0.043,
+        );
+        ref.current!.setMatrixAt(row * 14 + col, matrix);
+      }
+    ref.current!.instanceMatrix.needsUpdate = true;
+  }, []);
+  return (
+    <instancedMesh ref={ref} args={[undefined, material, 56]}>
+      <boxGeometry args={[0.032, 0.013, 0.032]} />
+    </instancedMesh>
   );
 }
 function Rod({
@@ -174,13 +197,23 @@ function surface(text: string, kind: "code" | "notes" | "paper") {
 export function OfficeEnvironment({
   onInspect,
   chairYaw,
+  chairSit,
+  overview,
+  onSelectRole,
 }: {
   onInspect: () => void;
   chairYaw: RefObject<number>;
+  chairSit: RefObject<number>;
+  overview: boolean;
+  onSelectRole: (id: RoleId) => void;
 }) {
+  const { gl } = useThree();
   const chairRef = useRef<THREE.Group>(null);
   useFrame(() => {
-    if (chairRef.current) chairRef.current.rotation.y = chairYaw.current;
+    if (chairRef.current && chairSit.current > 0.98)
+      chairRef.current.rotation.y = chairYaw.current;
+    if (chairRef.current)
+      gl.domElement.dataset.chairYaw = String(chairRef.current.rotation.y);
   });
   const loaded = useLoader(THREE.TextureLoader, [
     "/assets/materials/wood_floor_Diffuse.jpg",
@@ -274,7 +307,12 @@ export function OfficeEnvironment({
     [assets],
   );
   const m = assets.mats;
-  const monitor = (x: number, angle: number, index: number) => (
+  const monitor = (
+    x: number,
+    angle: number,
+    index: number,
+    select = onInspect,
+  ) => (
     <group position={[x, 0.815, -0.27]} rotation={[0, angle, 0]}>
       <Block at={[0, 0.008, 0]} size={[0.34, 0.015, 0.22]} material={m.black} />
       <Rod from={[0, 0, 0]} to={[0, 0.32, 0]} r={0.022} material={m.chrome} />
@@ -284,7 +322,7 @@ export function OfficeEnvironment({
         material={assets.display[index]}
         onClick={(e) => {
           e.stopPropagation();
-          onInspect();
+          select();
         }}
       >
         <planeGeometry args={[0.7, 0.41]} />
@@ -326,9 +364,10 @@ export function OfficeEnvironment({
       })}
     </group>
   );
-  const chair = (x: number, z: number) => (
+  const chair = (x: number, z: number, active = false) => (
     <group
-      ref={x === -1.65 ? chairRef : undefined}
+      ref={active ? chairRef : undefined}
+      name={active ? "backend-chair" : "station-chair"}
       position={[x, 0, z]}
       rotation={[0, Math.PI, 0]}
     >
@@ -387,7 +426,7 @@ export function OfficeEnvironment({
       ))}
     </group>
   );
-  const desk = (x: number, z: number, active: boolean) => (
+  const desk = (x: number, z: number, active: boolean, select = onInspect) => (
     <group position={[x, 0, z]}>
       <Block
         at={[0, 0.785, 0]}
@@ -429,24 +468,14 @@ export function OfficeEnvironment({
           />
         </group>
       ))}
-      {monitor(-0.43, 0.12, active ? 0 : 1)}
-      {monitor(0.4, -0.15, 1)}
+      {monitor(-0.43, 0.12, active ? 0 : 1, select)}
+      {active && monitor(0.4, -0.15, 1, select)}
       <Block
-        at={[-0.3, 0.829, 0.27]}
+        at={[KEYBOARD.x, KEYBOARD.y, KEYBOARD.z]}
         size={[0.57, 0.025, 0.2]}
         material={m.black}
       />
-      {Array.from({ length: 4 }, (_, row) =>
-        Array.from({ length: 14 }, (_, col) => (
-          <Block
-            key={`${row}-${col}`}
-            at={[-0.56 + col * 0.039, 0.847, 0.2 + row * 0.043]}
-            size={[0.032, 0.013, 0.032]}
-            radius={0.003}
-            material={m.white}
-          />
-        )),
-      )}
+      <KeyboardKeys material={m.white} />
       <Block
         at={[0.31, 0.818, 0.27]}
         size={[0.24, 0.006, 0.28]}
@@ -518,59 +547,67 @@ export function OfficeEnvironment({
   return (
     <group name="detailed-office">
       <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow material={m.floor}>
-        <planeGeometry args={[12, 10]} />
+        <planeGeometry args={[20, 20]} />
       </mesh>
-      <Block at={[0, 0.44, -5]} size={[12, 0.88, 0.12]} material={m.wall} />
-      <Block at={[0, 3.73, -5]} size={[12, 0.14, 0.12]} material={m.wall} />
-      <Block at={[-6, 1.9, 0]} size={[0.12, 3.8, 10]} material={m.wall} />
-      <Block at={[0, 0.08, -4.87]} size={[12, 0.16, 0.05]} material={m.black} />
-      <Block at={[-5.88, 0.08, 0]} size={[0.05, 0.16, 10]} material={m.black} />
-      <mesh position={[0, 2.25, -4.925]}>
-        <planeGeometry args={[10.3, 2.6]} />
+      <Block at={[0, 0.44, -10]} size={[20, 0.88, 0.12]} material={m.wall} />
+      <Block at={[0, 3.73, -10]} size={[20, 0.14, 0.12]} material={m.wall} />
+      <Block at={[-10, 1.9, 0]} size={[0.12, 3.8, 20]} material={m.wall} />
+      <Block at={[0, 0.08, -9.87]} size={[20, 0.16, 0.05]} material={m.black} />
+      <Block at={[-9.88, 0.08, 0]} size={[0.05, 0.16, 20]} material={m.black} />
+      <mesh position={[0, 2.25, -9.925]}>
+        <planeGeometry args={[18.3, 2.6]} />
         <meshBasicMaterial color="#b4c6cf" />
       </mesh>
       {Array.from({ length: 16 }, (_, i) => (
         <group key={i}>
           <Block
-            at={[-5 + i * 0.65, 1.3 + (i % 4) * 0.1, -4.86]}
+            at={[-5 + i * 0.65, 1.3 + (i % 4) * 0.1, -9.86]}
             size={[0.51, 0.8 + (i % 4) * 0.2, 0.015]}
             material={i % 2 ? m.white : m.cloth}
             radius={0}
           />
         </group>
       ))}
-      {[-5.2, -2.6, 0, 2.6, 5.2].map((x) => (
+      {[-9.2, -6.9, -4.6, -2.3, 0, 2.3, 4.6, 6.9, 9.2].map((x) => (
         <Block
           key={x}
-          at={[x, 2.25, -4.74]}
+          at={[x, 2.25, -9.74]}
           size={[0.065, 2.7, 0.11]}
           material={m.black}
         />
       ))}
       <Block
-        at={[0, 0.93, -4.7]}
-        size={[10.5, 0.07, 0.25]}
+        at={[0, 0.93, -9.7]}
+        size={[18.5, 0.07, 0.25]}
         material={m.white}
       />
       <Block
-        at={[0, 3.59, -4.73]}
-        size={[10.5, 0.06, 0.1]}
+        at={[0, 3.59, -9.73]}
+        size={[18.5, 0.06, 0.1]}
         material={m.black}
       />
       {Array.from({ length: 9 }, (_, i) => (
         <Block
           key={i}
-          at={[0, 3.44 - i * 0.039, -4.65]}
-          size={[10.3, 0.014, 0.07]}
+          at={[0, 3.44 - i * 0.039, -9.65]}
+          size={[18.3, 0.014, 0.07]}
           rotation={[0.2, 0, 0]}
           material={m.white}
           radius={0}
         />
       ))}
-      {desk(-1.65, -2.75, true)}
-      {desk(3.7, -2.8, false)}
-      {chair(-1.65, -1.7)}
-      {chair(3.7, -1.8)}
+      {ROSTER.map((member) => (
+        <group key={member.id}>
+          {desk(member.x, member.z, member.id === "backend", () =>
+            onSelectRole(member.id),
+          )}
+          {chair(
+            member.x,
+            member.z + (member.id === "backend" ? 0.9 : 1.05),
+            member.id === "backend",
+          )}
+        </group>
+      ))}
       <Block
         at={[-1.65, 0.8, -3.38]}
         size={[2.9, 1.4, 0.06]}
@@ -589,11 +626,11 @@ export function OfficeEnvironment({
       <mesh position={[-2.56, 1.2, -3.342]} material={assets.display[2]}>
         <planeGeometry args={[0.22, 0.3]} />
       </mesh>
-      <Block at={[-5.4, 1.05, -2]} size={[0.75, 2.1, 3]} material={m.wood} />
+      <Block at={[-9.4, 1.05, -2]} size={[0.75, 2.1, 3]} material={m.wood} />
       {[0.25, 0.8, 1.35, 1.9].map((y) => (
         <Block
           key={y}
-          at={[-4.99, y, -2]}
+          at={[-8.99, y, -2]}
           size={[0.05, 0.04, 2.86]}
           material={m.black}
         />
@@ -601,7 +638,7 @@ export function OfficeEnvironment({
       {Array.from({ length: 22 }, (_, i) => (
         <Block
           key={i}
-          at={[-4.94, 0.46 + (i % 3) * 0.55, -3.3 + Math.floor(i / 3) * 0.35]}
+          at={[-8.94, 0.46 + (i % 3) * 0.55, -3.3 + Math.floor(i / 3) * 0.35]}
           size={[0.25, 0.33, 0.055]}
           material={i % 3 ? m.blue : m.paper}
         />
@@ -609,71 +646,73 @@ export function OfficeEnvironment({
       {[-3, 2.8].map((x) => (
         <group key={x}>
           <Block
-            at={[x, 1.9, -4.7]}
+            at={[x, 1.9, -9.7]}
             size={[0.25, 3.8, 0.38]}
             material={m.blue}
           />
         </group>
       ))}
-      <Block at={[0, 3.78, 0]} size={[12, 0.06, 10]} material={m.black} />
-      {[-4, -1.5, 1, 3.5].map((x) =>
-        [-3.5, -0.6, 2.3].map((z) => (
-          <group key={`${x}:${z}`}>
-            <Block
-              at={[x, 3.67, z]}
-              size={[2.35, 0.075, 2.7]}
-              material={m.wall}
-            />
-            <Block
-              at={[x, 3.6, z]}
-              size={[0.65, 0.022, 0.36]}
-              material={m.white}
-            />
-            {[-0.22, -0.11, 0, 0.11, 0.22].map((v) => (
+      <group visible={!overview}>
+        <Block at={[0, 3.78, 0]} size={[20, 0.06, 20]} material={m.black} />
+        {[-4, -1.5, 1, 3.5].map((x) =>
+          [-3.5, -0.6, 2.3].map((z) => (
+            <group key={`${x}:${z}`}>
               <Block
-                key={v}
-                at={[x + v, 3.58, z]}
-                size={[0.016, 0.01, 0.27]}
-                material={m.black}
+                at={[x, 3.67, z]}
+                size={[2.35, 0.075, 2.7]}
+                material={m.wall}
               />
-            ))}
+              <Block
+                at={[x, 3.6, z]}
+                size={[0.65, 0.022, 0.36]}
+                material={m.white}
+              />
+              {[-0.22, -0.11, 0, 0.11, 0.22].map((v) => (
+                <Block
+                  key={v}
+                  at={[x + v, 3.58, z]}
+                  size={[0.016, 0.01, 0.27]}
+                  material={m.black}
+                />
+              ))}
+            </group>
+          )),
+        )}
+        {[-2, 2].map((x) => (
+          <group key={x}>
+            <Rod
+              from={[x - 1, 3.75, -1.8]}
+              to={[x - 1, 3.15, -1.8]}
+              r={0.004}
+              material={m.black}
+            />
+            <Rod
+              from={[x + 1, 3.75, -1.8]}
+              to={[x + 1, 3.15, -1.8]}
+              r={0.004}
+              material={m.black}
+            />
+            <Block
+              at={[x, 3.13, -1.8]}
+              size={[2.2, 0.06, 0.14]}
+              material={m.black}
+            />
+            <Block
+              at={[x, 3.096, -1.8]}
+              size={[2.14, 0.008, 0.11]}
+              material={m.lamp}
+            />
           </group>
-        )),
-      )}
-      {[-2, 2].map((x) => (
-        <group key={x}>
-          <Rod
-            from={[x - 1, 3.75, -1.8]}
-            to={[x - 1, 3.15, -1.8]}
-            r={0.004}
-            material={m.black}
-          />
-          <Rod
-            from={[x + 1, 3.75, -1.8]}
-            to={[x + 1, 3.15, -1.8]}
-            r={0.004}
-            material={m.black}
-          />
-          <Block
-            at={[x, 3.13, -1.8]}
-            size={[2.2, 0.06, 0.14]}
-            material={m.black}
-          />
-          <Block
-            at={[x, 3.096, -1.8]}
-            size={[2.14, 0.008, 0.11]}
-            material={m.lamp}
-          />
-        </group>
-      ))}
+        ))}
+      </group>
       <Block
-        at={[4.95, 0.34, 1.8]}
+        at={[7.5, 0.34, 1.8]}
         size={[1.25, 0.55, 2.5]}
         radius={0.08}
         material={m.cloth}
       />
       <Block
-        at={[5.48, 0.74, 1.8]}
+        at={[8.03, 0.74, 1.8]}
         size={[0.23, 0.72, 2.5]}
         radius={0.07}
         material={m.cloth}
@@ -681,18 +720,18 @@ export function OfficeEnvironment({
       {[0.8, 2.8].map((z) => (
         <Block
           key={z}
-          at={[4.95, 0.65, z]}
+          at={[7.5, 0.65, z]}
           size={[1.25, 0.6, 0.22]}
           radius={0.06}
           material={m.cloth}
         />
       ))}
-      <Block at={[2.8, 0.35, 1.8]} size={[0.9, 0.045, 1.4]} material={m.wood} />
+      <Block at={[5.8, 0.35, 1.8]} size={[0.9, 0.045, 1.4]} material={m.wood} />
       {[1.3, 2.3].map((z) => (
         <Rod
           key={z}
-          from={[2.8, 0, z]}
-          to={[2.8, 0.34, z]}
+          from={[5.8, 0, z]}
+          to={[5.8, 0.34, z]}
           r={0.035}
           material={m.black}
         />

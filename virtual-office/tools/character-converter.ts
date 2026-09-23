@@ -70,7 +70,11 @@ export async function loadSource(base: string, animationBase = base) {
 export async function inspect(base: string) {
   return (await loadSource(base)).summary;
 }
-export async function convert(base: string, animationBase = base) {
+export async function convert(
+  base: string,
+  animationBase = base,
+  textureSize = 1024,
+) {
   const { model, loader, summary } = await loadSource(base, animationBase);
   const sources = await Promise.all(
     ["idle", "seated", "walk", "sitdown", "standup"].map(async (name) => ({
@@ -175,7 +179,7 @@ export async function convert(base: string, animationBase = base) {
   const exporter = new GLTFExporter();
   const buffer = (await exporter.parseAsync(model, {
     binary: true,
-    maxTextureSize: 1024,
+    maxTextureSize: textureSize,
     animations: clips,
     onlyVisible: true,
   })) as ArrayBuffer;

@@ -1,3 +1,4 @@
+import { ROSTER } from "../web/src/roster";
 import { test, expect } from "@playwright/test";
 test("one-agent vertical slice: 3D, proximity, inspect, direct mock chat, events, 2D", async ({
   page,
@@ -154,7 +155,7 @@ test("safe entry does not load WebGL or 3D assets and keeps inspection available
   ).toEqual([]);
 });
 
-test("four appearance presets load on demand, remain independent and survive reload", async ({
+test("twelve team models and appearance presets load on demand, remain independent and survive reload", async ({
   page,
 }) => {
   test.setTimeout(65_000);
@@ -171,13 +172,15 @@ test("four appearance presets load on demand, remain independent and survive rel
   await page.getByLabel("Качество отображения").selectOption("low");
   await expect(page.locator("canvas")).toHaveAttribute(
     "data-backend-character",
-    "bob",
+    "noah",
   );
   await expect(page.locator("canvas")).toHaveAttribute(
     "data-player-character",
     "shirt",
   );
-  expect(new Set(models)).toEqual(new Set(["shirt.glb", "bob.glb"]));
+  expect(new Set(models)).toEqual(
+    new Set(["shirt.glb", ...ROSTER.map((m) => m.model + ".glb")]),
+  );
   await page.locator(".appearance-menu summary").click();
   for (const [player, backend] of [
     ["bob", "suit"],
@@ -200,7 +203,13 @@ test("four appearance presets load on demand, remain independent and survive rel
   }
   expect(await page.locator(".sequence").innerText()).toBe(sequence);
   expect(new Set(models)).toEqual(
-    new Set(["shirt.glb", "bob.glb", "suit.glb", "skirt.glb"]),
+    new Set([
+      "shirt.glb",
+      "bob.glb",
+      "suit.glb",
+      "skirt.glb",
+      ...ROSTER.map((m) => m.model + ".glb"),
+    ]),
   );
   await page.getByLabel("Ваш персонаж", { exact: true }).selectOption("skirt");
   await page
@@ -225,4 +234,41 @@ test("four appearance presets load on demand, remain independent and survive rel
     ),
   ).toBe(true);
   expect(errors).toEqual([]);
+});
+
+test("roster roles stay unconnected, typing reaches keys and empty chair stays still", async ({
+  page,
+}) => {
+  test.setTimeout(65_000);
+  await page.goto("/");
+  await expect(page.getByText("Gateway подключён")).toBeVisible();
+  await page.getByRole("button", { name: "Пишет код", exact: true }).click();
+  const sequence = await page.locator(".sequence").innerText();
+  await page.getByLabel("Качество отображения").selectOption("low");
+  await expect
+    .poll(
+      async () =>
+        Number(
+          await page.locator("canvas").getAttribute("data-typing-error"),
+        ) || 1,
+    )
+    .toBeLessThan(0.035);
+  for (const member of ROSTER.filter((m) => m.id !== "backend")) {
+    await page.getByLabel("Команда офиса").selectOption(member.id);
+    await expect(page.getByRole("dialog", { name: member.name })).toContainText(
+      "Не подключён",
+    );
+    await page
+      .getByRole("button", { name: "Закрыть карточку", exact: true })
+      .last()
+      .click();
+  }
+  expect(await page.locator(".sequence").innerText()).toBe(sequence);
+  await page.getByRole("button", { name: "Свободен", exact: true }).click();
+  await expect(page.locator(".ambient")).toContainText("идёт", {
+    timeout: 20_000,
+  });
+  const yaw = await page.locator("canvas").getAttribute("data-chair-yaw");
+  await page.waitForTimeout(4000);
+  expect(await page.locator("canvas").getAttribute("data-chair-yaw")).toBe(yaw);
 });

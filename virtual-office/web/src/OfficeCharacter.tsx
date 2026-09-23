@@ -1,3 +1,4 @@
+import { typingContact } from "./workstation";
 import { useFrame, useLoader, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, type RefObject } from "react";
 import * as THREE from "three";
@@ -7,6 +8,7 @@ import { clone } from "three/examples/jsm/utils/SkeletonUtils.js";
 
 type Props = {
   model: CharacterId;
+  actorId?: string;
   position: RefObject<THREE.Vector3>;
   yaw: RefObject<number>;
   sit: RefObject<number>;
@@ -18,6 +20,7 @@ type Props = {
 /** Licensed skinned character. All inputs are presentation-only; no backend imports. */
 export function OfficeCharacter({
   model,
+  actorId = "backend",
   position,
   yaw,
   sit,
@@ -29,12 +32,16 @@ export function OfficeCharacter({
   const gltf = useLoader(GLTFLoader, characterUrl(model));
   const { gl } = useThree();
   useEffect(() => {
-    const attribute = player ? "playerCharacter" : "backendCharacter";
+    const attribute = player
+      ? "playerCharacter"
+      : actorId === "backend"
+        ? "backendCharacter"
+        : `actor${actorId}`;
     gl.domElement.dataset[attribute] = model;
     return () => {
       delete gl.domElement.dataset[attribute];
     };
-  }, [gl, model, player, gltf]);
+  }, [gl, model, player, gltf, actorId]);
   const rig = useMemo(() => {
     const object = clone(gltf.scene),
       mixer = new THREE.AnimationMixer(object);
@@ -49,6 +56,7 @@ export function OfficeCharacter({
       gltf.animations.map((clip) => {
         const action = mixer.clipAction(clip);
         action.play();
+        action.time = (actorId.length * 0.37) % clip.duration;
         action.setEffectiveWeight(0);
         return [clip.name, action];
       }),
@@ -62,7 +70,10 @@ export function OfficeCharacter({
         upper: object.getObjectByName(`Bip01_${side}_UpperArm`) as THREE.Bone,
         elbow: object.getObjectByName(`Bip01_${side}_Forearm`) as THREE.Bone,
         hand: object.getObjectByName(`Bip01_${side}_Hand`) as THREE.Bone,
-        side: side === "L" ? 1 : -1,
+        fingertip: object.getObjectByName(
+          `Bip01_${side}_Finger12`,
+        ) as THREE.Bone,
+        side: side === "L" ? -1 : 1,
       })),
     };
   }, [gltf]);
@@ -83,6 +94,11 @@ export function OfficeCharacter({
       parentQ: new THREE.Quaternion(),
       desired: new THREE.Quaternion(),
       axis: new THREE.Vector3(1, 0, 0),
+      palm: new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(0, 1, 0),
+        Math.PI / 2,
+      ),
+      tip: new THREE.Vector3(),
     }),
     [],
   );
@@ -145,14 +161,23 @@ export function OfficeCharacter({
       for (const arm of rig.arms) {
         const weight = handWeight.current;
         const originalUpper = arm.upper.quaternion.clone(),
-          originalElbow = arm.elbow.quaternion.clone();
-        scratch.target.set(
-          arm.side * 0.16,
-          0.825 + Math.sin(clock.current * 8 + arm.side) * 0.003,
-          0.63,
-        );
-        root.current.localToWorld(scratch.target);
-        for (let iteration = 0; iteration < 5; iteration++)
+          originalElbow = arm.elbow.quaternion.clone(),
+          originalHand = arm.hand.quaternion.clone();
+        const orientPalm = () => {
+          arm.hand.parent!.getWorldQuaternion(scratch.parentQ).invert();
+          arm.hand.quaternion.copy(scratch.parentQ).multiply(scratch.palm);
+          arm.hand.updateWorldMatrix(false, true);
+        };
+        orientPalm();
+        // Solve the wrist from the actual index fingertip, not an arbitrary body offset.
+        scratch.tip.set(1.5, 0, 0); // distal phalanx end, skeleton authored in centimetres
+        arm.fingertip.localToWorld(scratch.tip);
+        arm.hand.getWorldPosition(scratch.b);
+        scratch.tip.sub(scratch.b);
+        scratch.target
+          .set(...typingContact(arm.side, clock.current))
+          .sub(scratch.tip);
+        for (let iteration = 0; iteration < 24; iteration++)
           for (const joint of [arm.elbow, arm.upper]) {
             joint.getWorldPosition(scratch.a);
             arm.hand.getWorldPosition(scratch.b);
@@ -168,6 +193,12 @@ export function OfficeCharacter({
             joint.quaternion.copy(scratch.desired);
             joint.updateWorldMatrix(false, true);
           }
+        orientPalm();
+        arm.hand.quaternion.slerpQuaternions(
+          originalHand,
+          arm.hand.quaternion.clone(),
+          weight,
+        );
         arm.upper.quaternion.slerpQuaternions(
           originalUpper,
           arm.upper.quaternion.clone(),
@@ -179,10 +210,25 @@ export function OfficeCharacter({
           weight,
         );
       }
+      if (actorId === "backend" && handWeight.current > 0.99) {
+        rig.object.updateMatrixWorld(true);
+        const errors = rig.arms.map((arm) => {
+          scratch.tip.set(1.5, 0, 0);
+          arm.fingertip.localToWorld(scratch.tip);
+          return scratch.tip.distanceTo(
+            scratch.target.set(...typingContact(arm.side, clock.current)),
+          );
+        });
+
+        gl.domElement.dataset.typingError = String(Math.max(...errors));
+      }
     }
   });
   return (
-    <group ref={root} name={player ? "player-character" : "backend-character"}>
+    <group
+      ref={root}
+      name={player ? "player-character" : `${actorId}-character`}
+    >
       <primitive object={rig.object} dispose={null} />
     </group>
   );

@@ -67,3 +67,7 @@ node tools/profile-scene.mjs
 Asset reconstruction requires network access, local Chrome and enough disk space for the ignored source FBX/TGA files. A regenerated GLB can differ across browser image encoders: review it, then deliberately update its hash/size in `assets/manifest.json`. The profiler uses only mock commands; it writes local screenshots and a bounded CPU submission sample into ignored `.runtime/`. It is not a GPU or ten-minute target-device benchmark.
 
 Run the browser suite and scene profiler sequentially: both issue commands to the same mock gateway. Concurrent runs can interrupt the idle walk scenario.
+
+### Twelve-role visual roster
+
+`web/src/roster.ts` assigns names, models and seats. Eleven roles are read-only/unconnected; Backend retains the mock gateway. `bun run assets:fetch` then `bun run assets:roster` (dev server running) rebuilds the roster; older selectable presets use `assets:variants`. Full 3D loads the twelve seats plus player, while initial 2D loads no models.

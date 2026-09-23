@@ -1199,3 +1199,23 @@ kbd {
     max-height: calc(100dvh - 130px);
   }
 }
+
+.top-actions > label > select {
+  max-width: 190px;
+  padding: 10px;
+  border: 1px solid #cdd2c2;
+  background: #f5f5ef;
+  color: #304033;
+  border-radius: 3px;
+}
+@media (max-width: 600px) {
+  .top-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .top-actions > label > select {
+    max-width: 150px;
+    font-size: 11px;
+    padding: 8px;
+  }
+}

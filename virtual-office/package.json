@@ -14,7 +14,8 @@
     "format:check": "prettier --check contracts gateway adapters tests browser web/src vite.config.ts playwright.config.ts tools/*.{ts,mjs}",
     "assets:fetch": "python3 tools/fetch-assets.py",
     "assets:build": "node tools/build-character.mjs",
-    "assets:variants": "node tools/build-variants.mjs"
+    "assets:variants": "node tools/build-variants.mjs",
+    "assets:roster": "node tools/build-roster.mjs"
   },
   "dependencies": {
     "@react-three/fiber": "9.1.2",

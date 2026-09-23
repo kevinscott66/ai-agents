@@ -1,3 +1,4 @@
+import { ROSTER } from "../web/src/roster";
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -51,6 +52,7 @@ test("licensed appearance assets are intact, self-contained and within download 
   }
   expect(total).toBeLessThan(manifest.budgets.catalogBytes);
   const initial = new Set([
+    ...ROSTER.map((m) => characterUrl(m.model)),
     characterUrl(DEFAULT_APPEARANCE.player),
     characterUrl(DEFAULT_APPEARANCE.backend),
   ]);

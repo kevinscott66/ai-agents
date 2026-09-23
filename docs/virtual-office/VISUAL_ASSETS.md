@@ -1,10 +1,10 @@
 # Visual assets — 2026-09-23
 
-The five user references establish a realistic office direction: human proportions and clothing, fabric cubicles, wood floors, daylight, dark structural elements, believable chairs/monitors, and close character interaction. Reference images are not redistributed as product assets. The current increment implements selectable appearances for one NPC and one player; it does not claim the references' final photorealistic quality.
+The five user references establish a realistic office direction: human proportions and clothing, fabric cubicles, wood floors, daylight, dark structural elements, believable chairs/monitors, and close character interaction. Reference images are not redistributed as product assets. The current increment implements twelve role avatars plus one controllable player; it does not claim the references' final photorealistic quality.
 
 ## Appearance presets
 
-The «Персонажи» menu selects complete looks independently for the player and Backend, with hair/clothes/footwear descriptions. Validated preferences persist in localStorage. The default player wears a light shirt; Backend uses the female bob/jacket look. A look does not change agent identity, role, task, permission or gateway state.
+The «Персонажи» menu selects complete looks independently for the player and Backend, with hair/clothes/footwear descriptions. Validated preferences persist in localStorage. The default player wears a light shirt; Backend uses the young adult red long-sleeve look. A look does not change agent identity, role, task, permission or gateway state.
 
 | Preset | Source model | Appearance |
 | --- | --- | --- |
@@ -15,7 +15,7 @@ The «Персонажи» menu selects complete looks independently for the pla
 
 All models and motion clips are Microsoft Rocketbox, MIT. The original bald `backend.glb` remains as a legacy baseline, outside the current selector. These are complete authored appearance presets, not an editor that independently swaps garments, shoes or hair meshes. Exact source URLs, checksums, transformations, triangle counts, sizes and license paths are maintained in [asset manifest](../../virtual-office/assets/manifest.json).
 
-Each model has idle breathing, seated breathing, walk, sit-down and stand-up clips. Female models use the female motion set; male models use the male set. Body/finger rotation tracks and root vertical motion are retained; controller navigation owns X/Z. Independent skeleton clones share immutable model geometry/materials. Bounded arm CCD places wrists near the keyboard; gaze tracks proximity. No facial animation, foot IK or final production typing animation.
+Each model has idle breathing, seated breathing, walk, sit-down and stand-up clips. Female models use the female motion set; male models use the male set. Body/finger rotation tracks and root vertical motion are retained; controller navigation owns X/Z. Independent skeleton clones share immutable model geometry/materials. Bounded arm CCD targets index fingertips against shared keyboard anchors; gaze tracks proximity. No facial animation, foot IK or final production typing animation.
 
 ## Office and conversion
 
@@ -27,7 +27,7 @@ The converter preserves original material slots and alpha channels. Opaque skin/
 
 ## Loading and performance
 
-Safe startup remains 2D, with no scene/model/material downloads. Enabling 3D fetches the two selected models; other presets load only when chosen and then remain cached. The catalog budget and initial selected-model budget are separate in the manifest. Current defaults plus environment maps transfer about 11 MB, versus about 21 MB for the entire delivered catalog including the legacy asset. Tests check per-model/catalog/default-entry budgets, hashes, licenses, embedded images/buffers, alpha materials and all clip names.
+Safe startup remains 2D, with no scene/model/material downloads. Enabling 3D fetches twelve role models plus the selected player; legacy optional presets load when selected. The catalog budget and initial selected-model budget are separate in the manifest. Full-roster entry is bounded at 48 MB; the catalog including legacy presets is bounded at 65 MB. Tests check per-model/catalog/default-entry budgets, hashes, licenses, embedded images/buffers, alpha materials and all clip names.
 
 30 FPS cap, hidden-tab pause, adaptive DPR, economy without shadows and complete WebGL unmount in 2D remain. Hosting a WebGL app does not move rendering to a remote server. Per-model caching is bounded by the four-preset catalog; full-roster loading/LOD remains future work.
 
@@ -35,6 +35,14 @@ A short Chrome 153 headless probe at viewport 1440×1000 with the default two di
 
 ## Verification
 
-Production build/typecheck and 14 Bun tests (227 assertions) passed. Browser coverage includes proximity/chat/task, mobile layout, reconnect, female-character idle walk/return, asset-free safe entry, and switching all four appearances independently on both actors, persistence after reload, lazy asset requests and no gateway events from look changes. Each preset was visually inspected in a close-up; the mobile menu was checked at 390×844. Run the browser suite and profiler sequentially: both mutate the shared mock scenario; an overlapping run interrupted the idle walk and required a sequential rerun.
+Production build/typecheck and 14 Bun tests (524 assertions) passed. Browser coverage includes proximity/chat/task, mobile layout, reconnect, character idle walk/return, asset-free safe entry, and switching all four appearances independently on both actors, persistence after reload, lazy asset requests and no gateway events from look changes. Each preset was visually inspected in a close-up; the mobile menu was checked at 390×844. Run the browser suite and profiler sequentially: both mutate the shared mock scenario; an overlapping run interrupted the idle walk and required a sequential rerun.
 
-Remaining work: per-role assignment across the real roster, modular wardrobe if requested, facial animation, finer hands/foot planting, richer environment/final lighting, full-roster performance and owner-authenticated live backend. No public deployment in this increment.
+Remaining work: live role integration, modular wardrobe if requested, facial animation, finer hands/foot planting, richer environment/final lighting, full-roster performance and owner-authenticated live backend. No public deployment in this increment.
+
+## Twelve-person Russian team increment
+
+`web/src/roster.ts` owns twelve unique role/name/model/seat assignments. This is a fictional young adult team from Russia, visually aimed at approximately 18–24; the stock assets do not establish a real person's nationality or exact age. Six male and six female everyday looks replace business attire as the roster defaults. Hair, clothes and footwear are authored together. `assets/roster-sources.json` records the selected Adult models; `tools/build-roster.mjs` exports them at 512px texture resolution. The older four appearances remain selectable for player/Backend.
+
+The office is 20×20 metres with three columns and four rows. Role selection opens a close camera and read-only card. Only Backend has a mock runtime; eleven other seats explicitly say unconnected, with no fabricated tasks. Keyboard keys use instancing. The Backend seat is closer to the centred keyboard; finger targets use actual world coordinates and correct left/right sides. Only a fully seated occupant turns their chair; an empty chair retains its last angle.
+
+A short Chrome 153 probe with the full roster at 1440×1000 measured about 30 FPS in economy mode, 646 draw calls, 193878 visible triangles and CPU submission p95 5.3 ms (balanced 7.4 ms). This is a bounded local probe, not a ten-minute soak or target-device GPU guarantee.

@@ -1,18 +1,18 @@
+import { ROSTER, ROOM } from "./roster";
 export type Point = { x: number; z: number };
 export type Obstacle = { x: number; z: number; w: number; d: number };
 export const OBSTACLES: Obstacle[] = [
-  { x: -1.65, z: -2.75, w: 2.7, d: 1.1 },
+  ...ROSTER.map((m) => ({ x: m.x, z: m.z, w: 2.7, d: 1.1 })),
   { x: -1.65, z: -3.38, w: 2.9, d: 0.06 },
   { x: -3.13, z: -2.65, w: 0.06, d: 1.5 },
-  { x: -5.35, z: -2, w: 0.75, d: 3 },
-  { x: 3.7, z: -2.8, w: 2.7, d: 1.1 },
-  { x: 4.75, z: 1.8, w: 1.4, d: 2.5 },
-  { x: 2.8, z: 1.8, w: 0.9, d: 1.4 },
+  { x: -9.35, z: -2, w: 0.75, d: 3 },
+  { x: 7.5, z: 1.8, w: 1.4, d: 2.5 },
+  { x: 5.8, z: 1.8, w: 0.9, d: 1.4 },
 ];
 export function walkable(p: Point, radius = 0.25) {
   return (
-    Math.abs(p.x) < 5.6 - radius &&
-    Math.abs(p.z) < 4.6 - radius &&
+    Math.abs(p.x) < ROOM.limit - radius &&
+    Math.abs(p.z) < ROOM.limit - radius &&
     !OBSTACLES.some(
       (b) =>
         Math.abs(p.x - b.x) < b.w / 2 + radius &&
@@ -40,7 +40,7 @@ export function findPath(start: Point, end: Point): Point[] {
     parents = new Map<string, Point>(),
     cost = new Map([[key(s), 0]]),
     closed = new Set<string>();
-  for (let iterations = 0; open.length && iterations < 1400; iterations++) {
+  for (let iterations = 0; open.length && iterations < 3600; iterations++) {
     open.sort(
       (a, b) =>
         cost.get(key(a))! +

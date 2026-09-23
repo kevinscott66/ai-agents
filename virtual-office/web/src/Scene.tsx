@@ -1,3 +1,5 @@
+import { ROSTER, type RoleId } from "./roster";
+import { TeamMembers } from "./TeamMembers";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import * as THREE from "three";
@@ -47,6 +49,8 @@ function Label({
   );
 }
 function Simulation({
+  focusedRole,
+  onSelectRole,
   appearance,
   agent,
   interacting,
@@ -57,6 +61,8 @@ function Simulation({
   onMotion,
   stale,
 }: {
+  focusedRole: RoleId | null;
+  onSelectRole: (id: RoleId) => void;
   appearance: Appearance;
   stale: boolean;
   agent: Agent;
@@ -76,7 +82,7 @@ function Simulation({
     pyaw = useRef(Math.PI),
     psit = useRef(0),
     speed = useRef(0);
-  const npc = useRef(new THREE.Vector3(-1.65, 0, -1.7)),
+  const npc = useRef(new THREE.Vector3(-1.65, 0, -1.85)),
     nyaw = useRef(Math.PI),
     nsit = useRef(1),
     nspeed = useRef(0),
@@ -167,14 +173,16 @@ function Simulation({
     const dt = Math.min(delta, 0.06);
     time.current += dt;
     const k = keys.current,
-      dx = !interacting
-        ? Number(k.has("KeyD") || k.has("ArrowRight")) -
-          Number(k.has("KeyA") || k.has("ArrowLeft"))
-        : 0,
-      dz = !interacting
-        ? Number(k.has("KeyS") || k.has("ArrowDown")) -
-          Number(k.has("KeyW") || k.has("ArrowUp"))
-        : 0;
+      dx =
+        !interacting && !focusedRole
+          ? Number(k.has("KeyD") || k.has("ArrowRight")) -
+            Number(k.has("KeyA") || k.has("ArrowLeft"))
+          : 0,
+      dz =
+        !interacting && !focusedRole
+          ? Number(k.has("KeyS") || k.has("ArrowDown")) -
+            Number(k.has("KeyW") || k.has("ArrowUp"))
+          : 0;
     const input = new THREE.Vector2(dx, dz);
     if (input.length() > 0) input.normalize();
     const moveX =
@@ -227,7 +235,7 @@ function Simulation({
         nsit.current = 0;
         path.current = findPath(
           npc.current,
-          idle ? { x: 0.9, z: -3.8 } : { x: -1.65, z: -1.7 },
+          idle ? { x: 0.9, z: -8.6 } : { x: -1.65, z: -1.85 },
         );
         transition("walking");
       }
@@ -241,7 +249,7 @@ function Simulation({
           path.current.length > 0 &&
           path.current.at(-1)?.x !== -1.65
         )
-          path.current = findPath(npc.current, { x: -1.65, z: -1.7 });
+          path.current = findPath(npc.current, { x: -1.65, z: -1.85 });
         const target = path.current[0];
         if (target) {
           const x = target.x - npc.current.x,
@@ -262,7 +270,7 @@ function Simulation({
           }
         } else {
           nspeed.current = 0;
-          if (npc.current.distanceTo(new THREE.Vector3(-1.65, 0, -1.7)) < 0.15)
+          if (npc.current.distanceTo(new THREE.Vector3(-1.65, 0, -1.85)) < 0.15)
             transition("sitting");
           else {
             nextAmbient.current = time.current + 4;
@@ -275,7 +283,7 @@ function Simulation({
       mode.current === "window" &&
       (!idle || time.current > nextAmbient.current)
     ) {
-      path.current = findPath(npc.current, { x: -1.65, z: -1.7 });
+      path.current = findPath(npc.current, { x: -1.65, z: -1.85 });
       transition("walking");
     }
     if (mode.current === "sitting") {
@@ -313,14 +321,19 @@ function Simulation({
       : 0;
     if (mode.current === "seated" && !idle)
       nextAmbient.current = time.current + 8;
-    if (interacting) {
+    if (focusedRole) {
+      const member = ROSTER.find((m) => m.id === focusedRole)!;
+      v.set(member.x + 1.9, 1.7, member.z + 0.05);
+      camera.position.lerp(v, 1 - Math.exp(-dt * 4));
+      camera.lookAt(member.x - 0.35, 1.15, member.z + 1.05);
+    } else if (interacting) {
       v.set(npc.current.x + 1.9, 1.7, npc.current.z - 1.0);
       camera.position.lerp(v, 1 - Math.exp(-dt * 4));
       camera.lookAt(npc.current.x - 0.35, 1.15, npc.current.z);
     } else if (overview) {
-      v.set(5.2, 3.1, 4.1);
+      v.set(10, 13, 13);
       camera.position.lerp(v, 1 - Math.exp(-dt * 4));
-      camera.lookAt(0, 0, -1);
+      camera.lookAt(-1.5, 0, 0);
     } else {
       const distance = 3.3;
       v.set(
@@ -364,8 +377,12 @@ function Simulation({
           }}
         />
       )}
+      <TeamMembers onSelect={onSelectRole} />
       <OfficeEnvironment
+        overview={overview}
+        onSelectRole={onSelectRole}
         chairYaw={nyaw}
+        chairSit={nsit}
         onInspect={() => {
           if (reported.current) onInteract();
         }}
@@ -378,10 +395,10 @@ function Simulation({
         intensity={1.6}
         castShadow={!low}
         shadow-mapSize={[1536, 1536]}
-        shadow-camera-left={-8}
-        shadow-camera-right={8}
-        shadow-camera-top={8}
-        shadow-camera-bottom={-8}
+        shadow-camera-left={-12}
+        shadow-camera-right={12}
+        shadow-camera-top={12}
+        shadow-camera-bottom={-12}
         shadow-normalBias={0.04}
       />
     </>
@@ -423,6 +440,8 @@ function RenderBudget({ onDegrade }: { onDegrade: (value: boolean) => void }) {
   return null;
 }
 export default function Scene(props: {
+  focusedRole: RoleId | null;
+  onSelectRole: (id: RoleId) => void;
   appearance: Appearance;
   stale: boolean;
   agent: Agent;
