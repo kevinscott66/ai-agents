@@ -73,7 +73,7 @@ function App() {
     [panel, setPanel] = useState<"inspect" | "chat" | "task" | null>(null),
     [near, setNear] = useState(false),
     [overview, setOverview] = useState(false),
-    [quality, setQuality] = useState("balanced"),
+    [quality, setQuality] = useState("2d"),
     [motion, setMotion] = useState("seated"),
     [text, setText] = useState(""),
     [error, setError] = useState(""),
@@ -201,6 +201,7 @@ function App() {
               <p>
                 {LABELS[agent.state]} <span className="mock-pill">MOCK</span>
               </p>
+              <p>3D включается отдельно в меню качества сверху.</p>
               <button className="primary" onClick={open}>
                 Открыть рабочее место ↗
               </button>

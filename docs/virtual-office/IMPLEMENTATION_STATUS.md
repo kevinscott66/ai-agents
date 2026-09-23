@@ -33,3 +33,7 @@ The visual increment replaces capsule bodies with a licensed Rocketbox model and
 Next: confirm the visual direction, extract reusable per-agent configuration, add distinct identities and measure full-scene performance on target hardware; then E roster scaling to the 12 actual identities (including Lead). Keep the 13th workstation reserved. F owner-authenticated gateway/direct-role ingress and passive backend observer come afterwards, with independent boundary review and explicit deployment step. Existing iOS/OpenFlux and site/web changes remain untouched.
 
 Local preview and run/verification commands: [prototype README](../../virtual-office/README.md).
+
+## Safe entry after reported embedded-browser crash
+
+The user reported a “This page crashed” tab while the local HTTP page and gateway both returned successfully. The crash was not reproduced in isolated Chrome; native browser automation also failed to initialize, so its cause is unconfirmed. Startup now defaults to 2D and does not import the lazy scene or request model/material assets. 3D requires an explicit quality selection. This is a recovery path, not a claimed fix for the browser process. A regression scenario checks asset-free entry and working inspection.

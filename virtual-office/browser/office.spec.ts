@@ -6,6 +6,7 @@ test("one-agent vertical slice: 3D, proximity, inspect, direct mock chat, events
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto("/");
   await expect(page.getByText("Gateway подключён")).toBeVisible();
+  await page.getByLabel("Качество отображения").selectOption("balanced");
   await expect(page.locator("canvas")).toBeVisible();
   await page.getByRole("button", { name: "Пишет код", exact: true }).click();
   await page.waitForTimeout(2200);
@@ -115,6 +116,7 @@ test("ambient walk and return to chair never generate productivity events", asyn
   test.setTimeout(65_000);
   await page.goto("/");
   await expect(page.getByText("Gateway подключён")).toBeVisible();
+  await page.getByLabel("Качество отображения").selectOption("low");
   await page.getByRole("button", { name: "Свободен", exact: true }).click();
   await expect(page.locator(".agent-summary")).toContainText("Свободен");
   const seq = await page.locator(".sequence").innerText();
@@ -130,4 +132,24 @@ test("ambient walk and return to chair never generate productivity events", asyn
     timeout: 25_000,
   });
   await expect(page.locator(".agent-summary")).toContainText("Пишет код");
+});
+
+test("safe entry does not load WebGL or 3D assets and keeps inspection available", async ({
+  page,
+}) => {
+  const requested: string[] = [];
+  page.on("request", (request) => requested.push(request.url()));
+  await page.goto("/");
+  await expect(page.getByText("Gateway подключён")).toBeVisible();
+  await expect(page.getByLabel("Качество отображения")).toHaveValue("2d");
+  await expect(page.locator("canvas")).toHaveCount(0);
+  await page.getByRole("button", { name: "Открыть рабочее место ↗" }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  expect(
+    requested.filter((url) =>
+      /Scene\.tsx|OfficeCharacter|OfficeEnvironment|\.glb|assets\/materials/.test(
+        url,
+      ),
+    ),
+  ).toEqual([]);
 });

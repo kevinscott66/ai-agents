@@ -22,6 +22,8 @@ This serves the built app and gateway together at http://127.0.0.1:4318, storing
 
 ## Try the full path
 
+The page starts in 2D without loading WebGL or character/texture assets. Enable **3D · Экономный** explicitly in the quality menu to enter the office. This avoids automatic 3D startup in browsers whose rendering process crashes; it does not diagnose or fix a browser-process crash.
+
 1. Use WASD/arrows to approach Backend; hold the left mouse button and drag to turn the camera. E opens the workstation when within 2.15 m. The status label and active monitor are also interactive within this radius; the team card gives remote inspection.
 2. Inspect the task, file, branch, tests, progress and activity. Unavailable values are explicit; progress does not increase on a timer.
 3. Open **Диалог** and send text. The gateway returns a clearly labelled fixed mock response directly for Backend, not Lead. **Задача** creates a mock waiting task.
