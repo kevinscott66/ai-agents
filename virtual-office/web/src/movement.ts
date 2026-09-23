@@ -2,10 +2,12 @@ export type Point = { x: number; z: number };
 export type Obstacle = { x: number; z: number; w: number; d: number };
 export const OBSTACLES: Obstacle[] = [
   { x: -1.65, z: -2.75, w: 2.7, d: 1.1 },
+  { x: -1.65, z: -3.38, w: 2.9, d: 0.06 },
+  { x: -3.13, z: -2.65, w: 0.06, d: 1.5 },
   { x: -5.35, z: -2, w: 0.75, d: 3 },
-  { x: 3.7, z: -2.8, w: 2.5, d: 1.15 },
+  { x: 3.7, z: -2.8, w: 2.7, d: 1.1 },
   { x: 4.75, z: 1.8, w: 1.4, d: 2.5 },
-  { x: 2.7, z: 1.8, w: 0.8, d: 1.3 },
+  { x: 2.8, z: 1.8, w: 0.9, d: 1.4 },
 ];
 export function walkable(p: Point, radius = 0.25) {
   return (

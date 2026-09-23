@@ -48,6 +48,12 @@ test("one-agent vertical slice: 3D, proximity, inspect, direct mock chat, events
   await expect(page.getByRole("dialog")).not.toBeVisible();
   await page.getByRole("button", { name: "Тестирует", exact: true }).click();
   await expect(page.locator(".agent-summary")).toContainText("Тестирует");
+  await page.getByLabel("Качество отображения").selectOption("low");
+  await expect
+    .poll(() =>
+      page.locator("canvas").evaluate((c) => (c as HTMLCanvasElement).width),
+    )
+    .toBe(1080);
   await page.getByLabel("Качество отображения").selectOption("2d");
   await expect(page.locator("canvas")).toHaveCount(0);
   await page.getByRole("button", { name: "Открыть рабочее место ↗" }).click();

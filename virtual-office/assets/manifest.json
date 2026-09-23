@@ -1,22 +1,138 @@
 {
-  "version": 1,
-  "stage": "initial-prototype",
+  "version": 2,
+  "stage": "single-character-visual-spike",
+  "runtimeExternalDownloads": false,
   "assets": [
     {
-      "id": "office-environment",
-      "source": "web/src/Scene.tsx",
-      "provenance": "Original procedural geometry authored for this repository",
-      "externalDownloads": false,
-      "materials": "Three.js standard PBR materials, local colors, one 1024 shadow map"
+      "id": "backend-character",
+      "path": "/assets/characters/backend.glb",
+      "source": "https://github.com/microsoft/Microsoft-Rocketbox",
+      "revision": "0943055db6ec570bcef9f2c8b41c9e5467c808f9",
+      "license": "MIT",
+      "licensePath": "/licenses/rocketbox-MIT.txt",
+      "original": "Business_Male_04 + five Rocketbox motion clips",
+      "processing": "tools/character-converter.ts; meters; PBR; 1024 JPEG color/normal maps; body-only tracks; root X/Z removed",
+      "bytes": 2913476,
+      "sha256": "3996dda497c795b7ecb623d4de341f21873a403994b5ab856b89f5697e64e090",
+      "triangles": 7326,
+      "animations": [
+        "idle",
+        "seated",
+        "walk",
+        "sitdown",
+        "standup"
+      ]
     },
     {
-      "id": "initial-articulated-character",
-      "source": "web/src/Scene.tsx#Person",
-      "provenance": "Original articulated placeholder, no third-party model",
-      "skeleton": "hip/head, paired upper/lower arm and leg hierarchy",
-      "animations": "Procedural joint blending: walk, seated, sit/stand, typing, head tracking",
-      "limitations": "Not a production character or authored skeletal animation. No foot IK, grasp IK, facial rig, GLTF import or licensed mocap clips yet."
+      "id": "wood_floor-Diffuse",
+      "path": "/assets/materials/wood_floor_Diffuse.jpg",
+      "source": "https://polyhaven.com/a/wood_floor",
+      "downloadUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/wood_floor/wood_floor_diff_1k.jpg",
+      "license": "CC0-1.0",
+      "licensePath": "/licenses/polyhaven.txt",
+      "bytes": 734493,
+      "sha256": "2a1c07687b6dbb214c4b9213739c6d92d425f1f0fc8ab3ac157f105d78240789"
+    },
+    {
+      "id": "wood_floor-nor_gl",
+      "path": "/assets/materials/wood_floor_nor_gl.jpg",
+      "source": "https://polyhaven.com/a/wood_floor",
+      "downloadUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/wood_floor/wood_floor_nor_gl_1k.jpg",
+      "license": "CC0-1.0",
+      "licensePath": "/licenses/polyhaven.txt",
+      "bytes": 423303,
+      "sha256": "452247f0d0d1b7fc7f8324ff3b6ed60bcc6de1405f4284eeb8d9bce90d4939c2"
+    },
+    {
+      "id": "wood_floor-Rough",
+      "path": "/assets/materials/wood_floor_Rough.jpg",
+      "source": "https://polyhaven.com/a/wood_floor",
+      "downloadUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/wood_floor/wood_floor_rough_1k.jpg",
+      "license": "CC0-1.0",
+      "licensePath": "/licenses/polyhaven.txt",
+      "bytes": 527754,
+      "sha256": "061f1e1293251b2d28c76e3fac1ea9452b0e8648bb8f9b3728e09db386166e5c"
+    },
+    {
+      "id": "fabric_pattern_07-nor_gl",
+      "path": "/assets/materials/fabric_pattern_07_nor_gl.jpg",
+      "source": "https://polyhaven.com/a/fabric_pattern_07",
+      "downloadUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/fabric_pattern_07/fabric_pattern_07_nor_gl_1k.jpg",
+      "license": "CC0-1.0",
+      "licensePath": "/licenses/polyhaven.txt",
+      "bytes": 828071,
+      "sha256": "f6955bbdead9f023f2357f6f8808ed49627d10882cd2a3cb6b5a5ace155abc45"
+    },
+    {
+      "id": "plastered_wall_02-nor_gl",
+      "path": "/assets/materials/plastered_wall_02_nor_gl.jpg",
+      "source": "https://polyhaven.com/a/plastered_wall_02",
+      "downloadUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/plastered_wall_02/plastered_wall_02_nor_gl_1k.jpg",
+      "license": "CC0-1.0",
+      "licensePath": "/licenses/polyhaven.txt",
+      "bytes": 960241,
+      "sha256": "0f1b4ea0c4707ea133f133c020923bddd8610a43a153281dad15d49f39ad9624"
     }
   ],
-  "nextAssetGate": "Select legally reusable office-compatible rigged glTF and sit/stand/walk clips; record license, provenance, skeleton, size and measured browser budget before import."
+  "sourceFiles": [
+    {
+      "file": "character.fbx",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Male_04/Export/Business_Male_04.fbx",
+      "sha256": "eb550af41c5a3db4218a22fed0f0c2033387152fd526c86a2d7a5663703125df"
+    },
+    {
+      "file": "m015_body_color.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Male_04/Textures/m015_body_color.tga",
+      "sha256": "cb5e2a26dbd67f2ebe4cae00c204d5740f17c3eeec3dd1376568df9f26f49ba6"
+    },
+    {
+      "file": "m015_body_normal.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Male_04/Textures/m015_body_normal.tga",
+      "sha256": "00772b8335ca947db9ef0aaeb839ff3289cfc6b3b4667d7205f964df59069fc3"
+    },
+    {
+      "file": "m015_head_color.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Male_04/Textures/m015_head_color.tga",
+      "sha256": "45c56d522276b146a824d76aaa7167d96f8b6a2849e0682246f4b161464e6e9c"
+    },
+    {
+      "file": "m015_head_normal.tga",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Male_04/Textures/m015_head_normal.tga",
+      "sha256": "2d66095b9e84b49f57b4171b7e0450510d6a299dffeedcb6dc4a466e43196e2b"
+    },
+    {
+      "file": "idle.fbx",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Animations/all_animations_max_motextr_static/m_idle_breathe_01.max.fbx",
+      "sha256": "281735704260d96e882d13e3c77d0ede00ed5d2e40805cd305000b3e5cbb1090"
+    },
+    {
+      "file": "seated.fbx",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Animations/all_animations_max_motextr_static/m_sit_chair_breathe_01.max.fbx",
+      "sha256": "8e4dae334b6036bf7da539e2763d57b453b4f382cb1b024e441f5329ce66ea0c"
+    },
+    {
+      "file": "walk.fbx",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Animations/all_animations_max_motextr_xy/m_walk_neutral_01.max.fbx",
+      "sha256": "e6805ae6b6b49fe10f06c1b17b14ddde90d09b9fea689ac34793df252f44dcd0"
+    },
+    {
+      "file": "sitdown.fbx",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Animations/all_animations_max_motextr_xyz/m_sit_down_chair_01.max.fbx",
+      "sha256": "2dbfccc5febc8d37ff9d1593f75253cbd8d5393c6a448695184755535491e4cf"
+    },
+    {
+      "file": "standup.fbx",
+      "url": "https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Animations/all_animations_max_motextr_xyz/m_sit_stand_up_chair_01.max.fbx",
+      "sha256": "69439ca9df8e330af75e82bd1b4e64e5e6858d3de0761515e67bad649a9989ac"
+    }
+  ],
+  "environment": {
+    "source": "web/src/OfficeEnvironment.tsx",
+    "provenance": "Original geometry and monitor/paper graphics; licensed PBR maps listed above"
+  },
+  "limitations": [
+    "One shared character asset for NPC and player; not final identity/wardrobe",
+    "No facial animation, foot IK or production-quality typing motion",
+    "13-character target and target hardware not yet validated"
+  ]
 }

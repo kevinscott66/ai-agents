@@ -27,6 +27,7 @@
     "tests",
     "vite.config.ts",
     "browser",
-    "playwright.config.ts"
+    "playwright.config.ts",
+    "tools"
   ]
 }

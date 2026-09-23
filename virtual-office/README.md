@@ -42,10 +42,23 @@ Browser tests require installed Google Chrome and the running dev server. They u
 
 ## Scope and security
 
-This is phases C/D, not the complete MVP or production deployment. There is **one** backend NPC, one player and an empty spare desk. Environment and people are original initial geometry, not final realistic assets. The articulated placeholder verifies movement/interaction; glTF/mocap, advanced IK and final lighting remain an explicit asset/animation gate before claiming visual quality.
+This is phases C/D, not the complete MVP or production deployment. There is **one** backend NPC, one player and an empty spare desk. The visual spike now uses a licensed Rocketbox skinned character with five animation clips, PBR texture maps, detailed original office furniture and a close conversation camera. NPC and player currently share one model. This is not MetaHuman-level fidelity: identity/wardrobe variation, facial animation, foot IK and final typing motion remain unfinished. See [visual asset notes](../docs/virtual-office/VISUAL_ASSETS.md) for provenance, conversion and measured limits.
 
 The local mock gateway deliberately binds only loopback, validates Host/Origin, uses expiring one-use WebSocket tickets, limits frames/connections and rejects unknown command fields. It has no real credentials or agent-system imports. **It has no owner authentication, multi-user isolation or public deployment authorization. Do not expose it through a tunnel/reverse proxy.** Hosted/live mode must add and test those boundaries first. Chat text is shared among local mock clients; do not enter secrets.
 
 Protocol v1 slice uses a single `world.agent` and `agent.state.changed`/`chat.message` events. Snapshot and subscribe are synchronous at one writer barrier; replay is bounded to 512 events. SQLite commits projection, events and idempotency result together; slow sockets disconnect at 1 MiB. Per-owner streams, full entity maps, all live lifecycle evidence and production retention are still architecture targets. `contracts/` imports neither rendering nor runtime code.
 
 See [architecture](../docs/virtual-office/ARCHITECTURE.md), [implementation status](../docs/virtual-office/IMPLEMENTATION_STATUS.md) and [asset manifest](assets/manifest.json).
+
+## Rebuild visual assets / profile
+
+The delivered GLB and texture files are already committed; no downloads are needed to run the app. Development-only reconstruction:
+
+```sh
+bun run assets:fetch   # fetch pinned, checksum-verified source assets
+bun run dev            # leave running in a separate terminal
+bun run assets:build   # isolated Chrome converts FBX/TGA to GLB
+node tools/profile-scene.mjs
+```
+
+Asset reconstruction requires network access, local Chrome and enough disk space for the ignored source FBX/TGA files. A regenerated GLB can differ across browser image encoders: review it, then deliberately update its hash/size in `assets/manifest.json`. The profiler uses only mock commands; it writes local screenshots and a bounded CPU submission sample into ignored `.runtime/`. It is not a GPU or ten-minute target-device benchmark.

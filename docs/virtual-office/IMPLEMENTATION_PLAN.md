@@ -69,4 +69,4 @@ Rollback: отключить office observer/route feature flag, останов�
 - Live runtime/models/infra не проверены; точные состояния потребуют hooks.
 - Direct-role office chat пока отсутствует; используем mock на D, реальный ingress только F.
 - Веб-размещение не устраняет локальную GPU-нагрузку; обязательны adaptive quality, 30 FPS cap, pause hidden tab и доступный 2D режим.
-- Следующий шаг после проверенного one-agent slice: reusable controller/configuration и glTF/animation asset spike, затем E. Начальный articulated placeholder проверен; реалистичные ассеты и production auth ещё не реализованы.
+- One-agent glTF/animation spike выполнен: см. VISUAL_ASSETS.md. Следующий шаг — подтвердить визуальное направление, reusable controller/configuration, индивидуальные модели и измерения полного roster, затем E. Production auth ещё не реализован.

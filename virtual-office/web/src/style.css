@@ -310,8 +310,11 @@ main {
   display: flex;
   gap: 12px;
   align-items: center;
-  color: #626e59;
+  color: #344637;
   font-size: 11px;
+  padding: 12px 16px;
+  border-radius: 5px;
+  background: #f6f5edeb;
 }
 .controls > span:first-child {
   display: flex;

@@ -10,8 +10,10 @@
     "start": "bun run gateway/main.ts",
     "test": "bun test tests",
     "test:browser": "playwright test",
-    "format": "prettier --write contracts gateway adapters tests browser web/src vite.config.ts playwright.config.ts",
-    "format:check": "prettier --check contracts gateway adapters tests browser web/src vite.config.ts playwright.config.ts"
+    "format": "prettier --write contracts gateway adapters tests browser web/src vite.config.ts playwright.config.ts tools/*.{ts,mjs}",
+    "format:check": "prettier --check contracts gateway adapters tests browser web/src vite.config.ts playwright.config.ts tools/*.{ts,mjs}",
+    "assets:fetch": "python3 tools/fetch-assets.py",
+    "assets:build": "node tools/build-character.mjs"
   },
   "dependencies": {
     "@react-three/fiber": "9.1.2",
