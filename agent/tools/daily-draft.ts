@@ -130,6 +130,88 @@ async function recentPublishedTitles(): Promise<string[]> {
   }
 }
 
+/**
+ * Журнал того, что бот уже ПРЕДЛАГАЛ, — второй источник для дедупа.
+ *
+ * Аудит 2026-09-23: в «Избранном» юзербота накопился 71 неодобренный черновик,
+ * и в нём запуск GPT-6 Astra от 3 сентября лежал трижды — за 4, 5 и 6-е, — а
+ * Remixpoint, Consensys, анлок HYPE и DeepSeek по два раза. Причина в том, что
+ * `recentPublishedTitles` спрашивает у сайта ОПУБЛИКОВАННОЕ, а неодобренный
+ * черновик публикацией не становится: назавтра тема снова выглядела свежей.
+ *
+ * Поэтому дедуп сверяется и с тем, что уже уходило на превью, независимо от
+ * судьбы черновика. Автопубликация дыру не закрывает: сайт забирает выпуски по
+ * расписанию, и до следующего забора API о сегодняшнем выпуске не знает.
+ */
+export const PROPOSED_PATH = PENDING_PATH.replace(/[^/]+$/, "proposed-titles.json");
+export const PROPOSED_MAX_AGE_MS = 14 * 24 * HOUR_MS;
+
+interface ProposedEntry {
+  at: string;
+  title: string;
+}
+
+/** Терпимо к отсутствию и порче файла: дедуп — страховка, а не причина падать. */
+export function recentProposedTitles(
+  path = PROPOSED_PATH,
+  now = Date.now(),
+): string[] {
+  let rows: unknown;
+  try {
+    rows = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(rows)) return [];
+  return rows
+    .filter((r): r is ProposedEntry => {
+      if (!r || typeof r !== "object") return false;
+      const { at, title } = r as ProposedEntry;
+      if (typeof title !== "string" || !title.trim()) return false;
+      const age = now - Date.parse(String(at));
+      return Number.isFinite(age) && age >= 0 && age <= PROPOSED_MAX_AGE_MS;
+    })
+    .map((r) => r.title);
+}
+
+/** Дописать предложенные заголовки, разом выбросив протухшие. */
+export function recordProposedTitles(
+  titles: string[],
+  path = PROPOSED_PATH,
+  now = Date.now(),
+): void {
+  const fresh = titles.map((t) => String(t ?? "").trim()).filter(Boolean);
+  if (!fresh.length) return;
+  const at = new Date(now).toISOString();
+  // Дату каждой строки при перезаписи не сохраняем как есть только потому, что
+  // recentProposedTitles отдаёт одни заголовки: живые строки перечитываем сами.
+  let rows: ProposedEntry[] = [];
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf8"));
+    if (Array.isArray(raw)) {
+      rows = raw.filter((r: any): r is ProposedEntry => {
+        const age = now - Date.parse(String(r?.at));
+        return (
+          typeof r?.title === "string" &&
+          r.title.trim() !== "" &&
+          Number.isFinite(age) &&
+          age <= PROPOSED_MAX_AGE_MS
+        );
+      });
+    }
+  } catch {
+    rows = [];
+  }
+  rows.push(...fresh.map((title) => ({ at, title })));
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify(rows, null, 2), "utf8");
+  } catch (e) {
+    // Не роняем прогон: без журнала дедуп слабее, но черновик выйдет.
+    console.warn(`[daily-draft] журнал предложенных тем не записан: ${(e as Error).message}`);
+  }
+}
+
 // Частые крипто-филлеры: НЕ считаем их «отличительными» при дедупе, иначе две
 // РАЗНЫЕ новости с общими словами («запускает стейкинг…») ложно слипаются в дубль.
 const STOPWORDS = new Set([
@@ -295,7 +377,9 @@ export function articlesFromResearch(parsed: { articles: DraftArticle[] }): Draf
 
 /** Запустить ресёрч через подписку и вернуть статьи. */
 async function research(): Promise<DraftArticle[]> {
-  const published = await recentPublishedTitles();
+  // Опубликованное с сайта плюс то, что бот уже предлагал: неодобренный
+  // черновик в API не попадает, а тему занимает — см. recentProposedTitles.
+  const published = [...(await recentPublishedTitles()), ...recentProposedTitles()];
   let result = "";
   for await (const m of query({
     prompt: researchPrompt(published),
@@ -832,6 +916,9 @@ async function main(): Promise<void> {
       return;
     }
     console.log("[daily-draft] pending written →", PENDING_PATH);
+    // Тема занята с момента превью, а не с момента апрува: иначе завтрашний
+    // прогон предложит её заново.
+    recordProposedTitles(pending.articles.map((a) => a.title));
   } catch (e) {
     fail(`[daily-draft] failed to write pending: ${(e as Error).message}`, 1);
     return;
