@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "stage": "initial-prototype",
+  "assets": [
+    {
+      "id": "office-environment",
+      "source": "web/src/Scene.tsx",
+      "provenance": "Original procedural geometry authored for this repository",
+      "externalDownloads": false,
+      "materials": "Three.js standard PBR materials, local colors, one 1024 shadow map"
+    },
+    {
+      "id": "initial-articulated-character",
+      "source": "web/src/Scene.tsx#Person",
+      "provenance": "Original articulated placeholder, no third-party model",
+      "skeleton": "hip/head, paired upper/lower arm and leg hierarchy",
+      "animations": "Procedural joint blending: walk, seated, sit/stand, typing, head tracking",
+      "limitations": "Not a production character or authored skeletal animation. No foot IK, grasp IK, facial rig, GLTF import or licensed mocap clips yet."
+    }
+  ],
+  "nextAssetGate": "Select legally reusable office-compatible rigged glTF and sit/stand/walk clips; record license, provenance, skeleton, size and measured browser budget before import."
+}
