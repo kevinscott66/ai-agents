@@ -1,6 +1,6 @@
-# DOBROPALM Virtual Office — one-agent slice
+# DOBROPALM Virtual Office
 
-Web prototype with a real local WebSocket gateway and **mock agent activity**. No LLM, real agent system, external account or production service is called.
+Browser office with twelve role avatars and paired-owner access to the existing agent team. The local demo uses a separate WebSocket gateway with **mock activity** and makes no model calls; the production `/office/` build starts in real-agent mode. See [live integration](../docs/virtual-office/LIVE_INTEGRATION.md) for authentication and delivery.
 
 ## Run
 
@@ -44,7 +44,7 @@ Browser tests require installed Google Chrome and the running dev server. They u
 
 ## Scope and security
 
-This is phases C/D, not the complete MVP or production deployment. There is **one** backend NPC, one player and an empty spare desk. The visual spike now uses a licensed Rocketbox skinned character with five animation clips, PBR texture maps, detailed original office furniture and a close conversation camera. The **Персонажи** menu selects independent male/female looks for the player and Backend: four complete presets with different hair, clothing and footwear, persisted locally. Only the two selected models load; changing appearance never sends a backend command. This is not MetaHuman-level fidelity: separately interchangeable wardrobe parts, facial animation, foot IK and final typing motion remain unfinished. See [visual asset notes](../docs/virtual-office/VISUAL_ASSETS.md) for provenance, conversion and measured limits.
+The original phases C/D demo used one backend NPC and a player. The current scene has twelve role characters plus a player; this section records the original visual spike. The visual spike now uses a licensed Rocketbox skinned character with five animation clips, PBR texture maps, detailed original office furniture and a close conversation camera. The **Персонажи** menu selects independent male/female looks for the player and Backend: four complete presets with different hair, clothing and footwear, persisted locally. Only the two selected models load; changing appearance never sends a backend command. This is not MetaHuman-level fidelity: separately interchangeable wardrobe parts, facial animation, foot IK and final typing motion remain unfinished. See [visual asset notes](../docs/virtual-office/VISUAL_ASSETS.md) for provenance, conversion and measured limits.
 
 The local mock gateway deliberately binds only loopback, validates Host/Origin, uses expiring one-use WebSocket tickets, limits frames/connections and rejects unknown command fields. It has no real credentials or agent-system imports. **It has no owner authentication, multi-user isolation or public deployment authorization. Do not expose it through a tunnel/reverse proxy.** Hosted/live mode must add and test those boundaries first. Chat text is shared among local mock clients; do not enter secrets.
 

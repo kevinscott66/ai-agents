@@ -1,6 +1,8 @@
 # Virtual Office — implementation status
 
-Updated 2026-09-23. Branch `codex/virtual-office-slice`, isolated checkout `.worktrees/virtual-office`. Base `bd12dab1`. This is the first C/D increment, not the complete office or real-agent integration.
+Updated 2026-09-23. The office now includes twelve role avatars, a player and owner-authenticated direct-role integration. Delivery branch: `codex/virtual-office-live`; operational deployment/pairing state is recorded in the local CURRENT_STATE handoff and server component manifest. See [live integration](LIVE_INTEGRATION.md).
+
+The sections below retain the initial C/D demo-slice verification history. Statements about one mock runtime apply to the separate local demo gateway, not to the live `/api/web/` connection.
 
 ## Delivered
 
@@ -46,6 +48,6 @@ Sixteen selectable male/female looks differ in hair, clothing and footwear. The 
 
 Twelve fictional Russian team members are assigned unique appearances and permanent desks; roles match the existing twelve-role catalog including Lead. The additional eleven cards are explicitly unconnected. The player is a thirteenth visible person. See `web/src/roster.ts` and VISUAL_ASSETS.md for the visual and loading changes. Browser regression covers keyboard fingertip contact, stationary empty chair, role cards and unchanged event sequence during visual selection.
 
-## Live connection implementation (pending activation)
+## Live connection implementation
 
-Owner-authenticated direct-role ingress, atomic role bindings, native-turn projection and browser pairing/dialog/approval controls are implemented behind `NATIVE_OFFICE_ENABLED`. `/office/` can be served on the existing web-chat origin. See [integration and activation](LIVE_INTEGRATION.md). This is prepared code; production activation and owner-paired model smoke remain pending.
+Owner-authenticated direct-role ingress, atomic role bindings, native-turn projection and browser pairing/dialog/approval controls are implemented behind `NATIVE_OFFICE_ENABLED`. `/office/` can be served on the existing web-chat origin. See [integration and activation](LIVE_INTEGRATION.md). Production static delivery, CSP and unauthenticated API denial have been verified. Twelve role handlers start in the running team. A paid-model end-to-end result must not be claimed until an owner pairs a browser and completes the live smoke test. See the local handoff for the remaining user step.
