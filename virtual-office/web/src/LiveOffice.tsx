@@ -76,7 +76,8 @@ export function LiveOffice({
         setSnapshot(value);
         onSnapshot(value);
         for (const a of value.agents)
-          if (a.conversationId) dialogs.current[a.agentId] = a.conversationId;
+          if (a.conversationId && !dialogs.current[a.agentId])
+            dialogs.current[a.agentId] = a.conversationId;
         setError("");
       } catch (e) {
         if (active) {
@@ -219,6 +220,10 @@ export function LiveOffice({
             {snapshot ? "Реальная система подключена" : "Нет связи с системой"}
           </span>
           <button onClick={disconnect}>Отключить</button>
+          <small>
+            Ваши запросы, личные задачи и согласования. Фоновая работа без
+            привязки к вам здесь не отображается.
+          </small>
           {error && <p role="alert">{error}</p>}
         </div>
       )}

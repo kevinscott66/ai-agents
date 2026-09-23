@@ -4,14 +4,21 @@ const Role = z.enum(ROSTER.map((m) => m.id) as [RoleId, ...RoleId[]]);
 export const OfficeLiveSchema = z
   .object({
     source: z.literal("agent-team"),
-    scope: z.literal("office-native-turns"),
+    scope: z.enum(["office-native-turns", "owner-execution"]),
     agents: z
       .array(
         z.object({
           agentId: Role,
           name: z.string(),
           available: z.boolean(),
-          state: z.enum(["OFFLINE", "IDLE", "THINKING", "DONE", "ERROR"]),
+          state: z.enum([
+            "OFFLINE",
+            "IDLE",
+            "THINKING",
+            "WAITING",
+            "DONE",
+            "ERROR",
+          ]),
           runId: z.string().nullable(),
           updatedAt: z.string().nullable(),
           conversationId: z.string().nullable(),

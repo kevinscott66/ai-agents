@@ -1,3 +1,4 @@
+import { observeOfficeActivity } from "./office-activity.ts";
 import { inferenceProvider } from "./inference-provider.ts";
 import { roleModel } from "./role-models.ts";
 /**
@@ -205,6 +206,9 @@ export function explainEmptyStop(stop: string | null | undefined): string {
 }
 
 export async function runWithTools(opts: RunWithToolsOpts): Promise<string> {
+  return observeOfficeActivity(opts.triggerUserId, opts.agentKey, () => runObservedWithTools(opts));
+}
+async function runObservedWithTools(opts: RunWithToolsOpts): Promise<string> {
   // S1: если вход не завёл общий счётчик (userbot, Mini App, планировщик,
   // mac-bridge — все они начинают собственный ход), заводим его здесь. Так ни
   // один вход не может «забыть» потолок: дерево делегирований этого хода

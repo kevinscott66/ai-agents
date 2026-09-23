@@ -1,3 +1,7 @@
+import {createApproval} from '../lib/approvals';
+import {db} from '../lib/db';
+import {nativeTurnContext,persistNativeApprovalLink,nativeExecutionMarker} from '../lib/native-context';
+import {observeOfficeActivity} from '../lib/office-activity';
 import {test,expect} from 'bun:test';
 import {NativeAccess} from '../lib/native-access';
 import {nativeApi,configureNativeLead} from '../lib/native-api';
@@ -29,6 +33,13 @@ test('office direct roles are owner scoped, durable, idempotent and share owner 
   release();await new Promise(r=>setTimeout(r,20));
   const turn=await(await nativeApi(req('turns/'+id),store)).json() as any;expect(turn.status).toBe('done');expect(turn.replyDetails[0].agentKey).toBe('backend');
   expect((await post({id:crypto.randomUUID(),conversationId,text:'wrong role default'})).status).toBe(409);
+  const index=await(await nativeApi(req('conversations'),store)).json() as any;
+  expect(index.conversations.find((c:any)=>c.id===conversationId).agentKey).toBe('backend');
+  const resumed=await(await nativeApi(req('conversations',{id:conversationId,title:'keep role'}),store)).json() as any;
+  expect(resumed.conversation.agentKey).toBe('backend');
+  expect((await post({id:crypto.randomUUID(),conversationId,text:'iPhone follow-up',agentKey:resumed.conversation.agentKey})).status).toBe(202);
+  await new Promise(r=>setTimeout(r,20));expect(runs).toBe(2);
+
   process.env.NATIVE_OFFICE_ENABLED='false';expect((await post({...command,id:crypto.randomUUID()})).status).toBe(503);process.env.NATIVE_OFFICE_ENABLED='true';
   store.revoke(owner);expect((await nativeApi(req('office'),store)).status).toBe(401);
  }finally{release();restore();lead();store.db.close();for(const [k,v]of Object.entries(saved)){if(v===undefined)delete process.env[k];else process.env[k]=v;}}
@@ -49,4 +60,26 @@ test('role binding and uncertain turn state survive process restart without redi
  let store=new NativeAccess(path);try{store.createConversation(chat,owner,'QA');expect(store.start(id,'device',owner,'check',chat,[],undefined,'qa')).toBe('created');store.db.close();store=new NativeAccess(path);
  expect(store.get(id,'device')?.status).toBe('interrupted');expect(store.start(id,'device',owner,'check',chat,[],undefined,'qa')).toBe('duplicate');expect(store.start(crypto.randomUUID(),'device',owner,'check',chat)).toBe('conflict');
  }finally{store.db.close();rmSync(dir,{recursive:true,force:true});}
+});
+
+test('office waits for approval execution and scopes group activity to its initiator', async()=>{
+ const keys=['NATIVE_APP_ENABLED','NATIVE_OFFICE_ENABLED','MAC_USER_IDS','TELEGRAM_ALLOWED_GROUP_IDS'];
+ const saved=keys.map(k=>process.env[k]);
+ Object.assign(process.env,{NATIVE_APP_ENABLED:'true',NATIVE_OFFICE_ENABLED:'true',MAC_USER_IDS:owner+','+other,TELEGRAM_ALLOWED_GROUP_IDS:owner+','+other});
+ const store=new NativeAccess(':memory:');const token=store.redeem(store.pair(owner))!.token,foreign=store.redeem(store.pair(other))!.token;
+ const restore=configureNativeRole('qa',async()=>{});
+ const approval=createApproval({actionId:crypto.randomUUID(),chatId:Number(owner),requestedBy:'qa',actionType:'SEND_MESSAGE',payload:{}});
+ const read=async(t=token)=>{const s=await(await nativeApi(new Request('https://test/api/native/office',{headers:{authorization:'Bearer '+t}}),store)).json() as any;return s.agents.find((a:any)=>a.agentId==='qa').state;};
+ try {
+  nativeTurnContext.run({userId:owner,turnId:'test-turn',conversationId:'test-dialog',linkApproval:()=>{}},()=>persistNativeApprovalLink(db,approval.id,Number(owner)));
+  expect(await read()).toBe('WAITING');expect(await read(foreign)).toBe('IDLE');
+  await observeOfficeActivity(owner,'qa',async()=>{expect(await read()).toBe('THINKING');expect(await read(foreign)).toBe('IDLE');});
+  db.query("UPDATE approvals SET status='approved' WHERE id=?").run(approval.id);
+  db.query("UPDATE native_approval_links SET execution=? WHERE approval_id=?").run(nativeExecutionMarker,approval.id);
+  expect(await read()).toBe('WAITING');
+  db.query("UPDATE native_approval_links SET execution='running:previous-boot' WHERE approval_id=?").run(approval.id);
+  expect(await read()).toBe('ERROR');
+  db.query("UPDATE native_approval_links SET execution='completed' WHERE approval_id=?").run(approval.id);
+  expect(await read()).toBe('IDLE');
+ }finally {db.query('DELETE FROM native_approval_links WHERE approval_id=?').run(approval.id);db.query('DELETE FROM approvals WHERE id=?').run(approval.id);restore();store.db.close();keys.forEach((k,i)=>{if(saved[i]===undefined)delete process.env[k];else process.env[k]=saved[i];});}
 });

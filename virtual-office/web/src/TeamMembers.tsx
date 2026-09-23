@@ -93,6 +93,7 @@ export function TeamMembers({
               ? undefined
               : {
                   THINKING: "ГОТОВИТ ОТВЕТ",
+                  WAITING: "ОЖИДАЕТ РЕШЕНИЯ",
                   DONE: "ОТВЕТ ГОТОВ",
                   ERROR: "ОШИБКА",
                   OFFLINE: "НЕ В СЕТИ",

@@ -1,3 +1,4 @@
+import { officeActivityCount } from "./office-activity.ts";
 import {isOfficeRole,nativeRole,officeRoles} from './native-roles.ts';
 import { voiceApi } from './native-voice.ts';
 import { signingApi } from './native-signing.ts';
@@ -108,10 +109,24 @@ export async function nativeApi(req: Request, injectedStore?: NativeAccess): Pro
   if (path === '/api/native/office' && req.method === 'GET') {
     if (process.env.NATIVE_OFFICE_ENABLED !== 'true') return json({error:'office_disabled'},503);
     const turns=store.officeTurns(identity.userId);
-    return json({source:'agent-team',scope:'office-native-turns',agents:officeRoles.map(({key,name})=>{
+    const links=nativeApprovalLinks(db,identity.userId);
+    const waitingRoles=new Set<string>(), uncertainRoles=new Set<string>();
+    for (const link of links) {
+      const approval=getApproval(link.approval_id);
+      if (!approval) continue;
+      if (link.execution === 'failed' || link.execution === 'interrupted') { uncertainRoles.add(approval.requested_by); continue; }
+      if (link.execution === 'completed') continue;
+      if (approval.status === 'pending' || (approval.status === 'approved' && link.execution === nativeExecutionMarker)) waitingRoles.add(approval.requested_by);
+      else if (approval.status === 'approved') uncertainRoles.add(approval.requested_by);
+    }
+    // Personal chat only. Shared group history and task descriptions are never exposed.
+    const personalTasks=db.query("SELECT assigned_to,status FROM tasks WHERE chat_id=? AND status IN ('running','pending','awaiting_approval','awaiting_review')").all(Number(identity.userId)) as {assigned_to:string|null;status:string}[];
+    const personalApprovals=db.query("SELECT requested_by FROM approvals WHERE chat_id=? AND status='pending'").all(Number(identity.userId)) as {requested_by:string}[];
+    for(const approval of personalApprovals) waitingRoles.add(approval.requested_by);
+    return json({source:'agent-team',scope:'owner-execution',agents:officeRoles.map(({key,name})=>{
       const available=!!nativeRole(key)&&!agentStopReason(key),last=turns.find(t=>t.agentKey===key);
       const conversation=(store.db.query('SELECT r.conversation_id AS id FROM native_conversation_roles r JOIN conversations c ON c.id=r.conversation_id WHERE c.user_id=? AND r.agent_key=? AND COALESCE(c.archived,0)=0 ORDER BY c.updated DESC LIMIT 1').get(identity.userId,key) as {id:string}|null)?.id ?? null;
-      return {agentId:key,name,available,conversationId:conversation,state:!available?'OFFLINE':last?.status==='running'?'THINKING':last?.status==='done'?'DONE':last&&['error','interrupted'].includes(last.status)?'ERROR':'IDLE',runId:last?.id??null,updatedAt:last?new Date(last.created).toISOString():null};
+      return {agentId:key,name,available,conversationId:conversation,state:officeActivityCount(identity.userId,key)>0||last?.status==='running'||personalTasks.some(t=>t.assigned_to===key&&t.status==='running')?'THINKING':waitingRoles.has(key)||personalTasks.some(t=>t.assigned_to===key)?'WAITING':uncertainRoles.has(key)?'ERROR':!available?'OFFLINE':last&&['error','interrupted'].includes(last.status)?'ERROR':'IDLE',runId:last?.id??null,updatedAt:last?new Date(last.created).toISOString():null};
     })});
   }
   if (path === '/api/native/status' && req.method === 'GET') return json({ name: 'Агент', userId: identity.userId, available: !!lead && !agentStopReason('orchestrator') });

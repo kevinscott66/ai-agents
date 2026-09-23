@@ -87,6 +87,16 @@ test("paired live office routes all roles, preserves request ID on uncertain del
   expect(turns[1]).toEqual(turns[0]);
   expect(turns[0].agentKey).toBe("frontend");
   await expect(page.getByText("Ответ frontend", { exact: true })).toBeVisible();
+  const pinned = turns[0].conversationId;
+  dialogs.frontend = "other-device-dialog-0001";
+  await page.waitForResponse((r) => r.url().endsWith("/api/web/office"));
+  await page
+    .getByLabel("Сообщение реальному агенту")
+    .fill("Продолжай в том же диалоге");
+  await page.getByRole("button", { name: "Отправить поручение" }).click();
+  await expect.poll(() => turns.length).toBe(3);
+  expect(turns[2].conversationId).toBe(pinned);
+
   await page
     .getByRole("button", { name: "Закрыть живой диалог", exact: true })
     .last()

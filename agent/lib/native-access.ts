@@ -220,7 +220,7 @@ export class NativeAccess {
     })();
   }
   conversation(id: string, userId: string) {
-    return this.db.query('SELECT id,title,created,updated,archived=1 AS archived FROM conversations WHERE id=? AND user_id=?').get(id,userId) as {id:string;title:string;created:number;updated:number;archived:number}|null;
+    return this.db.query(`SELECT id,title,created,updated,archived=1 AS archived,COALESCE((SELECT agent_key FROM native_conversation_roles WHERE conversation_id=conversations.id),'orchestrator') AS agentKey FROM conversations WHERE id=? AND user_id=?`).get(id,userId) as {id:string;title:string;created:number;updated:number;archived:number;agentKey:string}|null;
   }
   /** Переименовать и/или убрать в архив (вернуть из архива). Порядок в списке не трогаем. */
   editConversation(id:string,userId:string,edit:{title?:string;archived?:boolean}) {
@@ -265,11 +265,11 @@ export class NativeAccess {
   }
   running(userId:string) { return !!this.db.query("SELECT 1 FROM turns WHERE user_id=? AND status='running'").get(userId); }
   conversations(userId:string, before?: {updated:number;id:string}, limit = 200, archived = false) {
-    const fields = `SELECT id,title,created,updated,archived=1 AS archived FROM conversations WHERE user_id=? AND archived=${archived ? 1 : 0}`;
+    const fields = `SELECT id,title,created,updated,archived=1 AS archived,COALESCE((SELECT agent_key FROM native_conversation_roles WHERE conversation_id=conversations.id),'orchestrator') AS agentKey FROM conversations WHERE user_id=? AND archived=${archived ? 1 : 0}`;
     const order = ' ORDER BY updated DESC,id DESC LIMIT ?';
     return (before
       ? this.db.query(fields + ' AND (updated < ? OR (updated = ? AND id < ?))' + order).all(userId,before.updated,before.updated,before.id,limit)
-      : this.db.query(fields + order).all(userId,limit)) as {id:string;title:string;created:number;updated:number;archived:number}[];
+      : this.db.query(fields + order).all(userId,limit)) as {id:string;title:string;created:number;updated:number;archived:number;agentKey:string}[];
   }
   history(id:string,userId:string,before = Number.MAX_SAFE_INTEGER) {
     if (!this.conversation(id,userId)) return null;
@@ -277,7 +277,7 @@ export class NativeAccess {
     const more = rows.length > 100; const messages = rows.slice(0,100).reverse().map(({created,...row}) => ({...row,...(created === null ? {} : {created}),...(row.role === 'user' ? this.media.history(row.id.replace(/:user$/,''),userId) : this.outputAttachments(row.id))}));
     const running = this.running(userId);
     const generations=(this.db.query('SELECT g.id,g.state,g.started,g.ended FROM native_generations g JOIN conversation_turns t ON t.turn_id=g.turn_id WHERE t.conversation_id=? ORDER BY g.started DESC LIMIT 100').all(id) as NativeGeneration[]).map(g=>({...g,ended:g.ended ?? undefined}));
-    return {messages,more,running,generations};
+    return {messages,more,running,generations,agentKey:this.conversation(id,userId)!.agentKey};
   }
   private outputAttachments(messageId:string):{attachments?:import('./native-media.ts').Attachment[];location?:NativeLocation} {
     const row=this.db.query('SELECT media FROM native_output_media WHERE message_id=?').get(messageId) as {media:string}|null;
