@@ -50,6 +50,7 @@
  * tests/audit-2026-09-11-server-executes-after-all, поэтому здесь они
  * пересказаны, а не процитированы: цитату он от утверждения не отличает.
  */
+import {officeStatic} from "./office-static.ts";
 import { isPreAuthRequest } from "./miniapp-preauth.ts";
 import { readMediaJson } from "./native-media.ts";
 import { nativeApi, webApi } from "./native-api.ts";
@@ -2248,6 +2249,7 @@ export function startMiniappServer(
   }
 
   async function serveStatic(url: URL, method: string): Promise<Response | null> {
+    const office=await officeStatic(url,method);if(office)return office;
     if (method !== "GET" && method !== "HEAD") return null;
     if (url.pathname.startsWith("/api/")) return null;
     // System routes — never served as static / SPA fallback.

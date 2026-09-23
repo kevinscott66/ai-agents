@@ -228,7 +228,7 @@ struct ChatLine: Identifiable, Codable {
         polling = Task {
             var submitted = false
             do {
-                try await AgentAPI(server: server).createConversation(dialogID, title: text.isEmpty ? (media.first?.name ?? "Геопозиция") : text, expectedToken: token)
+                let dialog = try await AgentAPI(server: server).createConversation(dialogID, title: text.isEmpty ? (media.first?.name ?? "Геопозиция") : text, expectedToken: token)
                 try Task.checkCancellation()
                 for (index, item) in media.enumerated() {
                     uploadStatus = "Загрузка \(index + 1) из \(media.count)…"
@@ -237,7 +237,7 @@ struct ChatLine: Identifiable, Codable {
                 }
                 uploadStatus = nil
                 submitted = true
-                let first = try await AgentAPI(server: server).send(text, id: id, conversationId: dialogID, expectedToken: token, attachmentIds: media.map(\.id), location: place)
+                let first = try await AgentAPI(server: server).send(text, id: id, conversationId: dialogID, expectedToken: token, attachmentIds: media.map(\.id), location: place, agentKey: dialog.agentKey)
                 try Task.checkCancellation()
                 guard boundServer == server, boundToken == token, Credentials.read(server: server) == token else { throw AgentError.message("Подключение изменилось") }
                 consume(first)

@@ -172,6 +172,8 @@ export const ALWAYS_APPROVE_ACTIONS: Set<ActionType> = new Set<ActionType>([
  * of their `permissions` row.
  */
 export const CALLER_RESTRICTED: Record<string, string> = {
+  GET_CAPABILITIES: "orchestrator",
+  GITHUB_MCP_READ: "orchestrator",
   GRANT_PERMISSION: "perm",
   UPDATE_AGENT_PROMPT: "aieng",
   CHANGE_AGENT_STATUS: "perm",

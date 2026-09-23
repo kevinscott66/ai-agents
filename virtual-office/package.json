@@ -1,0 +1,37 @@
+{
+  "name": "dobropalm-virtual-office",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run gateway/dev.ts",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "start": "bun run gateway/main.ts",
+    "test": "bun test tests",
+    "test:browser": "playwright test",
+    "format": "prettier --write contracts gateway adapters tests browser web/src vite.config.ts playwright.config.ts tools/*.{ts,mjs}",
+    "format:check": "prettier --check contracts gateway adapters tests browser web/src vite.config.ts playwright.config.ts tools/*.{ts,mjs}",
+    "assets:fetch": "python3 tools/fetch-assets.py",
+    "assets:build": "node tools/build-character.mjs",
+    "assets:variants": "node tools/build-variants.mjs",
+    "assets:roster": "node tools/build-roster.mjs"
+  },
+  "dependencies": {
+    "@react-three/fiber": "9.1.2",
+    "react": "19.0.0",
+    "react-dom": "19.0.0",
+    "three": "0.175.0",
+    "zod": "3.24.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.51.1",
+    "@types/react": "19.0.12",
+    "@types/react-dom": "19.0.4",
+    "@types/three": "0.175.0",
+    "bun-types": "1.3.14",
+    "prettier": "3.5.3",
+    "typescript": "5.8.3",
+    "vite": "6.4.3"
+  }
+}

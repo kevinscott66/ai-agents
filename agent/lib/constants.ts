@@ -176,6 +176,8 @@ export const CONTROL_TOOL_STATUSES: ReadonlySet<string> = new Set([
  * остаются рабочими.
  */
 export const INLINE_TOOL_NAMES = new Set<string>([
+  "GET_CAPABILITIES",
+  "GITHUB_MCP_READ",
   "SEARCH_WIKI",
   "READ_WIKI",
   "GET_BOT_INFO",
