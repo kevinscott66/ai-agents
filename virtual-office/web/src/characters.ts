@@ -135,5 +135,5 @@ export function readAppearance(): Appearance {
   return { ...DEFAULT_APPEARANCE };
 }
 export function characterUrl(id: CharacterId) {
-  return `/assets/characters/${id}.glb`;
+  return `${import.meta.env.BASE_URL ?? "/"}assets/characters/${id}.glb`;
 }

@@ -71,3 +71,7 @@ Run the browser suite and scene profiler sequentially: both issue commands to th
 ### Twelve-role visual roster
 
 `web/src/roster.ts` assigns names, models and seats. Eleven roles are read-only/unconnected; Backend retains the mock gateway. `bun run assets:fetch` then `bun run assets:roster` (dev server running) rebuilds the roster; older selectable presets use `assets:variants`. Full 3D loads the twelve seats plus player, while initial 2D loads no models.
+
+### Real agents
+
+Use the real-agents toggle for paired owner access; the production `/office/` build starts in real mode. It requires the backend office feature flag and same-origin `/api/web/` routes. No credentials are stored in localStorage, and a failed live connection never falls back to demonstration replies. See [integration and activation](../docs/virtual-office/LIVE_INTEGRATION.md).

@@ -1,3 +1,4 @@
+import {isOfficeRole,nativeRole,officeRoles} from './native-roles.ts';
 import { voiceApi } from './native-voice.ts';
 import { signingApi } from './native-signing.ts';
 import { compactNativeKnowledge, knowledgePrompt, knowledgeState, scopedKnowledgeReader, scopedKnowledgeWriter } from "./native-knowledge-runtime.ts";
@@ -104,6 +105,15 @@ export async function nativeApi(req: Request, injectedStore?: NativeAccess): Pro
       return store.knowledge.decide(identity.userId,proposalMatch[1],body.accept)?json({ok:true}):json({error:'proposal_expired'},409);
     }
   }catch(error){const code=error instanceof Error?error.message:'';return json({error:code==='knowledge_not_found'?'not_found':code==='knowledge_limit'?'knowledge_limit':code==='knowledge_no_project'?'no_project':'invalid_knowledge'},code==='knowledge_not_found'?404:code==='knowledge_limit'?429:code==='knowledge_no_project'?409:400);}
+  if (path === '/api/native/office' && req.method === 'GET') {
+    if (process.env.NATIVE_OFFICE_ENABLED !== 'true') return json({error:'office_disabled'},503);
+    const turns=store.officeTurns(identity.userId);
+    return json({source:'agent-team',scope:'office-native-turns',agents:officeRoles.map(({key,name})=>{
+      const available=!!nativeRole(key)&&!agentStopReason(key),last=turns.find(t=>t.agentKey===key);
+      const conversation=(store.db.query('SELECT r.conversation_id AS id FROM native_conversation_roles r JOIN conversations c ON c.id=r.conversation_id WHERE c.user_id=? AND r.agent_key=? AND COALESCE(c.archived,0)=0 ORDER BY c.updated DESC LIMIT 1').get(identity.userId,key) as {id:string}|null)?.id ?? null;
+      return {agentId:key,name,available,conversationId:conversation,state:!available?'OFFLINE':last?.status==='running'?'THINKING':last?.status==='done'?'DONE':last&&['error','interrupted'].includes(last.status)?'ERROR':'IDLE',runId:last?.id??null,updatedAt:last?new Date(last.created).toISOString():null};
+    })});
+  }
   if (path === '/api/native/status' && req.method === 'GET') return json({ name: 'Агент', userId: identity.userId, available: !!lead && !agentStopReason('orchestrator') });
   if (path === '/api/native/conversations' && req.method === 'GET') {
     const cursor = new URL(req.url).searchParams.get('cursor');
@@ -179,24 +189,28 @@ export async function nativeApi(req: Request, injectedStore?: NativeAccess): Pro
     return history ? json(history) : json({error:'not_found'},404);
   }
   if (path === '/api/native/turns' && req.method === 'POST') {
-    if (!lead || agentStopReason('orchestrator')) return json({ error: 'lead_unavailable' }, 503);
+    const agentKey=body.agentKey === undefined ? 'orchestrator' : body.agentKey;
+    if (!isOfficeRole(agentKey)) return json({error:'invalid_agent'},400);
+    if (body.agentKey !== undefined && process.env.NATIVE_OFFICE_ENABLED !== 'true') return json({error:'office_disabled'},503);
+    const selected=body.agentKey === undefined ? lead : nativeRole(agentKey);
+    if (!selected || agentStopReason(agentKey)) return json({error:body.agentKey === undefined ? 'lead_unavailable' : 'role_unavailable'},503);
     let ids:string[]; let location;
     try { if(body.attachmentIds!==undefined && (!Array.isArray(body.attachmentIds) || body.attachmentIds.length>4 || body.attachmentIds.some(id=>typeof id!=='string'||!attachmentId.test(id)))) throw new Error(); ids=((body.attachmentIds??[]) as string[]).map(id=>id.toLowerCase()); if(new Set(ids).size!==ids.length) throw new Error(); location=locationValue(body.location); } catch { return json({error:'invalid_media'},400); }
     if (typeof body?.text !== 'string' || (!body.text.trim() && !ids.length && !location) || body.text.length > 8000 || typeof body.id !== 'string' || !/^[a-zA-Z0-9-]{16,64}$/.test(body.id)) return json({ error: 'invalid_turn' }, 400);
     const conversationId = body.conversationId;
     if (conversationId !== undefined && (typeof conversationId !== 'string' || !/^[a-zA-Z0-9-]{16,64}$/.test(conversationId) || !store.conversation(conversationId,identity.userId))) return json({error:'not_found'},404);
     let started;
-    try { started = store.start(body.id, identity.device, identity.userId, body.text, conversationId as string|undefined,ids,location); } catch { return json({error:'media_conflict'},409); }
+    try { started = store.start(body.id, identity.device, identity.userId, body.text, conversationId as string|undefined,ids,location,agentKey); } catch { return json({error:'media_conflict'},409); }
     if (started === 'busy' || started === 'conflict') return json({ error: started }, 409);
     if (started === 'created') {
       const id = body.id;
-      const run = lead;
+      const run = selected;
       // Detached job is persisted before invoking the lead; client polls, never replays on reconnect.
       const text = body.text;
-      const deliver=(answer:string,agentKey='orchestrator')=>{
+      const deliver=(answer:string,replyRole:string=agentKey)=>{
         const live=store.authenticate(token);
         if(process.env.NATIVE_APP_ENABLED!=='true'||!live||live.userId!==identity.userId||!permitted(identity.userId)||store.get(id,identity.device)?.status!=='running')throw new Error('native_turn_inactive');
-        store.append(id,answer,agentKey);
+        store.append(id,answer,replyRole);
       };
       void Promise.resolve().then(() => nativeTurnContext.run({userId:identity.userId,turnId:id,conversationId:store.turnConversation(id)!,knowledge:knowledgePrompt(store,identity.userId,store.turnConversation(id)!,text),readKnowledge:scopedKnowledgeReader(store,identity.userId,store.turnConversation(id)!),writeKnowledge:scopedKnowledgeWriter(store,identity.userId,store.turnConversation(id)!),reply:async (agentKey,answer)=>{deliver(answer,agentKey);return {message_id:-Date.now(),date:Math.floor(Date.now()/1000)};},mediaSink:store.artifactSink(id,identity.userId,identity.device,store.turnConversation(id)!),linkApproval: approvalId => store.linkApproval(approvalId,id,identity.userId)}, () => run(identity.userId, text, answer => deliver(answer), typeof conversationId === 'string' ? store.history(conversationId,identity.userId)!.messages.slice(-40) : undefined,store.media.input(ids,identity.userId,location)))).then(() => {
         if (!store.get(id, identity.device)?.replies.length) store.append(id, 'Агент не вернул ответ. Проверь состояние роли и лимиты.');

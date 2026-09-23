@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 export default defineConfig({
   root: "web",
+  base: process.env.OFFICE_BASE ?? "/",
   server: {
     host: "127.0.0.1",
     port: 4317,

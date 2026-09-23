@@ -43,7 +43,7 @@ export const AgentSchema = z
     blocker: text.nullable(),
     summary: text,
     updatedAt: z.string().datetime(),
-    source: z.literal("mock"),
+    source: z.enum(["mock", "agent-team"]),
   })
   .strict();
 export type Agent = z.infer<typeof AgentSchema>;

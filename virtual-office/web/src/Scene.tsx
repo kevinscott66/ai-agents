@@ -1,3 +1,4 @@
+import type { LiveSnapshot } from "./live-client";
 import { ROSTER, type RoleId } from "./roster";
 import { TeamMembers } from "./TeamMembers";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
@@ -33,11 +34,15 @@ function Label({
     ctx.fillText("BACKEND", 28, 50);
     ctx.fillStyle = "#667862";
     ctx.font = "24px system-ui";
-    ctx.fillText(`${agent.state}  ·  MOCK`, 28, 91);
+    ctx.fillText(
+      `${agent.state}  ·  ${agent.source === "mock" ? "MOCK" : "LIVE"}`,
+      28,
+      91,
+    );
     const t = new THREE.CanvasTexture(c);
     t.colorSpace = THREE.SRGBColorSpace;
     return t;
-  }, [agent.state]);
+  }, [agent.state, agent.source]);
   useEffect(() => () => texture.dispose(), [texture]);
   useFrame(() => {
     sprite.current?.position.set(position.current.x, 2.22, position.current.z);
@@ -49,6 +54,7 @@ function Label({
   );
 }
 function Simulation({
+  liveSnapshot,
   focusedRole,
   onSelectRole,
   appearance,
@@ -61,6 +67,7 @@ function Simulation({
   onMotion,
   stale,
 }: {
+  liveSnapshot?: LiveSnapshot | null;
   focusedRole: RoleId | null;
   onSelectRole: (id: RoleId) => void;
   appearance: Appearance;
@@ -377,7 +384,7 @@ function Simulation({
           }}
         />
       )}
-      <TeamMembers onSelect={onSelectRole} />
+      <TeamMembers onSelect={onSelectRole} liveSnapshot={liveSnapshot} />
       <OfficeEnvironment
         overview={overview}
         onSelectRole={onSelectRole}
@@ -440,6 +447,7 @@ function RenderBudget({ onDegrade }: { onDegrade: (value: boolean) => void }) {
   return null;
 }
 export default function Scene(props: {
+  liveSnapshot?: LiveSnapshot | null;
   focusedRole: RoleId | null;
   onSelectRole: (id: RoleId) => void;
   appearance: Appearance;

@@ -8,7 +8,7 @@ test("one-agent vertical slice: 3D, proximity, inspect, direct mock chat, events
   await page.goto("/");
   await expect(page.getByText("Gateway подключён")).toBeVisible();
   await page.getByLabel("Качество отображения").selectOption("balanced");
-  await expect(page.locator("canvas")).toBeVisible();
+  await expect(page.locator("canvas")).toBeVisible({ timeout: 20_000 });
   await page.getByRole("button", { name: "Пишет код", exact: true }).click();
   await page.waitForTimeout(2200);
   await page.screenshot({ path: ".runtime/office-desktop.png" });

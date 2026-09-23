@@ -45,3 +45,7 @@ Sixteen selectable male/female looks differ in hair, clothing and footwear. The 
 ## Russian young-adult roster
 
 Twelve fictional Russian team members are assigned unique appearances and permanent desks; roles match the existing twelve-role catalog including Lead. The additional eleven cards are explicitly unconnected. The player is a thirteenth visible person. See `web/src/roster.ts` and VISUAL_ASSETS.md for the visual and loading changes. Browser regression covers keyboard fingertip contact, stationary empty chair, role cards and unchanged event sequence during visual selection.
+
+## Live connection implementation (pending activation)
+
+Owner-authenticated direct-role ingress, atomic role bindings, native-turn projection and browser pairing/dialog/approval controls are implemented behind `NATIVE_OFFICE_ENABLED`. `/office/` can be served on the existing web-chat origin. See [integration and activation](LIVE_INTEGRATION.md). This is prepared code; production activation and owner-paired model smoke remain pending.

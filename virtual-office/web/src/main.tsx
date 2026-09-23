@@ -1,3 +1,6 @@
+import { LiveOffice } from "./LiveOffice";
+import type { LiveSnapshot } from "./live-client";
+import type { Agent } from "../../contracts/protocol";
 import { ROSTER, seatNumber, type RoleId } from "./roster";
 import {
   Component,
@@ -70,6 +73,9 @@ function time(at: string) {
   });
 }
 function App() {
+  const [real, setReal] = useState(import.meta.env.BASE_URL !== "/");
+  const [liveSnapshot, setLiveSnapshot] = useState<LiveSnapshot | null>(null);
+  const [selectedLiveRole, setSelectedLiveRole] = useState<RoleId | null>(null);
   const [focusedRole, setFocusedRole] = useState<RoleId | null>(null);
   const focusedMember = ROSTER.find((m) => m.id === focusedRole);
   const [appearance, setAppearance] = useState(readAppearance);
@@ -96,6 +102,7 @@ function App() {
     closeButton = useRef<HTMLButtonElement>(null),
     chatEnd = useRef<HTMLDivElement>(null);
   useEffect(() => {
+    if (real) return;
     const c = new OfficeConnection(() => {
       setWorld(c.world);
       setStatus(c.status);
@@ -107,7 +114,7 @@ function App() {
       c.stop();
       clearInterval(timer);
     };
-  }, []);
+  }, [real]);
   useEffect(() => {
     if (panel) closeButton.current?.focus();
   }, [panel]);
@@ -116,17 +123,45 @@ function App() {
   }, [world?.messages.length, panel]);
   const open = useCallback(() => {
     setFocusedRole(null);
-    setPanel("inspect");
-  }, []);
+    if (real) {
+      setSelectedLiveRole("backend");
+      setPanel(null);
+    } else setPanel("inspect");
+  }, [real]);
   const selectRole = (id: RoleId) => {
+    if (real) {
+      setSelectedLiveRole(id);
+      setFocusedRole(id === "backend" ? null : id);
+      return;
+    }
     if (id === "backend") open();
     else {
       setPanel(null);
       setFocusedRole(id);
     }
   };
-  const live = status === "live",
-    agent = world?.agent;
+  const live = real ? liveSnapshot !== null : status === "live";
+  const remote = liveSnapshot?.agents.find((a) => a.agentId === "backend");
+  const remoteAgent: Agent = {
+    agentId: "backend",
+    name: "Backend",
+    role: "API, данные и бизнес-логика",
+    state: remote?.state ?? "OFFLINE",
+    runId: remote?.runId ?? null,
+    taskId: null,
+    task: null,
+    project: null,
+    currentFile: null,
+    repository: null,
+    branch: null,
+    progress: null,
+    tests: null,
+    blocker: null,
+    summary: "Статус запросов офиса и приложения",
+    updatedAt: remote?.updatedAt ?? new Date(0).toISOString(),
+    source: "agent-team",
+  };
+  const agent = real ? remoteAgent : world?.agent;
   const send = async (cmd: Command) => {
     setBusy(true);
     setError("");
@@ -178,11 +213,24 @@ function App() {
           </span>
         </a>
         <div className="top-actions">
+          <button
+            className="live-toggle"
+            aria-pressed={real}
+            onClick={() => {
+              setPanel(null);
+              setFocusedRole(null);
+              setSelectedLiveRole(null);
+              setLiveSnapshot(null);
+              setReal(!real);
+            }}
+          >
+            {real ? "Реальные агенты" : "Демо · подключить агентов"}
+          </button>
           <label>
             <span className="sr-only">Команда офиса</span>
             <select
               aria-label="Команда офиса"
-              value={focusedRole ?? ""}
+              value={(real ? selectedLiveRole : focusedRole) ?? ""}
               onChange={(e) => selectRole(e.target.value as RoleId)}
             >
               <option value="" disabled>
@@ -266,12 +314,15 @@ function App() {
               fallback={<div className="scene-error">Готовим офис…</div>}
             >
               <Scene
+                liveSnapshot={real ? liveSnapshot : undefined}
                 focusedRole={focusedRole}
                 onSelectRole={selectRole}
                 appearance={appearance}
                 stale={!live}
                 agent={agent}
-                interacting={panel !== null}
+                interacting={
+                  real ? selectedLiveRole === "backend" : panel !== null
+                }
                 onNear={setNear}
                 onInteract={open}
                 overview={overview}
@@ -290,7 +341,8 @@ function App() {
               </div>
               <h1>Backend</h1>
               <p>
-                {LABELS[agent.state]} <span className="mock-pill">MOCK</span>
+                {LABELS[agent.state]}{" "}
+                <span className="mock-pill">{real ? "LIVE" : "MOCK"}</span>
               </p>
               <p>3D включается отдельно в меню качества сверху.</p>
               <button className="primary" onClick={open}>
@@ -316,12 +368,14 @@ function App() {
           <span className={`dot ${live ? "live" : ""}`} />
           <span>
             {live
-              ? "Gateway подключён"
+              ? real
+                ? "Система агентов подключена"
+                : "Gateway подключён"
               : status === "connecting"
                 ? "Подключение…"
                 : "Связь потеряна"}
           </span>
-          <span className="mock-pill">MOCK</span>
+          <span className="mock-pill">{real ? "LIVE" : "MOCK"}</span>
         </div>
         <aside className="agent-card">
           <div className="card-overline">
@@ -391,48 +445,52 @@ function App() {
           <span>Дневной свет · 30 FPS максимум</span>
         </div>
       </section>
-      <footer className="scenario-bar">
-        <div className="scenario-title">
-          <span className="mock-indicator" />
-          <div>
-            <strong>Демонстрационный сигнал</strong>
-            <small>Управляет Gateway. LLM не вызывается.</small>
+      {!real && (
+        <footer className="scenario-bar">
+          <div className="scenario-title">
+            <span className="mock-indicator" />
+            <div>
+              <strong>Демонстрационный сигнал</strong>
+              <small>Управляет Gateway. LLM не вызывается.</small>
+            </div>
           </div>
-        </div>
-        <div className="scenario-buttons">
-          {(["CODING", "TESTING", "WAITING", "IDLE"] as Activity[]).map((s) => (
-            <button
-              key={s}
-              disabled={!live || busy}
-              className={agent?.state === s ? "selected" : ""}
-              onClick={() => void scenario(s)}
-            >
-              {LABELS[s]}
-            </button>
-          ))}
-          <label>
-            <span className="sr-only">Другие состояния</span>
-            <select
-              aria-label="Другие состояния"
-              disabled={!live || busy}
-              value=""
-              onChange={(e) => void scenario(e.target.value as Activity)}
-            >
-              <option value="" disabled>
-                Ещё…
-              </option>
-              {STATES.map((s) => (
-                <option key={s} value={s}>
+          <div className="scenario-buttons">
+            {(["CODING", "TESTING", "WAITING", "IDLE"] as Activity[]).map(
+              (s) => (
+                <button
+                  key={s}
+                  disabled={!live || busy}
+                  className={agent?.state === s ? "selected" : ""}
+                  onClick={() => void scenario(s)}
+                >
                   {LABELS[s]}
+                </button>
+              ),
+            )}
+            <label>
+              <span className="sr-only">Другие состояния</span>
+              <select
+                aria-label="Другие состояния"
+                disabled={!live || busy}
+                value=""
+                onChange={(e) => void scenario(e.target.value as Activity)}
+              >
+                <option value="" disabled>
+                  Ещё…
                 </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        <span className="sequence">
-          EVENT {String(world?.seq ?? 0).padStart(3, "0")}
-        </span>
-      </footer>
+                {STATES.map((s) => (
+                  <option key={s} value={s}>
+                    {LABELS[s]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <span className="sequence">
+            EVENT {String(world?.seq ?? 0).padStart(3, "0")}
+          </span>
+        </footer>
+      )}
       {(error || notice) && (
         <div
           className={`toast ${error ? "error" : ""}`}
@@ -450,7 +508,7 @@ function App() {
           </button>
         </div>
       )}
-      {focusedMember && (
+      {!real && focusedMember && (
         <div
           className="panel-layer"
           onKeyDown={(e) => {
@@ -508,7 +566,7 @@ function App() {
           </section>
         </div>
       )}
-      {panel && agent && (
+      {!real && panel && agent && (
         <div
           className="panel-layer"
           onKeyDown={(e) => {
@@ -568,7 +626,7 @@ function App() {
               <strong>
                 {live ? LABELS[agent.state] : "Последнее известное состояние"}
               </strong>
-              <span className="mock-pill">MOCK</span>
+              <span className="mock-pill">{real ? "LIVE" : "MOCK"}</span>
             </div>
             {!live && (
               <p className="offline-note">
@@ -752,6 +810,16 @@ function App() {
             </div>
           </section>
         </div>
+      )}
+      {real && (
+        <LiveOffice
+          selected={selectedLiveRole}
+          onClose={() => {
+            setSelectedLiveRole(null);
+            setFocusedRole(null);
+          }}
+          onSnapshot={setLiveSnapshot}
+        />
       )}
     </main>
   );

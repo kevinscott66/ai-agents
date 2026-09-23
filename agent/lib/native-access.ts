@@ -42,6 +42,8 @@ export class NativeAccess {
       CREATE TABLE IF NOT EXISTS native_generations(id TEXT PRIMARY KEY,turn_id TEXT NOT NULL,state TEXT NOT NULL,started INTEGER NOT NULL,ended INTEGER);
       CREATE TABLE IF NOT EXISTS alert_settings(user_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS alert_state(user_id TEXT NOT NULL, agent TEXT NOT NULL, unhealthy INTEGER NOT NULL, PRIMARY KEY(user_id,agent));`);
+    this.db.run("CREATE TABLE IF NOT EXISTS native_turn_roles(turn_id TEXT PRIMARY KEY,agent_key TEXT NOT NULL)");
+    this.db.run("CREATE TABLE IF NOT EXISTS native_conversation_roles(conversation_id TEXT PRIMARY KEY,agent_key TEXT NOT NULL)");
     // Время сообщения и архив чата добавлены позже: старые базы догоняем
     // ALTER'ом, а время ставит триггер — ни одна вставка его не забудет.
     const columns = (table:string) => (this.db.query(`PRAGMA table_info(${table})`).all() as {name:string}[]).map(c=>c.name);
@@ -75,6 +77,11 @@ export class NativeAccess {
     this.db.query('DELETE FROM codes WHERE expires < ?').run(now);
     this.db.query('DELETE FROM devices WHERE expires < ?').run(now);
     this.db.query("DELETE FROM turns WHERE created < ? AND status != 'running'").run(now - 7 * DAY_MS);
+    this.db.run('DELETE FROM native_turn_roles WHERE turn_id NOT IN (SELECT id FROM turns)');
+    this.db.run('DELETE FROM native_conversation_roles WHERE conversation_id NOT IN (SELECT id FROM conversations)');
+  }
+  officeTurns(userId:string) {
+    return this.db.query(`SELECT r.agent_key AS agentKey,t.id,t.status,t.created FROM native_turn_roles r JOIN turns t ON t.id=r.turn_id WHERE t.user_id=? ORDER BY t.created DESC,t.rowid DESC LIMIT 100`).all(userId) as {agentKey:string;id:string;status:string;created:number}[];
   }
   alerts(userId: string, enabled: boolean) {
     this.db.query('INSERT INTO alert_settings VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET enabled=excluded.enabled').run(userId, enabled ? 1 : 0);
@@ -122,24 +129,32 @@ export class NativeAccess {
     const replyDetails = row ? (JSON.parse(row.replies) as string[]).map((_,i)=>{const messageId=id+':reply:'+(i+1);return {messageId,agentKey:(this.db.query('SELECT agent_key FROM native_message_authors WHERE message_id=?').get(messageId) as {agent_key:string}|null)?.agent_key ?? 'orchestrator'};}) : [];
     return row ? { ...row, ...(replyDetails.length ? {replyDetails} : {}), replies: JSON.parse(row.replies) as string[], ...(outputMedia.length?{outputMedia}:{}), ...(generations.length?{generations}:{}) } : null;
   }
-  start(id: string, device: string, userId: string, text: string, conversationId?: string, attachmentIds: string[] = [], location?: NativeLocation): 'created' | 'duplicate' | 'busy' | 'conflict' {
+  start(id: string, device: string, userId: string, text: string, conversationId?: string, attachmentIds: string[] = [], location?: NativeLocation, agentKey = "orchestrator"): 'created' | 'duplicate' | 'busy' | 'conflict' {
     this.prune();
     return this.db.transaction(() => {
       const existing = this.db.query('SELECT device,text FROM turns WHERE id=?').get(id) as { device: string; text: string } | null;
       if (existing) {
         const linked = this.db.query('SELECT conversation_id FROM conversation_turns WHERE turn_id=?').get(id) as {conversation_id:string}|null;
-        return this.media.signature(id) === JSON.stringify({attachmentIds,...(location?{location}:{})}) && existing.device === device && existing.text === text && (!conversationId || linked?.conversation_id === conversationId) ? 'duplicate' : 'conflict';
+        const role = (this.db.query('SELECT agent_key FROM native_turn_roles WHERE turn_id=?').get(id) as {agent_key:string}|null)?.agent_key ?? 'orchestrator';
+        return role === agentKey && this.media.signature(id) === JSON.stringify({attachmentIds,...(location?{location}:{})}) && existing.device === device && existing.text === text && (!conversationId || linked?.conversation_id === conversationId) ? 'duplicate' : 'conflict';
       }
       if (this.db.query('SELECT 1 FROM conversation_turns WHERE turn_id=?').get(id)) return 'conflict';
       if (conversationId && !this.conversation(conversationId,userId)) return 'conflict';
+      if (conversationId) {
+        const bound=(this.db.query('SELECT agent_key FROM native_conversation_roles WHERE conversation_id=?').get(conversationId) as {agent_key:string}|null)?.agent_key;
+        const used=!!this.db.query('SELECT 1 FROM conversation_messages WHERE conversation_id=? LIMIT 1').get(conversationId);
+        if ((bound ?? (used ? 'orchestrator' : agentKey)) !== agentKey) return 'conflict';
+      }
       if (this.db.query("SELECT 1 FROM turns WHERE user_id=? AND status='running'").get(userId)) return 'busy';
       this.media.bind(id,userId,attachmentIds,location);
       if (!conversationId) {
-        const owned = this.db.query("SELECT id FROM conversations WHERE user_id=? AND id LIKE 'legacy-%' ORDER BY created LIMIT 1").get(userId) as {id:string}|null;
-        conversationId = owned?.id ?? 'legacy-' + randomBytes(16).toString('hex');
+        const owned = (agentKey === 'orchestrator' ? this.db.query("SELECT id FROM conversations WHERE user_id=? AND id LIKE 'legacy-%' ORDER BY created LIMIT 1").get(userId) : null) as {id:string}|null;
+        conversationId = owned?.id ?? (agentKey === 'orchestrator' ? 'legacy-' : 'office-') + randomBytes(16).toString('hex');
         this.db.query('INSERT OR IGNORE INTO conversations(id,user_id,title,created,updated) VALUES(?,?,?,?,?)').run(conversationId,userId,'Ранее в приложении',Date.now(),Date.now());
       }
       this.db.query("INSERT INTO turns(id,device,user_id,text,status,created) VALUES(?,?,?,?,'running',?)").run(id, device, userId, text, Date.now());
+      this.db.query('INSERT INTO native_turn_roles VALUES(?,?)').run(id,agentKey);
+      this.db.query('INSERT OR IGNORE INTO native_conversation_roles VALUES(?,?)').run(conversationId,agentKey);
       if (conversationId) {
         this.db.query('INSERT INTO conversation_turns VALUES(?,?)').run(id,conversationId);
         this.db.query('INSERT INTO conversation_messages(id,conversation_id,role,text) VALUES(?,?,?,?)').run(id+':user',conversationId,'user',text);
@@ -222,6 +237,8 @@ export class NativeAccess {
     return this.db.transaction(() => {
       if (!this.conversation(id,userId)) return null;
       if (this.db.query("SELECT 1 FROM conversation_turns c JOIN turns t ON t.id=c.turn_id WHERE c.conversation_id=? AND t.status='running'").get(id)) return 'busy';
+      this.db.query('DELETE FROM native_conversation_roles WHERE conversation_id=?').run(id);
+      this.db.query('DELETE FROM native_turn_roles WHERE turn_id IN (SELECT turn_id FROM conversation_turns WHERE conversation_id=?)').run(id);
       this.db.query('DELETE FROM native_message_authors WHERE message_id IN (SELECT id FROM conversation_messages WHERE conversation_id=?)').run(id);
       this.db.query('DELETE FROM native_output_media WHERE message_id IN (SELECT id FROM conversation_messages WHERE conversation_id=?)').run(id);
       this.db.query('DELETE FROM conversation_messages WHERE conversation_id=?').run(id);

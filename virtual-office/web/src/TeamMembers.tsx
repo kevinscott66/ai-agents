@@ -1,12 +1,15 @@
+import type { LiveSnapshot } from "./live-client";
 import { useEffect, useMemo, useRef, Suspense } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import { OfficeCharacter } from "./OfficeCharacter";
 import { ROSTER, seatNumber, type Member, type RoleId } from "./roster";
 function MemberSeat({
+  status,
   member,
   onSelect,
 }: {
+  status?: string;
   member: Member;
   onSelect: (id: RoleId) => void;
 }) {
@@ -29,11 +32,15 @@ function MemberSeat({
     x.fillText(member.name + " / " + member.role, 25, 50);
     x.font = "22px system-ui";
     x.fillStyle = "#707968";
-    x.fillText("МЕСТО " + seatNumber(member.id) + " · НЕ ПОДКЛЮЧЁН", 25, 93);
+    x.fillText(
+      "МЕСТО " + seatNumber(member.id) + " · " + (status ?? "НЕ ПОДКЛЮЧЁН"),
+      25,
+      93,
+    );
     const t = new THREE.CanvasTexture(c);
     t.colorSpace = THREE.SRGBColorSpace;
     return t;
-  }, [member]);
+  }, [member, status]);
   useEffect(() => () => label.dispose(), [label]);
   useFrame(({ camera }) => {
     if (sprite.current)
@@ -67,11 +74,35 @@ function MemberSeat({
     </group>
   );
 }
-export function TeamMembers({ onSelect }: { onSelect: (id: RoleId) => void }) {
+export function TeamMembers({
+  onSelect,
+  liveSnapshot,
+}: {
+  onSelect: (id: RoleId) => void;
+  liveSnapshot?: LiveSnapshot | null;
+}) {
   return (
     <>
       {ROSTER.filter((m) => m.id !== "backend").map((member) => (
-        <MemberSeat key={member.id} member={member} onSelect={onSelect} />
+        <MemberSeat
+          key={member.id}
+          member={member}
+          onSelect={onSelect}
+          status={
+            liveSnapshot === undefined
+              ? undefined
+              : {
+                  THINKING: "ГОТОВИТ ОТВЕТ",
+                  DONE: "ОТВЕТ ГОТОВ",
+                  ERROR: "ОШИБКА",
+                  OFFLINE: "НЕ В СЕТИ",
+                  IDLE: "ДОСТУПЕН",
+                }[
+                  liveSnapshot?.agents.find((a) => a.agentId === member.id)
+                    ?.state ?? "OFFLINE"
+                ]
+          }
+        />
       ))}
     </>
   );

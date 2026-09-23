@@ -216,11 +216,11 @@ export function OfficeEnvironment({
       gl.domElement.dataset.chairYaw = String(chairRef.current.rotation.y);
   });
   const loaded = useLoader(THREE.TextureLoader, [
-    "/assets/materials/wood_floor_Diffuse.jpg",
-    "/assets/materials/wood_floor_nor_gl.jpg",
-    "/assets/materials/wood_floor_Rough.jpg",
-    "/assets/materials/fabric_pattern_07_nor_gl.jpg",
-    "/assets/materials/plastered_wall_02_nor_gl.jpg",
+    import.meta.env.BASE_URL + "assets/materials/wood_floor_Diffuse.jpg",
+    import.meta.env.BASE_URL + "assets/materials/wood_floor_nor_gl.jpg",
+    import.meta.env.BASE_URL + "assets/materials/wood_floor_Rough.jpg",
+    import.meta.env.BASE_URL + "assets/materials/fabric_pattern_07_nor_gl.jpg",
+    import.meta.env.BASE_URL + "assets/materials/plastered_wall_02_nor_gl.jpg",
   ]);
   const assets = useMemo(() => {
     const textures = loaded.map((t) => t.clone());

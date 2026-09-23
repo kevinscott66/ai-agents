@@ -1219,3 +1219,66 @@ kbd {
     padding: 8px;
   }
 }
+.live-login {
+  position: absolute;
+  z-index: 35;
+  top: 130px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(460px, 90vw);
+  padding: 26px;
+  background: #f7f7ef;
+  border: 1px solid #cdd2c2;
+  border-radius: 10px;
+  box-shadow: 0 12px 50px #24362322;
+}
+.live-login form {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.live-login input {
+  min-width: 0;
+  flex: 1;
+  padding: 10px;
+  border: 1px solid #cdd2c2;
+}
+.live-session {
+  position: absolute;
+  z-index: 31;
+  bottom: 20px;
+  left: 35px;
+  padding: 12px;
+  background: #f7f7ef;
+  border: 1px solid #cdd2c2;
+  max-width: 80vw;
+}
+.live-session button {
+  margin-left: 15px;
+}
+.live-toggle {
+  padding: 8px;
+  border: 1px solid #cdd2c2;
+  border-radius: 4px;
+  background: #f7f7ef;
+  font-size: 11px;
+}
+.live-session p {
+  max-width: 440px;
+  font-size: 12px;
+}
+.approval {
+  padding: 14px;
+  background: #efeee0;
+  border: 1px solid #bdc4ad;
+  margin-bottom: 14px;
+}
+.approval pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.approval button {
+  margin: 5px;
+  padding: 8px;
+}
