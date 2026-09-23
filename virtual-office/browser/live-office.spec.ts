@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { ROSTER } from "../web/src/roster";
+import { ROSTER, seatNumber } from "../web/src/roster";
 test("paired live office routes all roles, preserves request ID on uncertain delivery and does not expose token", async ({
   page,
 }) => {
@@ -28,7 +28,7 @@ test("paired live office routes all roles, preserves request ID on uncertain del
             agentId: m.id,
             name: m.role,
             available: true,
-            state: "IDLE",
+            state: m.id === "frontend" ? "THINKING" : "IDLE",
             runId: null,
             updatedAt: null,
             conversationId: dialogs[m.id] ?? null,
@@ -100,16 +100,49 @@ test("paired live office routes all roles, preserves request ID on uncertain del
       .getByRole("button", { name: "Закрыть живой диалог", exact: true })
       .last()
       .click();
+    await expect(page.getByLabel("Команда офиса")).toHaveValue(m.id);
+    await expect(page.locator(".agent-card strong")).toHaveText(
+      m.name + " / " + m.role,
+    );
+    await expect(page.locator(".card-overline")).toContainText(
+      seatNumber(m.id) + " / 12",
+    );
+    await expect(page.locator(".agent-card small")).toHaveText(
+      m.id === "frontend" ? "Готовит ответ" : "Свободен",
+    );
+    await expect(page.locator(".flat-card h1")).toHaveText(
+      m.name + " / " + m.role,
+    );
+    await expect(page.locator(".flat-card .eyebrow")).toContainText(
+      seatNumber(m.id),
+    );
+    await page.locator(".agent-summary").click();
+    await expect(
+      page.getByRole("dialog", { name: "Диалог: " + m.name }),
+    ).toBeVisible();
+    await page
+      .getByRole("button", { name: "Закрыть живой диалог", exact: true })
+      .last()
+      .click();
   }
   expect(
     await page.evaluate(() =>
       JSON.stringify({ ...localStorage, ...sessionStorage }),
     ),
   ).not.toContain(token);
+  await page.getByRole("link", { name: "DOBROPALM Office" }).click();
+  await expect(
+    page.getByText("Реальная система подключена", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Код подключения")).toHaveCount(0);
   connected = false;
   await expect(
     page.getByText("Нет связи с системой", { exact: true }),
   ).toBeVisible({ timeout: 8000 });
+  await expect(page.locator(".connection")).toContainText(
+    "Система не подключена",
+  );
+  await expect(page.locator(".agent-card small")).toHaveText("Нет связи");
   await page.getByRole("button", { name: "Отключить", exact: true }).click();
   await expect(page.getByLabel("Код подключения")).toBeVisible();
 });

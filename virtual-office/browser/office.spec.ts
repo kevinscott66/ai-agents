@@ -264,6 +264,12 @@ test("roster roles stay unconnected, typing reaches keys and empty chair stays s
       .click();
   }
   expect(await page.locator(".sequence").innerText()).toBe(sequence);
+  // The summary now stays on the selected role; inspect Backend's own movement.
+  await page.getByLabel("Команда офиса").selectOption("backend");
+  await page
+    .getByRole("button", { name: "Закрыть инспектор", exact: true })
+    .last()
+    .click();
   await page.getByRole("button", { name: "Свободен", exact: true }).click();
   await expect(page.locator(".ambient")).toContainText("идёт", {
     timeout: 20_000,

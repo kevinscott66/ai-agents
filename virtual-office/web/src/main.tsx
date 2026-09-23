@@ -75,6 +75,7 @@ function time(at: string) {
 function App() {
   const [real, setReal] = useState(import.meta.env.BASE_URL !== "/");
   const [liveSnapshot, setLiveSnapshot] = useState<LiveSnapshot | null>(null);
+  const [activeRole, setActiveRole] = useState<RoleId>("backend");
   const [selectedLiveRole, setSelectedLiveRole] = useState<RoleId | null>(null);
   const [focusedRole, setFocusedRole] = useState<RoleId | null>(null);
   const focusedMember = ROSTER.find((m) => m.id === focusedRole);
@@ -122,6 +123,7 @@ function App() {
     chatEnd.current?.scrollIntoView({ block: "nearest" });
   }, [world?.messages.length, panel]);
   const open = useCallback(() => {
+    setActiveRole("backend");
     setFocusedRole(null);
     if (real) {
       setSelectedLiveRole("backend");
@@ -129,6 +131,7 @@ function App() {
     } else setPanel("inspect");
   }, [real]);
   const selectRole = (id: RoleId) => {
+    setActiveRole(id);
     if (real) {
       setSelectedLiveRole(id);
       setFocusedRole(id === "backend" ? null : id);
@@ -162,6 +165,23 @@ function App() {
     source: "agent-team",
   };
   const agent = real ? remoteAgent : world?.agent;
+  const cardMember = ROSTER.find((m) => m.id === activeRole)!;
+  const cardRemote = liveSnapshot?.agents.find((a) => a.agentId === activeRole);
+  const cardState = real
+    ? cardRemote?.state
+    : activeRole === "backend"
+      ? agent?.state
+      : undefined;
+  const cardStatus = cardState
+    ? LABELS[cardState]
+    : real
+      ? "Нет связи"
+      : "Не подключён";
+  const cardAvailable = real
+    ? live && !!cardRemote?.available
+    : live && activeRole === "backend";
+  const openCard = () => selectRole(activeRole);
+
   const send = async (cmd: Command) => {
     setBusy(true);
     setError("");
@@ -204,7 +224,19 @@ function App() {
   return (
     <main>
       <header className="topbar">
-        <a className="brand" href="/" aria-label="DOBROPALM Office">
+        <a
+          className="brand"
+          href={import.meta.env.BASE_URL}
+          aria-label="DOBROPALM Office"
+          onClick={(e) => {
+            if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+            e.preventDefault();
+            setPanel(null);
+            setSelectedLiveRole(null);
+            setFocusedRole(null);
+            setOverview(true);
+          }}
+        >
           <span className="brand-mark">
             d<span>p</span>
           </span>
@@ -213,24 +245,28 @@ function App() {
           </span>
         </a>
         <div className="top-actions">
-          <button
-            className="live-toggle"
-            aria-pressed={real}
-            onClick={() => {
-              setPanel(null);
-              setFocusedRole(null);
-              setSelectedLiveRole(null);
-              setLiveSnapshot(null);
-              setReal(!real);
-            }}
-          >
-            {real ? "Реальные агенты" : "Демо · подключить агентов"}
-          </button>
+          {import.meta.env.BASE_URL !== "/" ? (
+            <span className="live-toggle">Реальные агенты</span>
+          ) : (
+            <button
+              className="live-toggle"
+              aria-pressed={real}
+              onClick={() => {
+                setPanel(null);
+                setFocusedRole(null);
+                setSelectedLiveRole(null);
+                setLiveSnapshot(null);
+                setReal(!real);
+              }}
+            >
+              {real ? "Реальные агенты" : "Демо · подключить агентов"}
+            </button>
+          )}
           <label>
             <span className="sr-only">Команда офиса</span>
             <select
               aria-label="Команда офиса"
-              value={(real ? selectedLiveRole : focusedRole) ?? ""}
+              value={activeRole}
               onChange={(e) => selectRole(e.target.value as RoleId)}
             >
               <option value="" disabled>
@@ -335,17 +371,22 @@ function App() {
           <div className="flat-view">
             <div className="flat-grid" />
             <div className="flat-card">
-              <span className="eyebrow">РАБОЧЕЕ МЕСТО 04</span>
+              <span className="eyebrow">
+                РАБОЧЕЕ МЕСТО {seatNumber(activeRole)}
+              </span>
               <div className="flat-monogram">
-                B<span>↗</span>
+                {cardMember.name[0]}
+                <span>↗</span>
               </div>
-              <h1>Backend</h1>
+              <h1>
+                {cardMember.name} / {cardMember.role}
+              </h1>
               <p>
-                {LABELS[agent.state]}{" "}
+                {cardStatus}{" "}
                 <span className="mock-pill">{real ? "LIVE" : "MOCK"}</span>
               </p>
               <p>3D включается отдельно в меню качества сверху.</p>
-              <button className="primary" onClick={open}>
+              <button className="primary" onClick={openCard}>
                 Открыть рабочее место ↗
               </button>
             </div>
@@ -371,24 +412,31 @@ function App() {
               ? real
                 ? "Система агентов подключена"
                 : "Gateway подключён"
-              : status === "connecting"
-                ? "Подключение…"
-                : "Связь потеряна"}
+              : real
+                ? "Система не подключена"
+                : status === "connecting"
+                  ? "Подключение…"
+                  : "Связь потеряна"}
           </span>
           <span className="mock-pill">{real ? "LIVE" : "MOCK"}</span>
         </div>
         <aside className="agent-card">
           <div className="card-overline">
             <span>КОМАНДА</span>
-            <span>01 / 12</span>
+            <span>
+              {seatNumber(activeRole)} / {ROSTER.length}
+            </span>
           </div>
-          <button className="agent-summary" onClick={open} disabled={!agent}>
+          <button className="agent-summary" onClick={openCard}>
             <span className="avatar">
-              B<span className={`dot ${live ? "live" : ""}`} />
+              {cardMember.name[0]}
+              <span className={`dot ${cardAvailable ? "live" : ""}`} />
             </span>
             <span>
-              <strong>Backend</strong>
-              <small>{agent ? LABELS[agent.state] : "Нет данных"}</small>
+              <strong>
+                {cardMember.name} / {cardMember.role}
+              </strong>
+              <small>{cardStatus}</small>
             </span>
             <span className="arrow">↗</span>
           </button>
@@ -397,9 +445,15 @@ function App() {
             <span>В офисе</span>
             {quality === "2d"
               ? "3D отключено"
-              : panel
+              : (
+                    real
+                      ? selectedLiveRole !== null
+                      : panel !== null || focusedRole !== null
+                  )
                 ? "взаимодействие с вами"
-                : MOTIONS[motion]}
+                : activeRole === "backend"
+                  ? MOTIONS[motion]
+                  : "за рабочим столом"}
           </p>
           <span className="ambient-note">Движения — только визуализация</span>
         </aside>
