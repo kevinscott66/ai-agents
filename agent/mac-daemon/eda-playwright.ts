@@ -158,12 +158,26 @@ export interface RawDishDialog {
   groups: RawOptionGroup[];
 }
 
-/** «+ 150 ₽» → 150, пусто → 0; другое — не понимаем. */
-export function optionDelta(raw: string): number | null {
-  const s = raw.replace(/[\u00a0\u202f\u2009]/g, " ").replace(/\s+/g, " ").trim();
+/** A lazy single-item placeholder may be replaced by the dialog's real weight. */
+export function edaDialogMatches(card: { title: string; meta: string }, dialog: { name: string; weight: string }): boolean {
+  if (normalizeShopName(card.title) !== normalizeShopName(dialog.name)) return false;
+  return dishName(card.title, card.meta) === dishName(dialog.name, dialog.weight)
+    || /^(?:1\s*шт\.?)?$/.test(card.meta.trim());
+}
+
+/** Parse option prices exactly; estimates use whole rubles rounded upward. */
+function optionKopecks(raw: string): number | null {
+  const s = raw.replace(/\s+/g, " ").trim();
   if (!s) return 0;
-  const m = s.match(/^\+ ?(\d{1,3}(?: \d{3})*|\d+) ?₽$/);
-  return m ? Number(m[1]!.replace(/ /g, "")) : null;
+  const m = s.match(/^\+ ?(\d{1,3}(?: \d{3})*|\d+)(?:[,.](\d{1,2}))? ?₽$/);
+  if (!m) return null;
+  const amount = Number(m[1]!.replace(/ /g, "")) * 100 + Number((m[2] ?? "").padEnd(2, "0"));
+  return Number.isSafeInteger(amount) ? amount : null;
+}
+
+export function optionDelta(raw: string): number | null {
+  const amount = optionKopecks(raw);
+  return amount === null ? null : Math.ceil(amount / 100);
 }
 
 /** Сколько можно отметить в группе по подсказке «Выберите до 100», «Выберите 2», «от 1 до 3». */
@@ -225,9 +239,18 @@ export function edaBasePrice(dialog: RawDishDialog, groups: ReadonlyArray<ShopOp
   const total = parseShopRubles(dialog.price);
   const qty = /^\d{1,3}$/.test(dialog.qty.trim()) ? Number(dialog.qty.trim()) : 0;
   if (total === null || qty < 1 || total % qty !== 0) return null;
+  // Subtract exact selected supplements before rounding, otherwise two
+  // 49.99 options could make the inferred base price a ruble too low.
   let extra = 0;
-  dialog.groups.forEach((g, gi) => g.choices.forEach((c, ci) => { if (c.checked) extra += groups[gi]!.choices[ci]!.price_rub; }));
-  const base = total / qty - extra;
+  for (const group of dialog.groups) for (const choice of group.choices) {
+    if (!choice.checked) continue;
+    const amount = optionKopecks(choice.delta);
+    if (amount === null) return null;
+    extra += amount;
+  }
+  const exactTotal = optionKopecks(`+ ${dialog.price}`);
+  if (exactTotal === null) return null;
+  const base = Math.ceil((exactTotal / qty - extra) / 100);
   return base > 0 ? base : null;
 }
 
@@ -322,10 +345,17 @@ export function edaShopPage(page: any): ShopPage {
   };
 
   /** Окно блюда по карточке: клик по фото (по заголовку окно не открывается). */
-  const openDialog = async (index: number): Promise<boolean> => {
+  const openDialog = async (index: number, title?: string): Promise<boolean> => {
     await closeDialogs();
-    const card = page.locator(EDA_TESTID.menuCard).nth(index);
+    // Lazy rendering changes DOM indices after scrolling. Resolve by exact
+    // title for read-only search, and reject duplicate titles rather than guess.
+    const named = title === undefined ? null : page.locator(EDA_TESTID.menuCard).filter({
+      has: page.getByText(title, { exact: true }),
+    });
+    if (named && await named.count() !== 1) return false;
+    const card = named ?? page.locator(EDA_TESTID.menuCard).nth(index);
     await card.scrollIntoViewIfNeeded({ timeout: UI_TIMEOUT_MS }).catch(() => {});
+    if (title !== undefined && !(await visible(card.locator(EDA_TESTID.dishPlus).first(), 2_000))) return false;
     await card.click({ position: { x: 40, y: 40 }, timeout: UI_TIMEOUT_MS }).catch(() => {});
     return visible(fullDialog(), UI_TIMEOUT_MS);
   };
@@ -364,8 +394,8 @@ export function edaShopPage(page: any): ShopPage {
   };
 
   /** Окно блюда разобрано: название, группы (или null — не понимаем) и цена без доплат. */
-  const dishDialog = async (index: number) => {
-    if (!(await openDialog(index))) return null;
+  const dishDialog = async (index: number, title?: string) => {
+    if (!(await openDialog(index, title))) return null;
     const raw = await readDialog();
     if (!raw) return null;
     const groups = edaOptionGroups(raw.groups);
@@ -583,17 +613,22 @@ export function edaShopPage(page: any): ShopPage {
       const cards: SearchCard[] = [];
       const menu = await readMenu();
       if (!menu.length) throw new ShopError("search_incomplete");
+      let inspected = 0;
+      const deadline = Date.now() + 25_000;
       for (const [i, d] of menu.entries()) {
         const name = dishName(d.title, d.meta);
-        if (!name || !dishMatches(name, query) || !d.plus || EDA_TEXT.outOfStock.test(d.text)) continue;
+        if (!name || !dishMatches(name, query) || EDA_TEXT.outOfStock.test(d.text)) continue;
         // Одинаковые названия в меню не различаем — такое блюдо не заказать.
         if (menu.filter((x) => dishName(x.title, x.meta) === name).length !== 1) continue;
         // Опции и цена без доплат — из окна блюда; окно не открылось или не понятно — блюда нет в расчёте.
-        const dialog = await dishDialog(i);
+        if (inspected >= SHOP_CANDIDATES_MAX || Date.now() >= deadline) break;
+        inspected++;
+        const dialog = await dishDialog(i, d.title);
         await closeDialogs();
-        if (!dialog || dialog.name !== name || !dialog.groups || dialog.base === null) continue;
+        if (!dialog) break; // A broken dialog selector must not cost one timeout per dish.
+        if (!dialog.groups || dialog.base === null || !edaDialogMatches(d, dialog.raw)) continue;
         cards.push({
-          id: edaDishId(place, name), name, price_rub: dialog.base, available: true,
+          id: edaDishId(place, dialog.name), name: dialog.name, price_rub: dialog.base, available: true,
           ...(dialog.groups.length ? { options: dialog.groups } : {}),
         });
         if (cards.length === SHOP_CANDIDATES_MAX) break;

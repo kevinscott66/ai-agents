@@ -66,6 +66,7 @@ import {
   dishMatches,
   dishName,
   edaBasePrice,
+  edaDialogMatches,
   edaOptionGroups,
   edaPlaceUrl,
   isBlankContact,
@@ -1389,6 +1390,9 @@ describe("eda: dish options", () => {
   test("dish window: deltas, group limits, base price", () => {
     expect(optionDelta("")).toBe(0);
     expect(optionDelta("+ 150 ₽")).toBe(150);
+    expect(optionDelta("+ 49,99 ₽")).toBe(50);
+    expect(optionDelta("+ 0,01 ₽")).toBe(1);
+    expect(optionDelta("+ 49,999 ₽")).toBeNull();
     expect(optionDelta("+\u00a01\u00a0200\u00a0₽")).toBe(1200);
     expect(optionDelta("− 50 ₽")).toBeNull();
     expect(optionDelta("от 50 ₽")).toBeNull();
@@ -1413,6 +1417,16 @@ describe("eda: dish options", () => {
     expect(edaBasePrice({ name: "Пепперони", weight: "", price: "1 578 ₽", qty: "2", groups: raw }, groups)).toBe(699);
     expect(edaBasePrice({ name: "Пепперони", weight: "", price: "1 579 ₽", qty: "2", groups: raw }, groups)).toBeNull();
     expect(edaBasePrice({ name: "Пепперони", weight: "", price: "от 699 ₽", qty: "1", groups: raw }, groups)).toBeNull();
+  });
+
+  test("decimal supplements preserve base price before conservative rounding", () => {
+    const raw: RawOptionGroup[] = [{ title: "Добавки", hint: "Выберите до 2", choices: [
+      { name: "Сыр", delta: "+ 49,99 ₽", type: "checkbox", checked: true, label: 0 },
+      { name: "Лук", delta: "+ 44,99 ₽", type: "checkbox", checked: true, label: 1 },
+    ] }];
+    const groups = edaOptionGroups(raw)!;
+    expect(groups[0]!.choices.map(c => c.price_rub)).toEqual([50, 45]);
+    expect(edaBasePrice({ name: "Воппер", weight: "", price: "454,98 ₽", qty: "1", groups: raw }, groups)).toBe(360);
   });
 
   test("cart rows: options are part of the variant", () => {
@@ -2117,4 +2131,11 @@ test('retail collector excludes unavailable, external and ambiguous products', a
  for(const changed of [{available:false},{href:'https://evil.example/retail/zooopttorg/product/one'},{href:'/retail/other/product/one'},{href:'http://['}])expect(retailCandidates('retail@zooopttorg','Jarvi Kitten',[{...base,...changed}])).toEqual([]);
  expect(retailCandidates('retail@zooopttorg','Jarvi Kitten',[base,{...base,href:'/retail/zooopttorg/product/two'}])).toEqual([]);
  expect(retailCandidates('retail@zooopttorg','Jarvi Kitten',[])).toEqual([]);
+});
+
+test("dialog identity tolerates lazy weight, never a different dish or known weight", () => {
+  expect(edaDialogMatches({ title: "Воппер", meta: "1 шт" }, { name: "Воппер", weight: "274 г" })).toBe(true);
+  expect(edaDialogMatches({ title: "Воппер", meta: "274 г · 500 ккал" }, { name: "Воппер", weight: "274 г" })).toBe(true);
+  expect(edaDialogMatches({ title: "Воппер", meta: "1 шт" }, { name: "Двойной Воппер", weight: "388 г" })).toBe(false);
+  expect(edaDialogMatches({ title: "Воппер", meta: "274 г" }, { name: "Воппер", weight: "388 г" })).toBe(false);
 });

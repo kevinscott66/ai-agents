@@ -35,3 +35,24 @@ Visible add controls do not establish that a requested quantity can be fulfilled
 Retail checkout remains unverified. `prepare` returns `retail_checkout_unverified`
 before navigation or cart mutation. Restaurant checkout behavior is unchanged.
 A separate verified retail cart adapter is required before enabling preparation.
+
+## Interactive catalogue failures
+
+Shopping owner checks run before quota consumption, including on the inline tool
+path. Rejected group calls remain audited without consuming the private owner's
+shopping quota. Executor handlers retain their own authorization checks.
+
+Restaurant cards are lazily rendered: their DOM indices and placeholder weights
+can change on scroll. Read-only search opens a uniquely named card and verifies
+the dialog title and any known weight. A default single-item placeholder can be
+replaced by the actual dialog weight. Decimal supplements are parsed in kopecks;
+selected supplements are subtracted before rounding the base estimate upward.
+Checkout still verifies the current cart and requires the existing approval flow.
+
+Search inspects at most three matching dialogs and stops starting inspections
+after 25 seconds; an in-flight bounded operation can finish after that threshold.
+A missing dialog stops the scan. `search_incomplete` blocks further catalogue
+calls and follow-up scheduling in the same trusted request scope (request, role,
+chat, owner). This state expires after 15 minutes and is bounded to 512 entries.
+A new owner request has an independent scope. The agent should immediately report
+verified restaurant results and identify prices it could not verify.

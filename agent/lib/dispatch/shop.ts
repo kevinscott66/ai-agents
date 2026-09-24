@@ -174,6 +174,11 @@ function ownerRefusal(agentKey: string, chatId: number, userId: string | undefin
   return yandexOwnerRefusal(OWNER_POLICY, agentKey, chatId, userId, delegated);
 }
 
+/** The dispatcher checks the same owner boundary before consuming tool quota. */
+export function shopAccessRefusal(ctx: ShopInlineContext): string | null {
+  return ownerRefusal(ctx.agentKey, ctx.chatId, ctx.triggerUserId, inlineDelegated(ctx));
+}
+
 export type ShopToolResult = { ok: boolean } & Record<string, unknown>;
 
 const SERVICE_ERROR = `service must be one of: ${Object.keys(SHOP_SERVICES).join(", ")}`;
