@@ -13,6 +13,7 @@
  * (edaVariantId). Окно «корзина другого ресторана» — отказ, ничего не чистим.
  */
 import {
+  pickShopPlace,
   edaDishId,
   edaVariantId,
   normalizeShopName,
@@ -39,13 +40,14 @@ import {
   EDA_ORDERS_URL,
   EDA_ORIGIN,
   EDA_STATE_TEXT,
+  EDA_RETAIL_TESTID,
   EDA_TESTID,
   EDA_TEXT,
   edaSearchUrl,
 } from "./eda-selectors.ts";
 import { hostMatches, NAV_TIMEOUT_MS, pageKit, QTY_CLICKS_MAX, UI_TIMEOUT_MS, visible, wait } from "./shop-playwright.ts";
 import { waitFor } from "./playwright-kit.ts";
-import type { CartRow, QtyResult, SearchCard, ShopPage } from "./shop.ts";
+import { ShopError, type CartRow, type QtyResult, type SearchCard, type ShopPage } from "./shop.ts";
 
 /**
  * Поле контакта свободно: пустое или с подписью Яндекса по умолчанию
@@ -58,6 +60,8 @@ export const EMPTY_CART_RECHECK_MS = 2_500;
 
 export const edaPlaceUrl = (ref: string) => {
   const [brand, slug] = ref.split(":");
+  if (!SHOP_PLACE_REF.test(ref)) throw new ShopError("place_not_found");
+  if (ref.startsWith("retail@")) return `${EDA_ORIGIN}/retail/${encodeURIComponent(ref.slice(7))}`;
   return `${EDA_ORIGIN}/r/${encodeURIComponent(brand!)}?placeSlug=${encodeURIComponent(slug!)}`;
 };
 
@@ -88,6 +92,8 @@ export function placeRefFromHref(href: unknown): string | null {
     return null;
   }
   if (url.origin !== EDA_ORIGIN) return null;
+  const retail = url.pathname.match(/^\/retail\/([a-z0-9][a-z0-9_-]{0,79})\/?$/);
+  if (retail && !["d", "search"].includes(retail[1]!)) return `retail@${retail[1]}`;
   const m = url.pathname.match(/^\/r\/([^/]+)\/?$/);
   const slug = url.searchParams.get("placeSlug");
   if (!m || !slug) return null;
@@ -95,12 +101,26 @@ export function placeRefFromHref(href: unknown): string | null {
   return SHOP_PLACE_REF.test(ref) ? ref : null;
 }
 
+export function retailCandidates(place: string, query: string, rows: ReadonlyArray<{name:string;price:string;href:string|null;available:boolean}>): SearchCard[] {
+  const products = new Map<string, SearchCard>();
+  for (const row of rows) {
+    const name=normalizeShopName(row.name), price=parseShopRubles(row.price);
+    if(!name || price===null || !row.available || !dishMatches(name,query))continue;
+    let url:URL;try {url=new URL(row.href??"",EDA_ORIGIN);}catch{continue;}
+    if(url.origin!==EDA_ORIGIN || !url.pathname.startsWith(new URL(edaPlaceUrl(place)).pathname+"/product/"))continue;
+    products.set(url.pathname,{id:edaDishId(place,name),name,price_rub:price,available:true});
+  }
+  const result=[...products.values()];
+  return result.filter(card=>result.filter(other=>other.id===card.id).length===1).slice(0,SHOP_CANDIDATES_MAX);
+}
+
 const fold = (s: string) => s.toLowerCase().replace(/ё/g, "е").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 
 /** Блюдо подходит к запросу, если каждое слово запроса (по первым пяти буквам) есть в названии. */
 export function dishMatches(name: string, query: string): boolean {
-  const words = fold(name).split(" ");
-  const tokens = fold(query).split(" ").filter(Boolean);
+  const searchFold = (text: string) => fold(text.replace(/ä/gi,"a")).replace(/\bkitten\b/g,"котят");
+  const words = searchFold(name).split(" ");
+  const tokens = searchFold(query).split(" ").filter(t => t && !["для", "с", "со", "и", "в"].includes(t));
   return tokens.length > 0 && tokens.every((t) => words.some((w) => w.startsWith(t.slice(0, 5))));
 }
 
@@ -427,11 +447,27 @@ export function edaShopPage(page: any): ShopPage {
           meta: String(a.querySelector(sel.placeMeta)?.innerText ?? ""),
         }));
       }, EDA_TESTID);
-      return edaPlacesFromLinks(raw);
+      const found = edaPlacesFromLinks(raw);
+      if (q && pickShopPlace(q, found)) return found;
+      // Retail discovery lives on a separate page; restaurant search alone is incomplete.
+      try {
+      await goto(`${EDA_ORIGIN}/retail`);
+      await page.locator(EDA_TESTID.placeTitle).first().waitFor({state:"visible",timeout:UI_TIMEOUT_MS}).catch(()=>{});
+      const retail: Array<{href:string|null;name:string;meta:string}> = await page.evaluate((sel: typeof EDA_TESTID) => {
+        const doc=(globalThis as any).document;
+        return [...doc.querySelectorAll('a[href^="/retail/"]')].slice(0,300).map((a:any)=>({href:a.getAttribute("href"),name:String(a.querySelector(sel.placeTitle)?.innerText??""),meta:String(a.querySelector(sel.placeMeta)?.innerText??"")}));
+      },EDA_TESTID);
+      for(const entry of edaPlacesFromLinks(retail)) if(!found.some(p=>p.ref===entry.ref))found.push(entry);
+      } catch (error) {
+        if (!found.length) throw new ShopError("search_incomplete");
+      }
+      if(!found.length) throw new ShopError("search_incomplete");
+      return found;
     },
     openSearch: async (target, q) => {
       if (target.place) await openPlace(target.place);
       query = q;
+      if (target.place?.startsWith("retail@")) await goto(`${edaPlaceUrl(target.place)}?query=${encodeURIComponent(q)}`);
     },
     openProduct: async (target, it) => {
       if (target.place) await openPlace(target.place);
@@ -521,9 +557,32 @@ export function edaShopPage(page: any): ShopPage {
     },
     async searchCards() {
       if (!place || !query) return [];
-      if (EDA_TEXT.placeClosed.test(await bodyText())) return [];
+      if (place.startsWith("retail@")) {
+        await page.locator(EDA_RETAIL_TESTID.card).first().waitFor({state:"visible",timeout:UI_TIMEOUT_MS}).catch(()=>{});
+        const collected = new Map<string, {name:string;price:string;href:string|null;available:boolean}>();
+        let previous = "", stable = 0;
+        for(let step=0;step<EDA_MENU_SCROLLS;step++) {
+          const rows: Array<{name:string;price:string;href:string|null;available:boolean}> = await page.evaluate((sel:typeof EDA_RETAIL_TESTID)=>{
+            const doc=(globalThis as any).document;
+            return [...doc.querySelectorAll(sel.card)].filter((x:any)=>x.getClientRects().length).map((x:any)=>({
+              name:String(x.querySelector(sel.name)?.textContent??""),price:String(x.querySelector(sel.price)?.textContent??""),href:x.querySelector("a[href]")?.getAttribute("href")??null,
+              available:!!x.querySelector(`${sel.add}:not([disabled]):not([aria-disabled="true"])`) && x.querySelector("a")?.getAttribute("aria-disabled")!=="true",
+            }));
+          }, EDA_RETAIL_TESTID);
+          for(const row of rows) if(row.href)collected.set(row.href,row);
+          const signature=rows.map(r=>r.href).join("|");
+          stable=signature===previous?stable+1:0;previous=signature;
+          if(stable>=3 || retailCandidates(place,query,[...collected.values()]).length>=SHOP_CANDIDATES_MAX)break;
+          await page.mouse.wheel(0,900);await wait(500);
+        }
+        const unique=retailCandidates(place,query,[...collected.values()]);
+        if(!unique.length)throw new ShopError("search_incomplete");
+        return unique;
+      }
+      if (EDA_TEXT.placeClosed.test(await bodyText())) throw new ShopError("search_incomplete");
       const cards: SearchCard[] = [];
       const menu = await readMenu();
+      if (!menu.length) throw new ShopError("search_incomplete");
       for (const [i, d] of menu.entries()) {
         const name = dishName(d.title, d.meta);
         if (!name || !dishMatches(name, query) || !d.plus || EDA_TEXT.outOfStock.test(d.text)) continue;
@@ -539,6 +598,7 @@ export function edaShopPage(page: any): ShopPage {
         });
         if (cards.length === SHOP_CANDIDATES_MAX) break;
       }
+      if (!cards.length) throw new ShopError("search_incomplete");
       return cards;
     },
     async product() {

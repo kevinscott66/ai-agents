@@ -37,7 +37,7 @@ const POPULAR_BLOCK = '[id^="popular_"]';
 
 export const EDA_TESTID = {
   // сверено
-  placeLink: 'a[href^="/r/"]',
+  placeLink: 'a[href^="/r/"], a[href^="/retail/"]',
   // сниппет на главной и заголовок карточки в поиске
   placeTitle: '[data-testid="place-snippet-title"], [data-testid="place-header-title"]',
   /**
@@ -144,3 +144,11 @@ export const EDA_STATE_TEXT: ReadonlyArray<[ShopOrderState, RegExp]> = [
 
 /** Сколько раз прокручивать меню, чтобы догрузились все карточки. */
 export const EDA_MENU_SCROLLS = 12;
+
+/** Verified against the public retail catalogue; separate from restaurant menus. */
+export const EDA_RETAIL_TESTID = {
+ card: '[data-testid="product-card-root"]',
+ name: '[data-testid="product-card-name"]',
+ price: '[data-testid="product-card-price"]',
+ add: '[data-testid="amount-select-increment"]',
+};

@@ -1236,10 +1236,21 @@ describe("eda: mac runner", () => {
     const { s, page } = edaPage();
     s.place = null;
     const r = runner(page);
-    expect(await r.run({ op: "quote", service: "eda", place: "нет такого", queries: ["чизбургер"] })).toEqual({ ok: false, code: "place_not_found", screenshot: "U0NSRUVO" });
+    expect(await r.run({ op: "quote", service: "eda", place: "нет такого", queries: ["чизбургер"] })).toEqual({ ok: false, code: "search_incomplete", screenshot: "U0NSRUVO" });
     s.place = { ref: "not a ref", name: "Бургер Хаус" };
-    expect((await r.run({ op: "quote", service: "eda", place: "бургер хаус", queries: ["чизбургер"] }) as { code: string }).code).toBe("place_not_found");
+    expect((await r.run({ op: "quote", service: "eda", place: "бургер хаус", queries: ["чизбургер"] }) as { code: string }).code).toBe("search_incomplete");
     expect(s.opened).toEqual(["home:eda", "home:eda"]);
+    await r.close();
+  });
+
+  test("retail preparation refuses before navigation or cart mutation", async () => {
+    const { s, page } = edaPage();
+    const r = runner(page);
+    expect(await r.run({ ...prepare, place: "retail@zooopttorg" })).toMatchObject({
+      ok: false, code: "retail_checkout_unverified",
+    });
+    expect(s.opened).toEqual([]);
+    expect(s.clicks).toEqual([]);
     await r.close();
   });
 
@@ -2018,7 +2029,7 @@ describe("eda: время доставки", () => {
     const { s, page } = edaPage();
     s.places = [PIZZA];
     const r = runner(page);
-    expect((await r.run({ op: "quote", service: "eda", place: "бургер хаус", queries: ["чизбургер"] }) as { code: string }).code).toBe("place_not_found");
+    expect((await r.run({ op: "quote", service: "eda", place: "бургер хаус", queries: ["чизбургер"] }) as { code: string }).code).toBe("search_incomplete");
     expect(s.placeQueries).toEqual(["бургер хаус", null]);
     await r.close();
   });
@@ -2076,4 +2087,34 @@ describe("eda: время доставки", () => {
       expect(await quoteShop({ service: "eda", place: "гриль", max_eta_min: 60, queries: ["шаурма"] }, h.ctx)).toMatchObject({ ok: false, error: "invalid_shop_result" });
     });
   });
+});
+
+describe('retail discovery and incomplete search',()=>{
+ test('retail references round-trip on the trusted origin',()=>{
+  expect(placeRefFromHref('/retail/chetiry_lapy')).toBe('retail@chetiry_lapy');
+  expect(edaPlaceUrl('retail@chetiry_lapy')).toBe('https://eda.yandex.ru/retail/chetiry_lapy');
+  expect(placeRefFromHref('https://evil.example/retail/chetiry_lapy')).toBeNull();
+  expect(edaPlaceUrl(placeRefFromHref('/r/retail?placeSlug=abc')!)).toBe('https://eda.yandex.ru/r/retail?placeSlug=abc');
+  expect(placeRefFromHref('/retail/d')).toBeNull();
+  expect(placeRefFromHref('/retail/search')).toBeNull();
+  expect(placeRefFromHref('/retail/store/product/123')).toBeNull();
+ });
+ test('stopwords do not hide kitten products',()=>{
+  expect(dishMatches('Влажный корм котятам курица 85 г','корм для котят')).toBe(true);
+  expect(dishMatches('Корм взрослым кошкам','корм для котят')).toBe(false);
+  expect(dishMatches('Влажный корм Ярви (Jarvi) Extra meat line для котят телятина 85 г','Jarvi Kitten')).toBe(true);
+ });
+ test('incomplete search is actionable uncertainty, not stock absence',()=>{
+  expect(parseShopOutcome(JSON.stringify({ok:false,code:'search_incomplete'}),'quote')).toMatchObject({ok:false,code:'search_incomplete'});
+  expect(SHOP_RECOVERY.search_incomplete.next).toContain('Не говори');
+ });
+});
+
+test('retail collector excludes unavailable, external and ambiguous products', async()=>{
+ const {retailCandidates}=await import('../mac-daemon/eda-playwright');
+ const base={name:'Jarvi Kitten 85 г',price:'115 ₽',href:'/retail/zooopttorg/product/one',available:true};
+ expect(retailCandidates('retail@zooopttorg','Jarvi Kitten',[base])).toHaveLength(1);
+ for(const changed of [{available:false},{href:'https://evil.example/retail/zooopttorg/product/one'},{href:'/retail/other/product/one'},{href:'http://['}])expect(retailCandidates('retail@zooopttorg','Jarvi Kitten',[{...base,...changed}])).toEqual([]);
+ expect(retailCandidates('retail@zooopttorg','Jarvi Kitten',[base,{...base,href:'/retail/zooopttorg/product/two'}])).toEqual([]);
+ expect(retailCandidates('retail@zooopttorg','Jarvi Kitten',[])).toEqual([]);
 });

@@ -210,7 +210,7 @@ export function checkShopProfile(dir: string | undefined, uid: number | undefine
 
 /** Отказы, к которым полезен скриншот: владелец видит, на чём встали. */
 const SCREENSHOT_CODES: readonly ShopFailCode[] = [
-  "login_required", "address_required", "captcha", "unexpected_page", "place_not_found", "place_too_slow", "product_not_found", "product_mismatch",
+  "login_required", "address_required", "captcha", "unexpected_page", "search_incomplete", "place_not_found", "place_too_slow", "product_not_found", "product_mismatch",
   "out_of_stock", "options_required", "options_mismatch", "cart_not_empty", "cart_mismatch", "price_unreadable", "price_changed", "checkout_unavailable",
   "payment_needs_owner", "pay_button_missing",
 ];
@@ -437,7 +437,7 @@ export class ShopRunner {
           // Поиск, а если в нём ресторана с таким названием нет — главная.
           let pick = pickShopPlace(query, await this.readPlaces(page, query), request.max_eta_min);
           if (!pick) pick = pickShopPlace(query, await this.readPlaces(page, null), request.max_eta_min);
-          if (!pick) throw new ShopError("place_not_found");
+          if (!pick) throw new ShopError("search_incomplete");
           if ("too_slow" in pick) throw new ShopError("place_too_slow");
           place = pick.place;
           target = { service: request.service, place: place.ref };
@@ -478,6 +478,7 @@ export class ShopRunner {
         return { ok: true, op: "places", address, places };
       }
       case "prepare": {
+        if (request.service === "eda" && request.place?.startsWith("retail@")) throw new ShopError("retail_checkout_unverified");
         const active = this.activeSession();
         if (active && active.id !== request.session) throw new ShopError("shop_busy");
         if (active) this.strand(active.target, await this.clearLines(page, active.target, active.items));

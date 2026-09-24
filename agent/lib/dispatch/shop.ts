@@ -377,7 +377,7 @@ export async function quoteShop(input: Record<string, unknown>, ctx: ShopInlineC
       max_rub: maxRubFor(limitsFromEnv(), SHOP_GATE_SERVICE[service]),
       valid_min: Math.round(SHOP_QUOTE_TTL_MS / 60_000),
       note:
-        `Это поиск, не заказ. Для заказа — ${shopOrderType(service)} с выбранными товарами: id, name и price_rub ровно из этого расчёта, qty — сколько просил владелец; ` +
+        `Найденные карточки не являются полным каталогом: пустая выдача не доказывает отсутствие товара, другую причину (адрес/закрытие) без проверки не утверждай. Это поиск, не заказ. Для заказа — ${shopOrderType(service)} с выбранными товарами: id, name и price_rub ровно из этого расчёта, qty — сколько просил владелец; ` +
         (out.place ? "place — ресторан ровно из расчёта; если он не тот, что имел в виду владелец, переспроси; " : "") +
         (out.results.some((r) => r.candidates.some((c) => c.options))
           ? "у блюда с options выбор делает владелец: в каждой группе отметь от min до max вариантов (min ≥ 1 — обязательно, не знаешь выбор — спроси, не выбирай сам), " +

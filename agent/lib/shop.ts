@@ -69,7 +69,7 @@ const SESSION = /^[A-Za-z0-9_-]{16,64}$/;
 /** Идентификатор товара — slug из ссылки `/good/<slug>`. */
 export const SHOP_PRODUCT_ID = /^[a-z0-9][a-z0-9-]{0,159}$/;
 /** Ресторан Еды: `<бренд>:<placeSlug>` из ссылки `/r/<бренд>?placeSlug=<placeSlug>`. */
-export const SHOP_PLACE_REF = /^[a-z0-9][a-z0-9_-]{0,79}:[a-z0-9][a-z0-9_-]{0,79}$/;
+export const SHOP_PLACE_REF = /^(?:[a-z0-9][a-z0-9_-]{0,79}:[a-z0-9][a-z0-9_-]{0,79}|retail@[a-z0-9][a-z0-9_-]{0,79})$/;
 /** Товар Маркета: номер карточки из ссылки `/card/<slug>/<номер>`. Подмножество SHOP_PRODUCT_ID. */
 export const MARKET_PRODUCT_ID = /^[1-9]\d{0,19}$/;
 
@@ -132,6 +132,8 @@ export const SHOP_PRE_ORDER_CODES = [
   "address_required",
   "captcha",
   "unexpected_page",
+  "retail_checkout_unverified",
+  "search_incomplete",
   "place_not_found",
   "place_too_slow",
   "product_not_found",
@@ -739,6 +741,8 @@ export const SHOP_FAIL_LABEL: Record<ShopFailCode, string> = {
   payment_needs_owner: "нет сохранённой карты — агент карту не вводит, нужен владелец",
   pay_button_missing: "кнопка оплаты не найдена",
   session_unknown: "подготовленный заказ не найден или устарел",
+  retail_checkout_unverified: "оформление розничного магазина ещё не проверено; корзина не изменена",
+  search_incomplete: "каталог не проверен полностью; наличие не установлено",
   shop_busy: "браузер покупок занят другим запросом",
   shop_paying: "браузер покупок оформляет оплату — его не сбрасывают",
 };
@@ -778,6 +782,8 @@ export const SHOP_RECOVERY: Record<ShopFailCode, ShopRecovery> = {
   payment_needs_owner: { owner: true, next: "карту агент не вводит — попроси владельца сохранить карту в Яндексе" },
   pay_button_missing: { owner: false, next: "заказ не повторяй: проверь SHOP_STATUS и скажи владельцу итог" },
   session_unknown: { owner: false, next: "подготовка устарела — заново SHOP_CHECKOUT и новое подтверждение владельца" },
+  retail_checkout_unverified: { owner: false, next: "Поиск магазина и товаров выполнен, но адаптер оформления розничного заказа ещё не проверен. Не утверждай отсутствие товара и не повторяй оплату; сохрани выбранные позиции для завершения после подключения оформления." },
+  search_incomplete: { owner: false, next: "Не говори, что товара или магазина нет. Каталог не удалось проверить полностью. Уточни ссылку на нужную точку или используй проверенный браузерный поиск; не выдумывай причину и не меняй адрес/товар без владельца." },
   shop_busy: { owner: false, next: "сервер исчерпал ожидание и сброс браузера. Не повторяй этот вызов в текущем ходе и не обещай срок. Нужна диагностика браузерного исполнителя; не обнуляй корзину и не повторяй оплату. При отложенной проверке автоматическое продолжение заблокировано, задача сохранена" },
   shop_paying: { owner: false, next: "на Mac идёт оплата другого заказа — её итог придёт сам; ничего не повторяй, а своё дело отложи через SCHEDULE_FOLLOWUP через 5 мин" },
 };
