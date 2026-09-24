@@ -89,7 +89,7 @@ export const SELF_SETTLE_MS = 20_000;
  */
 export async function settleOrRelease<T>(
   work: Promise<T>,
-  o: { signal?: AbortSignal; deadlineMs: number; release: () => Promise<void>; graceMs?: number; selfSettleMs?: number },
+  o: { signal?: AbortSignal; deadlineMs: number; release: () => Promise<void>; graceMs?: number; selfSettleMs?: number; releaseTimeoutMs?: number },
 ): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
@@ -111,7 +111,10 @@ export async function settleOrRelease<T>(
     const own = await Promise.race([outcome, wait(o.selfSettleMs ?? SELF_SETTLE_MS)]);
     if (own && "value" in own) return own.value;
     if (own) throw own.error;
-    await o.release().catch(() => {});
+    // Only opt in when the caller quarantines the closing browser and work is read-only.
+    const release = Promise.resolve().then(o.release).catch(() => {});
+    if (o.releaseTimeoutMs !== undefined) await Promise.race([release, wait(o.releaseTimeoutMs)]);
+    else await release;
     await Promise.race([outcome, wait(o.graceMs ?? STUCK_GRACE_MS)]);
     throw first.cause;
   } finally {

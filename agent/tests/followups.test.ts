@@ -217,3 +217,23 @@ describe("запуск в срок", () => {
     expect(renderFollowupTurn({ task: "t", created_at: now - 5 * MIN, due_at: now }, now)).not.toContain("опозданием");
   });
 });
+
+test('exhausted shop dependency stops rephrased continuations and preserves failed task', async () => {
+ const {blockFollowupDependency}=await import('../lib/followup-execution');
+ const now=Date.now()+1000000;
+ const made=createFollowup({chatId:OWNER_CHAT,userId:OWNER,agentKey:'orchestrator',task:'dependency regression',inMin:1,now});
+ expect(made.ok).toBe(true);if(!made.ok)return;
+ const stats=await runDueFollowups({now:()=>now+MIN,runner:{notify:async()=>1,run:async(row)=>{
+  const early=createFollowup({chatId:row.chat_id,userId:row.user_id,agentKey:"orchestrator",task:"early continuation",inMin:5,now});
+  expect(early.ok).toBe(true);
+  blockFollowupDependency(row.chat_id,row.user_id,'shop_browser');
+  expect(createFollowup({chatId:row.chat_id,userId:row.user_id,agentKey:'orchestrator',task:'different wording',inMin:5,now}).ok).toBe(false);
+ }}});
+ expect(stats.failed).toBeGreaterThan(0);
+ expect(db.prepare("SELECT status FROM followups WHERE task = ? AND chat_id = ? ORDER BY created_at DESC LIMIT 1").get("early continuation",OWNER_CHAT)).toMatchObject({status:"cancelled"});
+ expect(getFollowup(made.followup.id)?.status).toBe('failed');
+ expect(getFollowup(made.followup.id)?.task).toBe('dependency regression');
+ expect(getFollowup(made.followup.id)?.error).toContain('dependency_blocked');
+ // A new owner turn has no inherited failure context.
+ expect(createFollowup({chatId:OWNER_CHAT,userId:OWNER,agentKey:'orchestrator',task:'owner resumes',inMin:5,now}).ok).toBe(true);
+});

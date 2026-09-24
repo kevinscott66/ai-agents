@@ -1,3 +1,4 @@
+import { followupExecution, blockedFollowupDependency } from "./followup-execution.ts";
 /**
  * Отложенные проверки: SCHEDULE_FOLLOWUP / CANCEL_FOLLOWUP и таймер, который в
  * срок будит самого агента.
@@ -102,6 +103,8 @@ export function createFollowup(opts: {
   inMin: unknown;
   now?: number;
 }): { ok: true; followup: FollowupRow } | { ok: false; error: string } {
+  const blocked = blockedFollowupDependency(opts.chatId, opts.userId);
+  if (blocked) return { ok: false, error: `dependency_blocked: ${blocked}. Автоповторы остановлены; задача сохранена. Не обещай новый срок. Сообщи причину и необходимость диагностики; после восстановления продолжай только по новому запросу владельца.` };
   const now = opts.now ?? Date.now();
   const task = typeof opts.task === "string" ? opts.task.trim() : "";
   if (!task) return { ok: false, error: "task is required" };
@@ -127,6 +130,8 @@ export function createFollowup(opts: {
     `INSERT INTO followups (id, chat_id, user_id, agent_key, task, due_at, status, attempts, created_at)
      VALUES (?, ?, ?, ?, ?, ?, 'scheduled', 0, ?)`,
   ).run(id, opts.chatId, opts.userId, opts.agentKey, task, now + inMin * MINUTE_MS, now);
+  const execution = followupExecution.getStore();
+  if (execution?.chatId === opts.chatId && execution.userId === opts.userId) (execution.created ??= []).push(id);
   return { ok: true, followup: getFollowup(id)! };
 }
 
@@ -197,7 +202,7 @@ export function renderFollowupTurn(r: Pick<FollowupRow, "task" | "created_at" | 
     `[Отложенная проверка, которую ты сам поставил ${formatMsk(r.created_at)} МСК${late}. ` +
     `Это не новое сообщение владельца.] Задача: ${r.task}\n` +
     `Сделай это сейчас и коротко напиши владельцу итог. Если снова не вышло и есть смысл ждать — ` +
-    `поставь новую проверку SCHEDULE_FOLLOWUP, а не проси владельца напомнить. Деньги — только через обычную подпись владельца.`
+    `поставь новую проверку SCHEDULE_FOLLOWUP, а не проси владельца напомнить. Если инструмент вернул dependency_blocked или исчерпал восстановление shop_busy, не ставь повтор и не обещай срок: объясни блокировку и необходимость диагностики. Деньги — только через обычную подпись владельца.`
   );
 }
 
@@ -271,7 +276,14 @@ export async function runDueFollowups(opts: { runner?: FollowupRunner | null; no
     }
     // Вступление ушло — дальше ход; его сбой не повторяем, он мог что-то сделать.
     try {
-      await r.run(row, renderFollowupTurn(row, clock()), noticeId);
+      const execution = {chatId: row.chat_id, userId: row.user_id, blocked: undefined as string | undefined, created: [] as string[]};
+      await followupExecution.run(execution, () => r.run(row, renderFollowupTurn(row, clock()), noticeId));
+      if (execution.blocked) {
+        for (const child of execution.created) cancelFollowup(child, row.chat_id);
+        finish.run("failed", clock(), `dependency_blocked: ${execution.blocked}; automatic retries stopped; task retained`, id);
+        stats.failed++;
+        continue;
+      }
       finish.run("done", clock(), null, id);
       stats.ran++;
       log.info("[followups] проверка отработала", { id, lateMs: Math.max(0, clock() - row.due_at) });

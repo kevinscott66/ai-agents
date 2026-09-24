@@ -13,6 +13,7 @@
  * (edaVariantId). Окно «корзина другого ресторана» — отказ, ничего не чистим.
  */
 import {
+  pickShopPlace,
   edaDishId,
   edaVariantId,
   normalizeShopName,
@@ -39,13 +40,14 @@ import {
   EDA_ORDERS_URL,
   EDA_ORIGIN,
   EDA_STATE_TEXT,
+  EDA_RETAIL_TESTID,
   EDA_TESTID,
   EDA_TEXT,
   edaSearchUrl,
 } from "./eda-selectors.ts";
 import { hostMatches, NAV_TIMEOUT_MS, pageKit, QTY_CLICKS_MAX, UI_TIMEOUT_MS, visible, wait } from "./shop-playwright.ts";
 import { waitFor } from "./playwright-kit.ts";
-import type { CartRow, QtyResult, SearchCard, ShopPage } from "./shop.ts";
+import { ShopError, type CartRow, type QtyResult, type SearchCard, type ShopPage } from "./shop.ts";
 
 /**
  * Поле контакта свободно: пустое или с подписью Яндекса по умолчанию
@@ -58,6 +60,8 @@ export const EMPTY_CART_RECHECK_MS = 2_500;
 
 export const edaPlaceUrl = (ref: string) => {
   const [brand, slug] = ref.split(":");
+  if (!SHOP_PLACE_REF.test(ref)) throw new ShopError("place_not_found");
+  if (ref.startsWith("retail@")) return `${EDA_ORIGIN}/retail/${encodeURIComponent(ref.slice(7))}`;
   return `${EDA_ORIGIN}/r/${encodeURIComponent(brand!)}?placeSlug=${encodeURIComponent(slug!)}`;
 };
 
@@ -88,6 +92,8 @@ export function placeRefFromHref(href: unknown): string | null {
     return null;
   }
   if (url.origin !== EDA_ORIGIN) return null;
+  const retail = url.pathname.match(/^\/retail\/([a-z0-9][a-z0-9_-]{0,79})\/?$/);
+  if (retail && !["d", "search"].includes(retail[1]!)) return `retail@${retail[1]}`;
   const m = url.pathname.match(/^\/r\/([^/]+)\/?$/);
   const slug = url.searchParams.get("placeSlug");
   if (!m || !slug) return null;
@@ -95,12 +101,26 @@ export function placeRefFromHref(href: unknown): string | null {
   return SHOP_PLACE_REF.test(ref) ? ref : null;
 }
 
+export function retailCandidates(place: string, query: string, rows: ReadonlyArray<{name:string;price:string;href:string|null;available:boolean}>): SearchCard[] {
+  const products = new Map<string, SearchCard>();
+  for (const row of rows) {
+    const name=normalizeShopName(row.name), price=parseShopRubles(row.price);
+    if(!name || price===null || !row.available || !dishMatches(name,query))continue;
+    let url:URL;try {url=new URL(row.href??"",EDA_ORIGIN);}catch{continue;}
+    if(url.origin!==EDA_ORIGIN || !url.pathname.startsWith(new URL(edaPlaceUrl(place)).pathname+"/product/"))continue;
+    products.set(url.pathname,{id:edaDishId(place,name),name,price_rub:price,available:true});
+  }
+  const result=[...products.values()];
+  return result.filter(card=>result.filter(other=>other.id===card.id).length===1).slice(0,SHOP_CANDIDATES_MAX);
+}
+
 const fold = (s: string) => s.toLowerCase().replace(/ё/g, "е").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 
 /** Блюдо подходит к запросу, если каждое слово запроса (по первым пяти буквам) есть в названии. */
 export function dishMatches(name: string, query: string): boolean {
-  const words = fold(name).split(" ");
-  const tokens = fold(query).split(" ").filter(Boolean);
+  const searchFold = (text: string) => fold(text.replace(/ä/gi,"a")).replace(/\bkitten\b/g,"котят");
+  const words = searchFold(name).split(" ");
+  const tokens = searchFold(query).split(" ").filter(t => t && !["для", "с", "со", "и", "в"].includes(t));
   return tokens.length > 0 && tokens.every((t) => words.some((w) => w.startsWith(t.slice(0, 5))));
 }
 
@@ -138,12 +158,26 @@ export interface RawDishDialog {
   groups: RawOptionGroup[];
 }
 
-/** «+ 150 ₽» → 150, пусто → 0; другое — не понимаем. */
-export function optionDelta(raw: string): number | null {
-  const s = raw.replace(/[\u00a0\u202f\u2009]/g, " ").replace(/\s+/g, " ").trim();
+/** A lazy single-item placeholder may be replaced by the dialog's real weight. */
+export function edaDialogMatches(card: { title: string; meta: string }, dialog: { name: string; weight: string }): boolean {
+  if (normalizeShopName(card.title) !== normalizeShopName(dialog.name)) return false;
+  return dishName(card.title, card.meta) === dishName(dialog.name, dialog.weight)
+    || /^(?:1\s*шт\.?)?$/.test(card.meta.trim());
+}
+
+/** Parse option prices exactly; estimates use whole rubles rounded upward. */
+function optionKopecks(raw: string): number | null {
+  const s = raw.replace(/\s+/g, " ").trim();
   if (!s) return 0;
-  const m = s.match(/^\+ ?(\d{1,3}(?: \d{3})*|\d+) ?₽$/);
-  return m ? Number(m[1]!.replace(/ /g, "")) : null;
+  const m = s.match(/^\+ ?(\d{1,3}(?: \d{3})*|\d+)(?:[,.](\d{1,2}))? ?₽$/);
+  if (!m) return null;
+  const amount = Number(m[1]!.replace(/ /g, "")) * 100 + Number((m[2] ?? "").padEnd(2, "0"));
+  return Number.isSafeInteger(amount) ? amount : null;
+}
+
+export function optionDelta(raw: string): number | null {
+  const amount = optionKopecks(raw);
+  return amount === null ? null : Math.ceil(amount / 100);
 }
 
 /** Сколько можно отметить в группе по подсказке «Выберите до 100», «Выберите 2», «от 1 до 3». */
@@ -205,9 +239,18 @@ export function edaBasePrice(dialog: RawDishDialog, groups: ReadonlyArray<ShopOp
   const total = parseShopRubles(dialog.price);
   const qty = /^\d{1,3}$/.test(dialog.qty.trim()) ? Number(dialog.qty.trim()) : 0;
   if (total === null || qty < 1 || total % qty !== 0) return null;
+  // Subtract exact selected supplements before rounding, otherwise two
+  // 49.99 options could make the inferred base price a ruble too low.
   let extra = 0;
-  dialog.groups.forEach((g, gi) => g.choices.forEach((c, ci) => { if (c.checked) extra += groups[gi]!.choices[ci]!.price_rub; }));
-  const base = total / qty - extra;
+  for (const group of dialog.groups) for (const choice of group.choices) {
+    if (!choice.checked) continue;
+    const amount = optionKopecks(choice.delta);
+    if (amount === null) return null;
+    extra += amount;
+  }
+  const exactTotal = optionKopecks(`+ ${dialog.price}`);
+  if (exactTotal === null) return null;
+  const base = Math.ceil((exactTotal / qty - extra) / 100);
   return base > 0 ? base : null;
 }
 
@@ -302,10 +345,17 @@ export function edaShopPage(page: any): ShopPage {
   };
 
   /** Окно блюда по карточке: клик по фото (по заголовку окно не открывается). */
-  const openDialog = async (index: number): Promise<boolean> => {
+  const openDialog = async (index: number, title?: string): Promise<boolean> => {
     await closeDialogs();
-    const card = page.locator(EDA_TESTID.menuCard).nth(index);
+    // Lazy rendering changes DOM indices after scrolling. Resolve by exact
+    // title for read-only search, and reject duplicate titles rather than guess.
+    const named = title === undefined ? null : page.locator(EDA_TESTID.menuCard).filter({
+      has: page.getByText(title, { exact: true }),
+    });
+    if (named && await named.count() !== 1) return false;
+    const card = named ?? page.locator(EDA_TESTID.menuCard).nth(index);
     await card.scrollIntoViewIfNeeded({ timeout: UI_TIMEOUT_MS }).catch(() => {});
+    if (title !== undefined && !(await visible(card.locator(EDA_TESTID.dishPlus).first(), 2_000))) return false;
     await card.click({ position: { x: 40, y: 40 }, timeout: UI_TIMEOUT_MS }).catch(() => {});
     return visible(fullDialog(), UI_TIMEOUT_MS);
   };
@@ -344,8 +394,8 @@ export function edaShopPage(page: any): ShopPage {
   };
 
   /** Окно блюда разобрано: название, группы (или null — не понимаем) и цена без доплат. */
-  const dishDialog = async (index: number) => {
-    if (!(await openDialog(index))) return null;
+  const dishDialog = async (index: number, title?: string) => {
+    if (!(await openDialog(index, title))) return null;
     const raw = await readDialog();
     if (!raw) return null;
     const groups = edaOptionGroups(raw.groups);
@@ -427,11 +477,27 @@ export function edaShopPage(page: any): ShopPage {
           meta: String(a.querySelector(sel.placeMeta)?.innerText ?? ""),
         }));
       }, EDA_TESTID);
-      return edaPlacesFromLinks(raw);
+      const found = edaPlacesFromLinks(raw);
+      if (q && pickShopPlace(q, found)) return found;
+      // Retail discovery lives on a separate page; restaurant search alone is incomplete.
+      try {
+      await goto(`${EDA_ORIGIN}/retail`);
+      await page.locator(EDA_TESTID.placeTitle).first().waitFor({state:"visible",timeout:UI_TIMEOUT_MS}).catch(()=>{});
+      const retail: Array<{href:string|null;name:string;meta:string}> = await page.evaluate((sel: typeof EDA_TESTID) => {
+        const doc=(globalThis as any).document;
+        return [...doc.querySelectorAll('a[href^="/retail/"]')].slice(0,300).map((a:any)=>({href:a.getAttribute("href"),name:String(a.querySelector(sel.placeTitle)?.innerText??""),meta:String(a.querySelector(sel.placeMeta)?.innerText??"")}));
+      },EDA_TESTID);
+      for(const entry of edaPlacesFromLinks(retail)) if(!found.some(p=>p.ref===entry.ref))found.push(entry);
+      } catch (error) {
+        if (!found.length) throw new ShopError("search_incomplete");
+      }
+      if(!found.length) throw new ShopError("search_incomplete");
+      return found;
     },
     openSearch: async (target, q) => {
       if (target.place) await openPlace(target.place);
       query = q;
+      if (target.place?.startsWith("retail@")) await goto(`${edaPlaceUrl(target.place)}?query=${encodeURIComponent(q)}`);
     },
     openProduct: async (target, it) => {
       if (target.place) await openPlace(target.place);
@@ -521,24 +587,53 @@ export function edaShopPage(page: any): ShopPage {
     },
     async searchCards() {
       if (!place || !query) return [];
-      if (EDA_TEXT.placeClosed.test(await bodyText())) return [];
+      if (place.startsWith("retail@")) {
+        await page.locator(EDA_RETAIL_TESTID.card).first().waitFor({state:"visible",timeout:UI_TIMEOUT_MS}).catch(()=>{});
+        const collected = new Map<string, {name:string;price:string;href:string|null;available:boolean}>();
+        let previous = "", stable = 0;
+        for(let step=0;step<EDA_MENU_SCROLLS;step++) {
+          const rows: Array<{name:string;price:string;href:string|null;available:boolean}> = await page.evaluate((sel:typeof EDA_RETAIL_TESTID)=>{
+            const doc=(globalThis as any).document;
+            return [...doc.querySelectorAll(sel.card)].filter((x:any)=>x.getClientRects().length).map((x:any)=>({
+              name:String(x.querySelector(sel.name)?.textContent??""),price:String(x.querySelector(sel.price)?.textContent??""),href:x.querySelector("a[href]")?.getAttribute("href")??null,
+              available:!!x.querySelector(`${sel.add}:not([disabled]):not([aria-disabled="true"])`) && x.querySelector("a")?.getAttribute("aria-disabled")!=="true",
+            }));
+          }, EDA_RETAIL_TESTID);
+          for(const row of rows) if(row.href)collected.set(row.href,row);
+          const signature=rows.map(r=>r.href).join("|");
+          stable=signature===previous?stable+1:0;previous=signature;
+          if(stable>=3 || retailCandidates(place,query,[...collected.values()]).length>=SHOP_CANDIDATES_MAX)break;
+          await page.mouse.wheel(0,900);await wait(500);
+        }
+        const unique=retailCandidates(place,query,[...collected.values()]);
+        if(!unique.length)throw new ShopError("search_incomplete");
+        return unique;
+      }
+      if (EDA_TEXT.placeClosed.test(await bodyText())) throw new ShopError("search_incomplete");
       const cards: SearchCard[] = [];
       const menu = await readMenu();
+      if (!menu.length) throw new ShopError("search_incomplete");
+      let inspected = 0;
+      const deadline = Date.now() + 25_000;
       for (const [i, d] of menu.entries()) {
         const name = dishName(d.title, d.meta);
-        if (!name || !dishMatches(name, query) || !d.plus || EDA_TEXT.outOfStock.test(d.text)) continue;
+        if (!name || !dishMatches(name, query) || EDA_TEXT.outOfStock.test(d.text)) continue;
         // Одинаковые названия в меню не различаем — такое блюдо не заказать.
         if (menu.filter((x) => dishName(x.title, x.meta) === name).length !== 1) continue;
         // Опции и цена без доплат — из окна блюда; окно не открылось или не понятно — блюда нет в расчёте.
-        const dialog = await dishDialog(i);
+        if (inspected >= SHOP_CANDIDATES_MAX || Date.now() >= deadline) break;
+        inspected++;
+        const dialog = await dishDialog(i, d.title);
         await closeDialogs();
-        if (!dialog || dialog.name !== name || !dialog.groups || dialog.base === null) continue;
+        if (!dialog) break; // A broken dialog selector must not cost one timeout per dish.
+        if (!dialog.groups || dialog.base === null || !edaDialogMatches(d, dialog.raw)) continue;
         cards.push({
-          id: edaDishId(place, name), name, price_rub: dialog.base, available: true,
+          id: edaDishId(place, dialog.name), name: dialog.name, price_rub: dialog.base, available: true,
           ...(dialog.groups.length ? { options: dialog.groups } : {}),
         });
         if (cards.length === SHOP_CANDIDATES_MAX) break;
       }
+      if (!cards.length) throw new ShopError("search_incomplete");
       return cards;
     },
     async product() {

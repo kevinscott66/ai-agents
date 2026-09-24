@@ -66,6 +66,7 @@ import {
   dishMatches,
   dishName,
   edaBasePrice,
+  edaDialogMatches,
   edaOptionGroups,
   edaPlaceUrl,
   isBlankContact,
@@ -812,6 +813,20 @@ describe("браузер покупок занят", () => {
     }
   });
 
+  test("exhausted followup does not call browser again in the same turn", async () => {
+    const {followupExecution}=await import("../lib/followup-execution");
+    let clock=T0,calls=0;
+    restore=configureShop({now:()=>clock,sleep:async ms=>{clock+=ms;},send:async()=>{calls++;return BUSY;}});
+    const execution={chatId:OWNER,userId:String(OWNER),blocked:undefined as string|undefined};
+    await followupExecution.run(execution,async()=>{
+      await shopStatus({service:"eda"},ctx);
+      const exhausted=calls;
+      await shopStatus({service:"eda"},ctx);
+      expect(calls).toBe(exhausted);
+      expect(execution.blocked).toBe("shop_browser");
+    });
+  });
+
   test("shop_busy — хвост брошенного запроса: сервер пережидает и повторяет", async () => {
     let clock = T0;
     let calls = 0;
@@ -1222,10 +1237,21 @@ describe("eda: mac runner", () => {
     const { s, page } = edaPage();
     s.place = null;
     const r = runner(page);
-    expect(await r.run({ op: "quote", service: "eda", place: "нет такого", queries: ["чизбургер"] })).toEqual({ ok: false, code: "place_not_found", screenshot: "U0NSRUVO" });
+    expect(await r.run({ op: "quote", service: "eda", place: "нет такого", queries: ["чизбургер"] })).toEqual({ ok: false, code: "search_incomplete", screenshot: "U0NSRUVO" });
     s.place = { ref: "not a ref", name: "Бургер Хаус" };
-    expect((await r.run({ op: "quote", service: "eda", place: "бургер хаус", queries: ["чизбургер"] }) as { code: string }).code).toBe("place_not_found");
+    expect((await r.run({ op: "quote", service: "eda", place: "бургер хаус", queries: ["чизбургер"] }) as { code: string }).code).toBe("search_incomplete");
     expect(s.opened).toEqual(["home:eda", "home:eda"]);
+    await r.close();
+  });
+
+  test("retail preparation refuses before navigation or cart mutation", async () => {
+    const { s, page } = edaPage();
+    const r = runner(page);
+    expect(await r.run({ ...prepare, place: "retail@zooopttorg" })).toMatchObject({
+      ok: false, code: "retail_checkout_unverified",
+    });
+    expect(s.opened).toEqual([]);
+    expect(s.clicks).toEqual([]);
     await r.close();
   });
 
@@ -1364,6 +1390,9 @@ describe("eda: dish options", () => {
   test("dish window: deltas, group limits, base price", () => {
     expect(optionDelta("")).toBe(0);
     expect(optionDelta("+ 150 ₽")).toBe(150);
+    expect(optionDelta("+ 49,99 ₽")).toBe(50);
+    expect(optionDelta("+ 0,01 ₽")).toBe(1);
+    expect(optionDelta("+ 49,999 ₽")).toBeNull();
     expect(optionDelta("+\u00a01\u00a0200\u00a0₽")).toBe(1200);
     expect(optionDelta("− 50 ₽")).toBeNull();
     expect(optionDelta("от 50 ₽")).toBeNull();
@@ -1388,6 +1417,16 @@ describe("eda: dish options", () => {
     expect(edaBasePrice({ name: "Пепперони", weight: "", price: "1 578 ₽", qty: "2", groups: raw }, groups)).toBe(699);
     expect(edaBasePrice({ name: "Пепперони", weight: "", price: "1 579 ₽", qty: "2", groups: raw }, groups)).toBeNull();
     expect(edaBasePrice({ name: "Пепперони", weight: "", price: "от 699 ₽", qty: "1", groups: raw }, groups)).toBeNull();
+  });
+
+  test("decimal supplements preserve base price before conservative rounding", () => {
+    const raw: RawOptionGroup[] = [{ title: "Добавки", hint: "Выберите до 2", choices: [
+      { name: "Сыр", delta: "+ 49,99 ₽", type: "checkbox", checked: true, label: 0 },
+      { name: "Лук", delta: "+ 44,99 ₽", type: "checkbox", checked: true, label: 1 },
+    ] }];
+    const groups = edaOptionGroups(raw)!;
+    expect(groups[0]!.choices.map(c => c.price_rub)).toEqual([50, 45]);
+    expect(edaBasePrice({ name: "Воппер", weight: "", price: "454,98 ₽", qty: "1", groups: raw }, groups)).toBe(360);
   });
 
   test("cart rows: options are part of the variant", () => {
@@ -2004,7 +2043,7 @@ describe("eda: время доставки", () => {
     const { s, page } = edaPage();
     s.places = [PIZZA];
     const r = runner(page);
-    expect((await r.run({ op: "quote", service: "eda", place: "бургер хаус", queries: ["чизбургер"] }) as { code: string }).code).toBe("place_not_found");
+    expect((await r.run({ op: "quote", service: "eda", place: "бургер хаус", queries: ["чизбургер"] }) as { code: string }).code).toBe("search_incomplete");
     expect(s.placeQueries).toEqual(["бургер хаус", null]);
     await r.close();
   });
@@ -2062,4 +2101,41 @@ describe("eda: время доставки", () => {
       expect(await quoteShop({ service: "eda", place: "гриль", max_eta_min: 60, queries: ["шаурма"] }, h.ctx)).toMatchObject({ ok: false, error: "invalid_shop_result" });
     });
   });
+});
+
+describe('retail discovery and incomplete search',()=>{
+ test('retail references round-trip on the trusted origin',()=>{
+  expect(placeRefFromHref('/retail/chetiry_lapy')).toBe('retail@chetiry_lapy');
+  expect(edaPlaceUrl('retail@chetiry_lapy')).toBe('https://eda.yandex.ru/retail/chetiry_lapy');
+  expect(placeRefFromHref('https://evil.example/retail/chetiry_lapy')).toBeNull();
+  expect(edaPlaceUrl(placeRefFromHref('/r/retail?placeSlug=abc')!)).toBe('https://eda.yandex.ru/r/retail?placeSlug=abc');
+  expect(placeRefFromHref('/retail/d')).toBeNull();
+  expect(placeRefFromHref('/retail/search')).toBeNull();
+  expect(placeRefFromHref('/retail/store/product/123')).toBeNull();
+ });
+ test('stopwords do not hide kitten products',()=>{
+  expect(dishMatches('Влажный корм котятам курица 85 г','корм для котят')).toBe(true);
+  expect(dishMatches('Корм взрослым кошкам','корм для котят')).toBe(false);
+  expect(dishMatches('Влажный корм Ярви (Jarvi) Extra meat line для котят телятина 85 г','Jarvi Kitten')).toBe(true);
+ });
+ test('incomplete search is actionable uncertainty, not stock absence',()=>{
+  expect(parseShopOutcome(JSON.stringify({ok:false,code:'search_incomplete'}),'quote')).toMatchObject({ok:false,code:'search_incomplete'});
+  expect(SHOP_RECOVERY.search_incomplete.next).toContain('Не говори');
+ });
+});
+
+test('retail collector excludes unavailable, external and ambiguous products', async()=>{
+ const {retailCandidates}=await import('../mac-daemon/eda-playwright');
+ const base={name:'Jarvi Kitten 85 г',price:'115 ₽',href:'/retail/zooopttorg/product/one',available:true};
+ expect(retailCandidates('retail@zooopttorg','Jarvi Kitten',[base])).toHaveLength(1);
+ for(const changed of [{available:false},{href:'https://evil.example/retail/zooopttorg/product/one'},{href:'/retail/other/product/one'},{href:'http://['}])expect(retailCandidates('retail@zooopttorg','Jarvi Kitten',[{...base,...changed}])).toEqual([]);
+ expect(retailCandidates('retail@zooopttorg','Jarvi Kitten',[base,{...base,href:'/retail/zooopttorg/product/two'}])).toEqual([]);
+ expect(retailCandidates('retail@zooopttorg','Jarvi Kitten',[])).toEqual([]);
+});
+
+test("dialog identity tolerates lazy weight, never a different dish or known weight", () => {
+  expect(edaDialogMatches({ title: "Воппер", meta: "1 шт" }, { name: "Воппер", weight: "274 г" })).toBe(true);
+  expect(edaDialogMatches({ title: "Воппер", meta: "274 г · 500 ккал" }, { name: "Воппер", weight: "274 г" })).toBe(true);
+  expect(edaDialogMatches({ title: "Воппер", meta: "1 шт" }, { name: "Двойной Воппер", weight: "388 г" })).toBe(false);
+  expect(edaDialogMatches({ title: "Воппер", meta: "274 г" }, { name: "Воппер", weight: "388 г" })).toBe(false);
 });
