@@ -1,3 +1,4 @@
+import { activityFor } from "./activity";
 import type { LiveSnapshot } from "./live-client";
 import { useEffect, useMemo, useRef, Suspense } from "react";
 import { useFrame } from "@react-three/fiber";
@@ -6,10 +7,12 @@ import { OfficeCharacter } from "./OfficeCharacter";
 import { ROSTER, seatNumber, type Member, type RoleId } from "./roster";
 function MemberSeat({
   status,
+  state,
   member,
   onSelect,
 }: {
   status?: string;
+  state?: string;
   member: Member;
   onSelect: (id: RoleId) => void;
 }) {
@@ -58,6 +61,9 @@ function MemberSeat({
           yaw={yaw}
           sit={sit}
           walking={walking}
+          desk={member}
+          activity={activityFor(state)}
+          typing={activityFor(state) === "working"}
         />
       </Suspense>
       <sprite
@@ -88,6 +94,9 @@ export function TeamMembers({
           key={member.id}
           member={member}
           onSelect={onSelect}
+          state={
+            liveSnapshot?.agents.find((a) => a.agentId === member.id)?.state
+          }
           status={
             liveSnapshot === undefined
               ? undefined

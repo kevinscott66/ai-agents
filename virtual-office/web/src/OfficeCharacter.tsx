@@ -1,3 +1,4 @@
+import type { Activity } from "./activity";
 import { typingContact } from "./workstation";
 import { useFrame, useLoader, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, type RefObject } from "react";
@@ -14,6 +15,8 @@ type Props = {
   sit: RefObject<number>;
   walking: RefObject<number>;
   typing?: boolean;
+  desk?: { x: number; z: number };
+  activity?: Activity;
   look?: RefObject<number>;
   player?: boolean;
 };
@@ -26,11 +29,21 @@ export function OfficeCharacter({
   sit,
   walking,
   typing = false,
+  desk,
+  activity = "idle",
   look,
   player = false,
 }: Props) {
   const gltf = useLoader(GLTFLoader, characterUrl(model));
   const { gl } = useThree();
+  useEffect(() => {
+    if (player) return;
+    const key = `activity${actorId}`;
+    gl.domElement.dataset[key] = activity;
+    return () => {
+      delete gl.domElement.dataset[key];
+    };
+  }, [gl, actorId, activity, player]);
   useEffect(() => {
     const attribute = player
       ? "playerCharacter"
@@ -82,7 +95,11 @@ export function OfficeCharacter({
     transition = useRef("standup"),
     clock = useRef(player ? 1.7 : 0),
     handWeight = useRef(0),
-    gaze = useRef(0);
+    gaze = useRef(0),
+    activityTime = useRef(0);
+  useEffect(() => {
+    activityTime.current = 0;
+  }, [activity]);
   const scratch = useMemo(
     () => ({
       a: new THREE.Vector3(),
@@ -114,6 +131,7 @@ export function OfficeCharacter({
       s = THREE.MathUtils.clamp(sit.current, 0, 1),
       w = THREE.MathUtils.clamp(walking.current, 0, 1);
     clock.current += dt;
+    activityTime.current += dt;
     if (root.current) {
       root.current.position.copy(position.current);
       root.current.rotation.y = yaw.current;
@@ -146,7 +164,14 @@ export function OfficeCharacter({
     );
     gaze.current = THREE.MathUtils.damp(
       gaze.current,
-      look?.current ?? 0,
+      (look?.current ?? 0) +
+        (activity === "waiting"
+          ? -0.12 + Math.sin(clock.current * 0.8) * 0.025
+          : activity === "done" && activityTime.current < 1.2
+            ? Math.sin((activityTime.current * Math.PI) / 0.6) * 0.12
+            : activity === "error"
+              ? -0.09
+              : 0),
       5,
       dt,
     );
@@ -175,7 +200,7 @@ export function OfficeCharacter({
         arm.hand.getWorldPosition(scratch.b);
         scratch.tip.sub(scratch.b);
         scratch.target
-          .set(...typingContact(arm.side, clock.current))
+          .set(...typingContact(arm.side, clock.current, desk))
           .sub(scratch.tip);
         for (let iteration = 0; iteration < 24; iteration++)
           for (const joint of [arm.elbow, arm.upper]) {
@@ -216,7 +241,7 @@ export function OfficeCharacter({
           scratch.tip.set(1.5, 0, 0);
           arm.fingertip.localToWorld(scratch.tip);
           return scratch.tip.distanceTo(
-            scratch.target.set(...typingContact(arm.side, clock.current)),
+            scratch.target.set(...typingContact(arm.side, clock.current, desk)),
           );
         });
 

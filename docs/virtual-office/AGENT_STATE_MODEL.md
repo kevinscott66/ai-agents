@@ -53,3 +53,13 @@ Communication appears immediately regardless of NPC travel speed. Walking to a c
 ## Invariants and acceptance
 
 Movement, coffee and gaze neither invoke an LLM nor change task status. Animation time cannot advance progress. Stale feeds are visible. Role-directed chat cannot silently substitute Lead. Thirteen seats do not imply thirteen identities. Reducer tests use fake clocks and concurrent runs; motion acceptance covers obstacles, repeated E, occupied seats and disconnection.
+
+## Task-driven character animation
+
+Every seated role maps authoritative activity to a visual pose. THINKING, CODING,
+TERMINAL, TESTING and REVIEWING animate typing at that role's own keyboard.
+WAITING and approval/tool waiting stop typing and use a subtle waiting pose. DONE
+plays a brief nod only when explicitly reported; ERROR stops typing. Missing or
+lost live status returns to idle. Animation never changes execution state or
+infers completion. Cross-chat visibility depends on the owner-scoped execution
+tracker described in LIVE_INTEGRATION.md being deployed.

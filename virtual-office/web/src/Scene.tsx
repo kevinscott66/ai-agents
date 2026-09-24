@@ -1,3 +1,4 @@
+import { activityFor } from "./activity";
 import type { LiveSnapshot } from "./live-client";
 import { ROSTER, seatNumber, type RoleId } from "./roster";
 import { TeamMembers } from "./TeamMembers";
@@ -382,10 +383,9 @@ function Simulation({
         yaw={nyaw}
         sit={nsit}
         walking={nspeed}
+        activity={activityFor(stale ? undefined : agent.state)}
         typing={
-          !stale &&
-          !interacting &&
-          ["CODING", "TERMINAL", "TESTING"].includes(agent.state)
+          !stale && !interacting && activityFor(agent.state) === "working"
         }
         look={look}
       />
