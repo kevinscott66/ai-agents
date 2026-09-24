@@ -812,6 +812,20 @@ describe("браузер покупок занят", () => {
     }
   });
 
+  test("exhausted followup does not call browser again in the same turn", async () => {
+    const {followupExecution}=await import("../lib/followup-execution");
+    let clock=T0,calls=0;
+    restore=configureShop({now:()=>clock,sleep:async ms=>{clock+=ms;},send:async()=>{calls++;return BUSY;}});
+    const execution={chatId:OWNER,userId:String(OWNER),blocked:undefined as string|undefined};
+    await followupExecution.run(execution,async()=>{
+      await shopStatus({service:"eda"},ctx);
+      const exhausted=calls;
+      await shopStatus({service:"eda"},ctx);
+      expect(calls).toBe(exhausted);
+      expect(execution.blocked).toBe("shop_browser");
+    });
+  });
+
   test("shop_busy — хвост брошенного запроса: сервер пережидает и повторяет", async () => {
     let clock = T0;
     let calls = 0;

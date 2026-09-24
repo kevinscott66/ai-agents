@@ -1,3 +1,4 @@
+import { blockFollowupDependency, blockedFollowupDependency } from "../followup-execution.ts";
 /**
  * Шаги 10a–10c: покупки в Яндекс Лавке, Яндекс Еде и Яндекс Маркете через браузер на Mac владельца.
  *
@@ -258,6 +259,7 @@ const SHOP_REDIAL_OPS: readonly ShopRequest["op"][] = ["quote", "places", "statu
  * (один повтор).
  */
 async function askMac(request: ShopRequest, userId: string, chatId: number): Promise<ShopOutcome> {
+  if (blockedFollowupDependency(chatId, userId)) return { ok: false, code: "shop_busy" };
   const started = deps.now();
   let busyCount = 0;
   let relaunched = false;
@@ -279,6 +281,7 @@ async function askMac(request: ShopRequest, userId: string, chatId: number): Pro
         await deps.sleep(SHOP_BUSY_POLL_MS);
         continue;
       }
+      if (["mac_offline", "mac_disconnected", "mac_timeout"].includes(code)) blockFollowupDependency(chatId, userId, "shop_browser");
       log.warn("[shop] mac", { op: request.op, error: code, ms });
       throw e;
     }
@@ -292,6 +295,7 @@ async function askMac(request: ShopRequest, userId: string, chatId: number): Pro
     }
     const busy = !out.ok && out.code === "shop_busy";
     if (!busy || deps.now() - started >= SHOP_BUSY_WAIT_MS) {
+      if (busy || (!out.ok && out.code === "browser_unavailable")) blockFollowupDependency(chatId, userId, "shop_browser");
       // Только операция и исход: адреса и товары — личные, в журнал не идут.
       const held = !out.ok && out.busy_op ? { busy_op: out.busy_op, busy_ms: out.busy_ms } : {};
       log.info("[shop] mac", { op: request.op, ok: out.ok, ...(out.ok ? {} : { code: out.code }), ...held, ms: deps.now() - started });
