@@ -253,6 +253,7 @@ interface Stranded {
 export class ShopRunner {
   private browser: ShopBrowser | null = null;
   private busy = false;
+  private closing: Promise<void> | null = null;
   /** Что держит замок и с какого момента — для ответа shop_busy и для reset. */
   private current: { op: ShopRequest["op"]; since: number } | null = null;
   private session: Session | null = null;
@@ -302,20 +303,20 @@ export class ShopRunner {
     })();
     try {
       // Зависший шаг не держит замок вечно: см. settleOrRelease.
-      return await settleOrRelease(work, { signal, deadlineMs: this.deadlineMs, selfSettleMs: this.selfSettleMs, release: () => this.close() });
+      return await settleOrRelease(work, { signal, deadlineMs: this.deadlineMs, selfSettleMs: this.selfSettleMs, release: () => this.close(), ...(["quote", "places", "status"].includes(request.op) ? { releaseTimeoutMs: 5000 } : {}) });
     } catch (e) {
       if (!(e instanceof ShopError)) throw e;
       if (e.code === "session_unknown" || e.code === "shop_busy") return { ok: false, code: e.code };
       const out: ShopOutcome = { ok: false, code: e.code, ...(e instanceof PriceChanged ? { price_rub: e.priceRub } : {}) };
       if (page && SCREENSHOT_CODES.includes(e.code)) {
-        const shot = e.screenshot !== undefined ? e.screenshot : await page.screenshot().catch(() => null);
+        const shot = e.screenshot !== undefined ? e.screenshot : await boundedShopDiagnostic(() => page!.screenshot(), null);
         if (shot) out.screenshot = shot;
       }
       if (page && e.code === "captcha") {
         // Капчу проходит владелец в этом же окне: оно остаётся на капче, наверху
         // и открытым CAPTCHA_HOLD_MS. Сам исполнитель капчу не трогает.
         this.captchaHold = true;
-        await page.front?.().catch(() => {});
+        await boundedShopDiagnostic(() => page!.front?.() ?? Promise.resolve(), undefined);
       }
       return out;
     } finally {
@@ -336,8 +337,8 @@ export class ShopRunner {
     const held = this.current;
     if (!this.busy || !held) return { ok: true, op: "reset", reset: false };
     if (held.op === "confirm") return { ok: false, code: "shop_paying", busy_op: held.op, busy_ms: Math.max(0, this.now() - held.since) };
-    await this.close();
-    return { ok: true, op: "reset", reset: true };
+    const closed = await boundedShopDiagnostic(async () => { await this.close(); return this.closing === null; }, false, 5000);
+    return closed ? { ok: true, op: "reset", reset: true } : { ok: false, code: "browser_unavailable" };
   }
 
   /**
@@ -366,7 +367,12 @@ export class ShopRunner {
     this.generation++;
     const browser = this.browser;
     this.browser = null;
-    await browser?.close().catch(() => {});
+    if (browser) {
+      const closing = Promise.resolve().then(() => browser.close());
+      this.closing = closing;
+      try { await closing; if (this.closing === closing) this.closing = null; }
+      catch { /* Keep quarantine: browser termination was not confirmed. */ }
+    } else if (this.closing) await this.closing.catch(() => {});
   }
 
   private scheduleIdleClose() {
@@ -376,6 +382,7 @@ export class ShopRunner {
   }
 
   private async page(): Promise<ShopPage> {
+    if (this.closing) throw new ShopError("browser_unavailable");
     if (!this.browser) {
       const dir = this.checkProfile(this.env.SHOP_PROFILE_DIR);
       const generation = this.generation;
@@ -631,7 +638,7 @@ export class ShopRunner {
 
   private async snapshot(page: ShopPage, e: unknown) {
     if (e instanceof ShopError && SCREENSHOT_CODES.includes(e.code) && e.screenshot === undefined) {
-      e.screenshot = await page.screenshot().catch(() => null);
+      e.screenshot = await boundedShopDiagnostic(() => page!.screenshot(), null);
     }
   }
 
@@ -798,4 +805,12 @@ async function cli(args: string[]) {
 
 if (import.meta.main) {
   runCli(() => cli(process.argv.slice(2)), (e) => (e instanceof ShopError ? e.code : null));
+}
+
+/** Optional diagnostics must never retain the purchase lock after a failure. */
+export async function boundedShopDiagnostic<T>(work: () => Promise<T>, fallback: T, timeoutMs = 3000): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([Promise.resolve().then(work).catch(() => fallback), new Promise<T>(resolve => { timer = setTimeout(() => resolve(fallback), timeoutMs); })]);
+  } finally { clearTimeout(timer); }
 }
