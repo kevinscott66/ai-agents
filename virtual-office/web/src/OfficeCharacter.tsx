@@ -14,6 +14,7 @@ type Props = {
   yaw: RefObject<number>;
   sit: RefObject<number>;
   walking: RefObject<number>;
+  conversation?: "speaking" | "listening";
   typing?: boolean;
   desk?: { x: number; z: number };
   activity?: Activity;
@@ -28,6 +29,7 @@ export function OfficeCharacter({
   yaw,
   sit,
   walking,
+  conversation,
   typing = false,
   desk,
   activity = "idle",
@@ -55,6 +57,13 @@ export function OfficeCharacter({
       delete gl.domElement.dataset[attribute];
     };
   }, [gl, model, player, gltf, actorId]);
+  useEffect(() => {
+    const key = `conversation${actorId}`;
+    gl.domElement.dataset[key] = conversation ?? "none";
+    return () => {
+      delete gl.domElement.dataset[key];
+    };
+  }, [gl, actorId, conversation]);
   const rig = useMemo(() => {
     const object = clone(gltf.scene),
       mixer = new THREE.AnimationMixer(object);
@@ -78,6 +87,16 @@ export function OfficeCharacter({
       object,
       mixer,
       actions,
+      face: [
+        "MJaw",
+        "LEyeBlinkTop",
+        "REyeBlinkTop",
+        "LInnerEyebrow",
+        "RInnerEyebrow",
+      ].map((name) => {
+        const bone = object.getObjectByName(`Bip01_${name}`);
+        return { name, bone, rest: bone?.quaternion.clone() };
+      }),
       head: object.getObjectByName("Bip01_Head") as THREE.Bone,
       arms: ["L", "R"].map((side) => ({
         upper: object.getObjectByName(`Bip01_${side}_UpperArm`) as THREE.Bone,
@@ -156,6 +175,26 @@ export function OfficeCharacter({
       rig.actions.walk.timeScale = 0.85 + w * 0.35;
     }
     rig.mixer.update(dt);
+    const speaking = conversation === "speaking" && s < 0.03 && w < 0.05;
+    const blinkPhase = (clock.current + actorId.length * 0.29) % 4.3;
+    for (const { name, bone, rest } of rig.face) {
+      if (!bone || !rest) continue;
+      const angle =
+        name === "MJaw"
+          ? speaking
+            ? 0.035 + 0.045 * (1 + Math.sin(clock.current * 13))
+            : 0
+          : name.includes("Blink")
+            ? blinkPhase < 0.16
+              ? Math.sin((blinkPhase / 0.16) * Math.PI) * 0.18
+              : 0
+            : conversation
+              ? Math.sin(clock.current * 1.8) * 0.025
+              : 0;
+      bone.quaternion
+        .copy(rest)
+        .multiply(scratch.delta.setFromAxisAngle(scratch.axis, angle));
+    }
     handWeight.current = THREE.MathUtils.damp(
       handWeight.current,
       typing && s > 0.98 ? 1 : 0,

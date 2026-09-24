@@ -63,3 +63,17 @@ plays a brief nod only when explicitly reported; ERROR stops typing. Missing or
 lost live status returns to idle. Animation never changes execution state or
 infers completion. Cross-chat visibility depends on the owner-scoped execution
 tracker described in LIVE_INTEGRATION.md being deployed.
+
+## Leader briefing
+
+The owner-scoped live snapshot optionally includes `briefingTo`, containing only
+role IDs from active direct orchestrator delegations. A briefing lasts at most
+30 seconds from execution start and ends immediately when that execution exits.
+Independent chat work and nested delegation do not create a leader briefing.
+Clients without this optional field keep existing behavior.
+
+The leader and recipients stand and navigate around desk obstacles to distinct
+meeting positions, then return to their own seats. The original execution state
+is unchanged. Facial bone animation provides blinking, subtle eyebrow movement,
+and procedural jaw movement for the standing leader. This represents delegation;
+it is not audio-driven lip synchronization or evidence of an actual spoken call.

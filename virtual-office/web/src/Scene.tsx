@@ -1,3 +1,4 @@
+import { BriefingMotion, briefingTarget } from "./briefing";
 import { activityFor } from "./activity";
 import type { LiveSnapshot } from "./live-client";
 import { ROSTER, seatNumber, type RoleId } from "./roster";
@@ -104,6 +105,8 @@ function Simulation({
     pyaw = useRef(Math.PI),
     psit = useRef(0),
     speed = useRef(0);
+  const briefingMotion = useRef(new BriefingMotion());
+  const briefing = briefingTarget("backend", liveSnapshot?.briefingTo);
   const npc = useRef(new THREE.Vector3(-1.65, 0, -1.85)),
     nyaw = useRef(Math.PI),
     nsit = useRef(1),
@@ -243,106 +246,127 @@ function Simulation({
       reported.current = near;
       onNear(near);
     }
-    const idle = agent.state === "IDLE" && !interacting && !stale;
-    if (
-      mode.current === "seated" &&
-      idle &&
-      time.current > nextAmbient.current
-    ) {
-      transition("standing");
-    }
-    if (mode.current === "standing") {
-      nsit.current = THREE.MathUtils.damp(nsit.current, 0, 5, dt);
-      if (nsit.current < 0.03) {
-        nsit.current = 0;
-        path.current = findPath(
-          npc.current,
-          idle ? { x: 0.9, z: -8.6 } : { x: -1.65, z: -1.85 },
-        );
-        transition("walking");
+    const briefingActive = briefingMotion.current.step(
+      briefing,
+      { x: -1.65, z: -1.85 },
+      npc.current,
+      nsit,
+      nyaw,
+      nspeed,
+      dt,
+    );
+    if (!briefingActive) {
+      const idle = agent.state === "IDLE" && !interacting && !stale;
+      if (
+        mode.current === "seated" &&
+        idle &&
+        time.current > nextAmbient.current
+      ) {
+        transition("standing");
       }
-    }
-    if (mode.current === "walking") {
-      if (interacting) {
-        nspeed.current = 0;
-      } else {
-        if (
-          !idle &&
-          path.current.length > 0 &&
-          path.current.at(-1)?.x !== -1.65
-        )
-          path.current = findPath(npc.current, { x: -1.65, z: -1.85 });
-        const target = path.current[0];
-        if (target) {
-          const x = target.x - npc.current.x,
-            z = target.z - npc.current.z,
-            d = Math.hypot(x, z);
-          nspeed.current = THREE.MathUtils.damp(nspeed.current, 1, 5, dt);
-          if (d < 0.06) path.current.shift();
-          else {
-            const step = Math.min(d, dt * 0.9 * nspeed.current);
-            npc.current.x += (x / d) * step;
-            npc.current.z += (z / d) * step;
-            const y = Math.atan2(x, z);
-            nyaw.current +=
-              Math.atan2(
-                Math.sin(y - nyaw.current),
-                Math.cos(y - nyaw.current),
-              ) * Math.min(dt * 7, 1);
-          }
-        } else {
+      if (mode.current === "standing") {
+        nsit.current = THREE.MathUtils.damp(nsit.current, 0, 5, dt);
+        if (nsit.current < 0.03) {
+          nsit.current = 0;
+          path.current = findPath(
+            npc.current,
+            idle ? { x: 0.9, z: -8.6 } : { x: -1.65, z: -1.85 },
+          );
+          transition("walking");
+        }
+      }
+      if (mode.current === "walking") {
+        if (interacting) {
           nspeed.current = 0;
-          if (npc.current.distanceTo(new THREE.Vector3(-1.65, 0, -1.85)) < 0.15)
-            transition("sitting");
-          else {
-            nextAmbient.current = time.current + 4;
-            transition("window");
+        } else {
+          if (
+            !idle &&
+            path.current.length > 0 &&
+            path.current.at(-1)?.x !== -1.65
+          )
+            path.current = findPath(npc.current, { x: -1.65, z: -1.85 });
+          const target = path.current[0];
+          if (target) {
+            const x = target.x - npc.current.x,
+              z = target.z - npc.current.z,
+              d = Math.hypot(x, z);
+            nspeed.current = THREE.MathUtils.damp(nspeed.current, 1, 5, dt);
+            if (d < 0.06) path.current.shift();
+            else {
+              const step = Math.min(d, dt * 0.9 * nspeed.current);
+              npc.current.x += (x / d) * step;
+              npc.current.z += (z / d) * step;
+              const y = Math.atan2(x, z);
+              nyaw.current +=
+                Math.atan2(
+                  Math.sin(y - nyaw.current),
+                  Math.cos(y - nyaw.current),
+                ) * Math.min(dt * 7, 1);
+            }
+          } else {
+            nspeed.current = 0;
+            if (
+              npc.current.distanceTo(new THREE.Vector3(-1.65, 0, -1.85)) < 0.15
+            )
+              transition("sitting");
+            else {
+              nextAmbient.current = time.current + 4;
+              transition("window");
+            }
           }
         }
       }
-    }
-    if (
-      mode.current === "window" &&
-      (!idle || time.current > nextAmbient.current)
-    ) {
-      path.current = findPath(npc.current, { x: -1.65, z: -1.85 });
-      transition("walking");
-    }
-    if (mode.current === "sitting") {
-      nsit.current = THREE.MathUtils.damp(nsit.current, 1, 5, dt);
-      nyaw.current = THREE.MathUtils.damp(nyaw.current, Math.PI, 6, dt);
-      if (nsit.current > 0.98) {
-        nsit.current = 1;
-        nextAmbient.current = time.current + 12;
-        transition("seated");
+      if (
+        mode.current === "window" &&
+        (!idle || time.current > nextAmbient.current)
+      ) {
+        path.current = findPath(npc.current, { x: -1.65, z: -1.85 });
+        transition("walking");
       }
-    }
-    const toward = Math.atan2(
-      player.current.x - npc.current.x,
-      player.current.z - npc.current.z,
-    );
-    if (mode.current === "seated") {
-      const turn = interacting
+      if (mode.current === "sitting") {
+        nsit.current = THREE.MathUtils.damp(nsit.current, 1, 5, dt);
+        nyaw.current = THREE.MathUtils.damp(nyaw.current, Math.PI, 6, dt);
+        if (nsit.current > 0.98) {
+          nsit.current = 1;
+          nextAmbient.current = time.current + 12;
+          transition("seated");
+        }
+      }
+      const toward = Math.atan2(
+        player.current.x - npc.current.x,
+        player.current.z - npc.current.z,
+      );
+      if (mode.current === "seated") {
+        const turn = interacting
+          ? THREE.MathUtils.clamp(
+              Math.atan2(
+                Math.sin(toward - Math.PI),
+                Math.cos(toward - Math.PI),
+              ),
+              -1,
+              1,
+            )
+          : 0;
+        nyaw.current = THREE.MathUtils.damp(
+          nyaw.current,
+          Math.PI + turn,
+          5,
+          dt,
+        );
+      }
+      look.current = near
         ? THREE.MathUtils.clamp(
-            Math.atan2(Math.sin(toward - Math.PI), Math.cos(toward - Math.PI)),
-            -1,
-            1,
+            Math.atan2(
+              Math.sin(toward - nyaw.current),
+              Math.cos(toward - nyaw.current),
+            ),
+            -0.7,
+            0.7,
           )
         : 0;
-      nyaw.current = THREE.MathUtils.damp(nyaw.current, Math.PI + turn, 5, dt);
+      if (mode.current === "seated" && !idle)
+        nextAmbient.current = time.current + 8;
     }
-    look.current = near
-      ? THREE.MathUtils.clamp(
-          Math.atan2(
-            Math.sin(toward - nyaw.current),
-            Math.cos(toward - nyaw.current),
-          ),
-          -0.7,
-          0.7,
-        )
-      : 0;
-    if (mode.current === "seated" && !idle)
-      nextAmbient.current = time.current + 8;
     if (focusedRole) {
       const member = ROSTER.find((m) => m.id === focusedRole)!;
       v.set(member.x + 1.9, 1.7, member.z + 0.05);
@@ -383,6 +407,7 @@ function Simulation({
         yaw={nyaw}
         sit={nsit}
         walking={nspeed}
+        conversation={briefing ? "listening" : undefined}
         activity={activityFor(stale ? undefined : agent.state)}
         typing={
           !stale && !interacting && activityFor(agent.state) === "working"

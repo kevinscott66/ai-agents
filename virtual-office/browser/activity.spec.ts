@@ -15,6 +15,7 @@ test("live chat statuses animate roles and stop on connection loss", async ({
       json: {
         source: "agent-team",
         scope: "owner-execution",
+        briefingTo: state === "THINKING" ? ["backend", "frontend"] : [],
         agents: ROSTER.map((m) => ({
           agentId: m.id,
           name: m.role,
@@ -38,6 +39,22 @@ test("live chat statuses animate roles and stop on connection loss", async ({
       "working",
       { timeout: 45000 },
     );
+  await expect(page.locator("canvas")).toHaveAttribute(
+    "data-conversationorchestrator",
+    "speaking",
+  );
+  await expect(page.locator("canvas")).toHaveAttribute(
+    "data-conversationbackend",
+    "listening",
+  );
+  await expect(page.locator("canvas")).toHaveAttribute(
+    "data-conversationfrontend",
+    "listening",
+  );
+  await expect(page.locator("canvas")).toHaveAttribute(
+    "data-conversationqa",
+    "none",
+  );
   state = "WAITING";
   for (const member of ROSTER)
     await expect(page.locator("canvas")).toHaveAttribute(

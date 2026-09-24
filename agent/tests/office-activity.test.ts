@@ -12,3 +12,12 @@ test('owner activity isolates identities and counts concurrent delegates until t
  await observeOfficeActivity(undefined,'qa',async()=>expect(officeActivityCount('other','qa')).toBe(0));
  release();await Promise.all([one,two]);expect(officeActivityCount('owner','qa')).toBe(0);
 });
+
+test('briefings include only live direct leader handoffs of the same owner', async () => {
+ const {officeBriefing}=await import('../lib/office-activity');
+ let release!:()=>void; const gate=new Promise<void>(r=>release=r);
+ const tasks=[observeOfficeActivity('brief-owner','backend',()=>gate,['orchestrator','backend']),observeOfficeActivity('brief-owner','qa',()=>gate,['orchestrator','backend','qa']),observeOfficeActivity('other','frontend',()=>gate,['orchestrator','frontend'])];
+ expect(officeBriefing('brief-owner')).toEqual(['backend']);
+ expect(officeBriefing('unknown')).toEqual([]);
+ release(); await Promise.all(tasks); expect(officeBriefing('brief-owner')).toEqual([]);
+});

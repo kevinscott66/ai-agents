@@ -5,6 +5,7 @@ export const OfficeLiveSchema = z
   .object({
     source: z.literal("agent-team"),
     scope: z.enum(["office-native-turns", "owner-execution"]),
+    briefingTo: z.array(Role).max(12).optional(),
     agents: z
       .array(
         z.object({
