@@ -1,3 +1,4 @@
+import { remoteApi } from './native-remote.ts';
 import { voiceApi } from './native-voice.ts';
 import { signingApi } from './native-signing.ts';
 import { compactNativeKnowledge, knowledgePrompt, knowledgeState, scopedKnowledgeReader, scopedKnowledgeWriter } from "./native-knowledge-runtime.ts";
@@ -17,6 +18,13 @@ let lead: NativeLead | undefined;
 const uploading = new Set<string>();
 export function configureNativeLead(run: NativeLead) { const previous = lead; lead = run; return () => { lead = previous; }; }
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers: { 'Cache-Control': 'no-store' } });
+/** Authenticated screen traffic has a bounded per-device relay bucket, not the anonymous UI bucket. */
+export function nativeRemoteAuthenticated(req:Request):boolean {
+  if(process.env.NATIVE_APP_ENABLED!=='true'||req.headers.has('origin')||!new URL(req.url).pathname.startsWith('/api/native/remote/'))return false;
+  const token=/^Bearer ([a-f0-9]{64})$/.exec(req.headers.get('authorization')||'')?.[1];
+  const identity=token?nativeAccess().authenticate(token):null;
+  return !!identity && permitted(identity.userId);
+}
 export async function nativeApi(req: Request, injectedStore?: NativeAccess): Promise<Response> {
   if (process.env.NATIVE_APP_ENABLED !== 'true') return json({ error: 'native_disabled' }, 503);
   // No browser-cookie access: the native client has a device bearer token.
@@ -30,6 +38,7 @@ export async function nativeApi(req: Request, injectedStore?: NativeAccess): Pro
     void req.body?.cancel().catch(() => {});
     return json({ error: 'unauthorized' }, 401);
   }
+  if (path.startsWith('/api/native/remote/') && identity) return remoteApi(req,identity,()=>process.env.NATIVE_APP_ENABLED==='true' && store.authenticate(token)?.device===identity.device && permitted(identity.userId));
   if (path.startsWith('/api/native/signing/') && identity) return signingApi(req,identity.userId,()=>process.env.NATIVE_APP_ENABLED==='true' && store.authenticate(token)?.userId===identity.userId && permitted(identity.userId));
   if (path.startsWith('/api/native/voice/') && identity) return voiceApi(req,identity.userId,()=>process.env.NATIVE_APP_ENABLED==='true' && store.authenticate(token)?.userId===identity.userId && permitted(identity.userId));
   let body: Record<string, unknown> = {};
@@ -224,6 +233,7 @@ export async function webApi(req:Request,store?:NativeAccess, decide?:(req:Reque
  let origin:URL;try{origin=new URL(process.env.WEB_APP_ORIGIN??'');}catch{return json({error:'web_disabled'},503);}
  if(origin.protocol!=='https:'||origin.origin!==process.env.WEB_APP_ORIGIN)return json({error:'web_disabled'},503);
  const url=new URL(req.url),supplied=req.headers.get('origin');
+ if(url.pathname==='/api/web/remote'||url.pathname.startsWith('/api/web/remote/'))return json({error:'native_only'},403);
  if(!url.pathname.startsWith('/api/web/')||req.headers.has('cookie')||req.headers.get('sec-fetch-site')!=='same-origin'||(supplied!==null&&supplied!==origin.origin)||(req.method!=='GET'&&supplied!==origin.origin)||!['GET','POST'].includes(req.method))return json({error:'web_origin_forbidden'},403);
  const headers=new Headers();for(const name of ['authorization','content-type','content-length']){const value=req.headers.get(name);if(value!==null)headers.set(name,value);}
  const approval=req.method==='POST'&&/^\/api\/web\/approvals\/[a-zA-Z0-9-]{1,128}\/decide$/.test(url.pathname);

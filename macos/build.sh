@@ -8,7 +8,7 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict>
 <key>CFBundleIdentifier</key><string>tech.dobropalm.agent.mac</string>
 <key>CFBundleName</key><string>Агент</string><key>CFBundleExecutable</key><string>AgentDesktop</string>
-<key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>0.2.0</string><key>CFBundleVersion</key><string>3</string>
+<key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>0.3.0</string><key>CFBundleVersion</key><string>4</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string><key>NSHighResolutionCapable</key><true/>
 <key>NSMicrophoneUsageDescription</key><string>Диктовка задач Агенту по нажатию микрофона.</string>
 <key>NSSpeechRecognitionUsageDescription</key><string>Локальное распознавание продиктованных задач.</string>

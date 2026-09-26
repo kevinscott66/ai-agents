@@ -71,11 +71,11 @@ struct HTTPFailure: LocalizedError {
 struct AgentService {
     let server: URL
     let token: String
-    func call(_ path: String, body: [String: String]? = nil) async throws -> Data {
+    func call(_ path: String, body: [String: String]? = nil, encodedBody:Data? = nil) async throws -> Data {
         var request = URLRequest(url: server.appendingPathComponent("api/native/" + path))
         request.timeoutInterval = 30
         if !token.isEmpty { request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization") }
-        if let body { request.httpMethod = "POST"; request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.httpBody = try JSONEncoder().encode(body) }
+        if body != nil || encodedBody != nil { request.httpMethod = "POST"; request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.httpBody = try encodedBody ?? JSONEncoder().encode(body!) }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
         let session = URLSession(configuration: configuration, delegate: NoRedirect(), delegateQueue: nil)

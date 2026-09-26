@@ -5,25 +5,28 @@ import SwiftUI
     @StateObject private var hotKey = GlobalHotKey()
     @StateObject private var voice = Voice()
     @StateObject private var automation = Automation()
+    @StateObject private var remote = RemoteDesktop()
     @AppStorage("appearance") var appearance="system"
     @AppStorage("accent") var accent="forest"
     var tint:Color { accent=="blue" ? .blue : accent=="graphite" ? .gray : Color(red:0.32,green:0.41,blue:0.32) }
     var body: some Scene {
         Window("Агент", id: "main") {
-            DesktopView().environmentObject(model).environmentObject(voice).environmentObject(automation).environmentObject(hotKey).tint(tint).preferredColorScheme(appearance=="dark" ? .dark : appearance=="light" ? .light : nil)
+            DesktopView().environmentObject(model).environmentObject(voice).environmentObject(automation).environmentObject(hotKey).environmentObject(remote).tint(tint).preferredColorScheme(appearance=="dark" ? .dark : appearance=="light" ? .light : nil)
                 .frame(minWidth: 800, minHeight: 580)
         }.defaultSize(width: 1050, height: 720)
         Window("Мини-помощник",id:"companion") { CompanionView().environmentObject(model).environmentObject(voice).environmentObject(automation).tint(tint) }.windowResizability(.contentSize)
         Window("Виртуальный офис", id: "office") { OfficeWindow(server:model.data.server) }.defaultSize(width: 1200, height: 800)
-        MenuBarExtra("Агент", systemImage: "waveform.circle") { MenuActions() }
+        MenuBarExtra("Агент", systemImage: "waveform.circle") { MenuActions().environmentObject(remote) }
     }
 }
 struct MenuActions: View {
+    @EnvironmentObject var remote:RemoteDesktop
     @Environment(\.openWindow) private var openWindow
     var body: some View {
         Button("Открыть Агента") { NSApp.activate(ignoringOtherApps: true); openWindow(id: "main") }
         Button("Мини-помощник") { openWindow(id:"companion") }
         Button("Виртуальный офис") { NSApp.activate(ignoringOtherApps: true); openWindow(id: "office") }
+        if remote.enabled { Button("Остановить удалённый доступ"){remote.stop()} }
         Divider()
         Button("Завершить") { NSApp.terminate(nil) }.keyboardShortcut("q")
     }
@@ -33,6 +36,7 @@ struct DesktopView: View {
     @Environment(\.openWindow) private var openWindow
     @EnvironmentObject private var voice: Voice
     @EnvironmentObject private var automation: Automation
+    @EnvironmentObject private var remote:RemoteDesktop
     @State private var section = "Обзор"
     @State private var draft = ""
     @State private var server = AppConfiguration.server
@@ -47,6 +51,7 @@ struct DesktopView: View {
                 Label("Наборы", systemImage: "square.stack.3d.up").tag("Наборы")
                 Label("История", systemImage: "clock").tag("История")
                 Label("Настройки", systemImage: "slider.horizontal.3").tag("Настройки")
+                Label("Экран Mac",systemImage:"desktopcomputer").tag("Экран Mac")
                 Label("Офис", systemImage: "building.2").tag("Офис")
                 Label("Подключение", systemImage: "network").tag("Подключение")
             }.navigationTitle("Агент").navigationSplitViewColumnWidth(190)
@@ -58,6 +63,7 @@ struct DesktopView: View {
                     Label(model.connected ? "Подключение сохранено" : "Нет подключения", systemImage: model.connected ? "checkmark.circle" : "circle")
                         .font(.callout).foregroundStyle(.secondary)
                 }
+                if remote.enabled { HStack {Label(remote.active ? "Экран передаётся" : "Удалённый доступ включён",systemImage:"record.circle").foregroundStyle(.red);Spacer();Button("Остановить"){remote.stop()}} }
                 if !model.error.isEmpty { Text(model.error).foregroundStyle(.red).textSelection(.enabled) }
                 if section == "Обзор" { ScrollView { Dashboard(section:$section) } }
                 else if section == "Команды" { CommandsView() }
@@ -65,10 +71,12 @@ struct DesktopView: View {
                 else if section == "История" { HistoryView() }
                 else if section == "Настройки" { PreferencesView() }
                 else if section == "Чат" { chat }
+                else if section == "Экран Mac" { RemoteDesktopView() }
                 else if section == "Офис" { office }
                 else { settings }
             }.padding(28)
         }
+        .onChange(of:model.data.server){_,_ in remote.stop()}
         .onChange(of: voice.transcript) { _, value in if !voice.armed { draft = value } }
          .onChange(of: voice.wakeDraft) { _, value in
             if !value.isEmpty {

@@ -52,7 +52,7 @@
  */
 import { isPreAuthRequest } from "./miniapp-preauth.ts";
 import { readMediaJson } from "./native-media.ts";
-import { nativeApi, webApi } from "./native-api.ts";
+import { nativeApi, webApi, nativeRemoteAuthenticated } from "./native-api.ts";
 import { getErrorMessage } from "./errors.ts";
 import { HOUR_MS, SECOND_MS } from "./time-constants.ts";
 import { createLogThrottle } from "./log-throttle.ts";
@@ -815,7 +815,7 @@ export function startMiniappServer(
       return limited ?? await webApi(req,undefined,trusted=>route(trusted,new URL(trusted.url),peer));
     }
     if (path.startsWith("/api/native/")) {
-      const limited = anonLimit(req, peer);
+      const limited = nativeRemoteAuthenticated(req) ? null : anonLimit(req, peer);
       return limited ?? await nativeApi(req);
     }
 
