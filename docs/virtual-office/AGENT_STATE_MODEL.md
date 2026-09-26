@@ -53,3 +53,27 @@ Communication appears immediately regardless of NPC travel speed. Walking to a c
 ## Invariants and acceptance
 
 Movement, coffee and gaze neither invoke an LLM nor change task status. Animation time cannot advance progress. Stale feeds are visible. Role-directed chat cannot silently substitute Lead. Thirteen seats do not imply thirteen identities. Reducer tests use fake clocks and concurrent runs; motion acceptance covers obstacles, repeated E, occupied seats and disconnection.
+
+## Task-driven character animation
+
+Every seated role maps authoritative activity to a visual pose. THINKING, CODING,
+TERMINAL, TESTING and REVIEWING animate typing at that role's own keyboard.
+WAITING and approval/tool waiting stop typing and use a subtle waiting pose. DONE
+plays a brief nod only when explicitly reported; ERROR stops typing. Missing or
+lost live status returns to idle. Animation never changes execution state or
+infers completion. Cross-chat visibility depends on the owner-scoped execution
+tracker described in LIVE_INTEGRATION.md being deployed.
+
+## Leader briefing
+
+The owner-scoped live snapshot optionally includes `briefingTo`, containing only
+role IDs from active direct orchestrator delegations. A briefing lasts at most
+30 seconds from execution start and ends immediately when that execution exits.
+Independent chat work and nested delegation do not create a leader briefing.
+Clients without this optional field keep existing behavior.
+
+The leader and recipients stand and navigate around desk obstacles to distinct
+meeting positions, then return to their own seats. The original execution state
+is unchanged. Facial bone animation provides blinking, subtle eyebrow movement,
+and procedural jaw movement for the standing leader. This represents delegation;
+it is not audio-driven lip synchronization or evidence of an actual spoken call.

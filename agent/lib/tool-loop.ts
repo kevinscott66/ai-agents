@@ -206,7 +206,7 @@ export function explainEmptyStop(stop: string | null | undefined): string {
 }
 
 export async function runWithTools(opts: RunWithToolsOpts): Promise<string> {
-  return observeOfficeActivity(opts.triggerUserId, opts.agentKey, () => runObservedWithTools(opts));
+  return observeOfficeActivity(opts.triggerUserId, opts.agentKey, () => runObservedWithTools(opts), opts.delegationChain);
 }
 async function runObservedWithTools(opts: RunWithToolsOpts): Promise<string> {
   // S1: если вход не завёл общий счётчик (userbot, Mini App, планировщик,
