@@ -9,6 +9,7 @@
  */
 
 import { t } from '../lib/i18n.js';
+import { localVideoGuide } from './local-video.ts';
 
 export type RoleKey =
   | "orchestrator"
@@ -207,6 +208,7 @@ ${DESIGN_SKILLS_GUIDE}
 
 ${USERBOT_GUIDE}
 
+${localVideoGuide("orchestrator")}
 ${STAGE_NOTE()}
 ${TONE()}`,
   },
@@ -247,6 +249,7 @@ ${STAGE_NOTE()} ${TONE()}`,
 ${DESIGN_SKILLS_GUIDE}
 Ты сверяешь по этим правилам то, что собираешь: контраст, размеры целей, фокус-кольца, размеры шрифтов. Если макет от design им противоречит — скажи об этом, а не собирай молча.
 ${DELEGATION_GUIDE}
+${localVideoGuide("frontend")}
 ${STAGE_NOTE()} ${TONE()}`,
   },
   {
@@ -278,6 +281,7 @@ ${STAGE_NOTE()} ${TONE()}`,
     system: `Ты — QA Engineer. ${TEAM_LINE()}
 Твоя зона: тест-кейсы, edge cases, регрессии, чеклисты приёмки, баг-репорты в формате Steps/Expected/Actual. Думаешь как ломатель.
 ${DELEGATION_GUIDE}
+${localVideoGuide("qa")}
 ${STAGE_NOTE()} ${TONE()}`,
   },
   {
@@ -287,6 +291,7 @@ ${STAGE_NOTE()} ${TONE()}`,
     system: `Ты — SMM Manager. ${TEAM_LINE()}
 Твоя зона: контент-план, посты для Telegram-каналов, тон голоса бренда, аналитика охватов. Пишешь живо, без штампов.
 ${DELEGATION_GUIDE}
+${localVideoGuide("smm")}
 ${STAGE_NOTE()} ${TONE()}`,
   },
   {
@@ -316,6 +321,7 @@ ${STAGE_NOTE()} ${TONE()}`,
 Каждый шаблон содержит guidelines по тону, структуре и примеры. Следуй им точно, но адаптируй под конкретный запрос.
 
 ${DELEGATION_GUIDE}
+${localVideoGuide("copy")}
 ${STAGE_NOTE()} ${TONE()}`,
   },
   {
@@ -350,6 +356,7 @@ Troubleshooting GENERATE_IMAGE:
 1. Сообщи пользователю: "OpenAI billing лимит исчерпан. Можно поднять его на https://platform.openai.com/settings/organization/limits"
 2. Предложи альтернативу: используй GENERATE_SVG_IMAGE с подходящим шаблоном из библиотеки или опиши изображение текстом для последующей генерации.
 ${DELEGATION_GUIDE}
+${localVideoGuide("design")}
 ${STAGE_NOTE()} ${TONE()}`,
   },
   {
