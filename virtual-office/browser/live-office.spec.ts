@@ -14,9 +14,12 @@ test("paired live office routes all roles, preserves request ID on uncertain del
     const request = route.request(),
       path = new URL(request.url()).pathname.replace("/api/web/", "");
     const body = request.postDataJSON();
-    if (path === "pair")
-      return route.fulfill({ json: { token, userId: "owner" } });
-    expect(request.headers().authorization).toBe("Bearer " + token);
+    if (path === "session")
+      return route.fulfill({ status: 401, json: { error: "unauthorized" } });
+    if (path === "session/logout") return route.fulfill({ json: { ok: true } });
+    if (path === "session/pair")
+      return route.fulfill({ json: { authenticated: true } });
+    expect(request.headers().authorization).toBeUndefined();
     if (!connected)
       return route.fulfill({ status: 401, json: { error: "unauthorized" } });
     if (path === "office")
@@ -146,14 +149,6 @@ test("paired live office routes all roles, preserves request ID on uncertain del
   ).toBeVisible();
   await expect(page.getByLabel("Код подключения")).toHaveCount(0);
   connected = false;
-  await expect(
-    page.getByText("Нет связи с системой", { exact: true }),
-  ).toBeVisible({ timeout: 8000 });
-  await expect(page.locator(".connection")).toContainText(
-    "Система не подключена",
-  );
-  await expect(page.locator(".agent-card small")).toHaveText("Нет связи");
-  await page.getByRole("button", { name: "Отключить", exact: true }).click();
   await expect(page.getByLabel("Код подключения")).toBeVisible();
 });
 
@@ -166,8 +161,11 @@ test("disconnect during an unresolved send permits a fresh session", async ({
   await page.route("**/api/web/**", async (route) => {
     const path = new URL(route.request().url()).pathname.split("/api/web/")[1],
       body = route.request().postDataJSON();
-    if (path === "pair")
-      return route.fulfill({ json: { token: "c".repeat(64) } });
+    if (path === "session")
+      return route.fulfill({ status: 401, json: { error: "unauthorized" } });
+    if (path === "session/logout") return route.fulfill({ json: { ok: true } });
+    if (path === "session/pair")
+      return route.fulfill({ json: { authenticated: true } });
     if (path === "office")
       return route.fulfill({
         json: {
@@ -213,7 +211,9 @@ test("disconnect during an unresolved send permits a fresh session", async ({
     .getByRole("button", { name: "Закрыть живой диалог", exact: true })
     .last()
     .click();
-  await page.getByRole("button", { name: "Отключить", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Выйти на этом устройстве", exact: true })
+    .click();
   release();
   await pair();
   await page.getByLabel("Команда офиса").selectOption("backend");

@@ -253,10 +253,33 @@ export async function webApi(req:Request,store?:NativeAccess, decide?:(req:Reque
  let origin:URL;try{origin=new URL(process.env.WEB_APP_ORIGIN??'');}catch{return json({error:'web_disabled'},503);}
  if(origin.protocol!=='https:'||origin.origin!==process.env.WEB_APP_ORIGIN)return json({error:'web_disabled'},503);
  const url=new URL(req.url),supplied=req.headers.get('origin');
- if(!url.pathname.startsWith('/api/web/')||req.headers.has('cookie')||req.headers.get('sec-fetch-site')!=='same-origin'||(supplied!==null&&supplied!==origin.origin)||(req.method!=='GET'&&supplied!==origin.origin)||!['GET','POST'].includes(req.method))return json({error:'web_origin_forbidden'},403);
+ if(!url.pathname.startsWith('/api/web/')||req.headers.get('sec-fetch-site')!=='same-origin'||(supplied!==null&&supplied!==origin.origin)||(req.method!=='GET'&&supplied!==origin.origin)||!['GET','POST'].includes(req.method))return json({error:'web_origin_forbidden'},403);
+ const cookieName='__Host-AgentOffice';
+ const cookieValues=(req.headers.get('cookie')??'').split(';').map(v=>v.trim()).filter(v=>v.startsWith(cookieName+'=')).map(v=>v.slice(cookieName.length+1));
+ if(cookieValues.length>1)return json({error:'ambiguous_session'},403);
+ const cookieToken=cookieValues.length===1&&/^[a-f0-9]{64}$/.test(cookieValues[0])?cookieValues[0]:'';
+ const cookie=(token:string)=>`${cookieName}=${token}; Path=/; Max-Age=${token?2592000:0}; Secure; HttpOnly; SameSite=Strict`;
+ const sessionRoute=url.pathname==='/api/web/session';
+ const sessionPair=url.pathname==='/api/web/session/pair'&&req.method==='POST';
+ const logout=url.pathname==='/api/web/session/logout'&&req.method==='POST';
+ if(sessionRoute||logout){
+   if(process.env.NATIVE_APP_ENABLED!=='true')return json({error:'native_disabled'},503);
+   const access=store??nativeAccess(),identity=access.authenticate(cookieToken);
+   const response=json(identity&&permitted(identity.userId)?{authenticated:true}:{error:'unauthorized'},identity&&permitted(identity.userId)?200:401);
+   if(logout){if(identity&&permitted(identity.userId))access.revokeDevice(cookieToken);response.headers.set('Set-Cookie',cookie(''));}
+   else if(!identity||!permitted(identity.userId))response.headers.set('Set-Cookie',cookie(''));
+   return response;
+ }
  const headers=new Headers();for(const name of ['authorization','content-type','content-length']){const value=req.headers.get(name);if(value!==null)headers.set(name,value);}
+ if(cookieToken&&!headers.has('authorization'))headers.set('authorization','Bearer '+cookieToken);
  const approval=req.method==='POST'&&/^\/api\/web\/approvals\/[a-zA-Z0-9-]{1,128}\/decide$/.test(url.pathname);
- const target=new URL(origin.origin);target.pathname=url.pathname.replace('/api/web/',approval?'/api/':'/api/native/');target.search=url.search;
+ const target=new URL(origin.origin);target.pathname=url.pathname.replace('/api/web/',approval?'/api/':'/api/native/');target.search=url.search;if(sessionPair)target.pathname='/api/native/pair';
  const trusted=new Request(target,{method:req.method,headers,body:req.body,signal:req.signal,duplex:'half'} as RequestInit);
- return approval?(decide?decide(trusted):json({error:'not_found'},404)):nativeApi(trusted,store);
+ const response=await (approval?(decide?decide(trusted):json({error:'not_found'},404)):nativeApi(trusted,store));
+ if(sessionPair&&response.ok){
+   const paired=await response.json() as {token:string};
+   const result=json({authenticated:true});result.headers.set('Set-Cookie',cookie(paired.token));return result;
+ }
+ if(response.status===401&&cookieToken)response.headers.set('Set-Cookie',cookie(''));
+ return response;
 }

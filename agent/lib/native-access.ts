@@ -119,6 +119,9 @@ export class NativeAccess {
     const row = this.db.query('SELECT user_id FROM devices WHERE hash=? AND expires>=?').get(device, Date.now()) as { user_id: string } | null;
     return row ? { device, userId: row.user_id } : null;
   }
+  revokeDevice(token: string) {
+    if (/^[a-f0-9]{64}$/.test(token)) this.db.query('DELETE FROM devices WHERE hash=?').run(hash(token));
+  }
   revoke(userId: string) {
     this.db.query('DELETE FROM devices WHERE user_id=?').run(userId);
     this.db.query('DELETE FROM codes WHERE user_id=?').run(userId);

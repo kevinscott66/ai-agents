@@ -14,7 +14,7 @@ test('voice uses owner bearer, bounds input, transcribes, rechecks revocation; w
  expect((await webApi(req('web/voice/status'),store)).status).toBe(403);
  const webHeaders={'sec-fetch-site':'same-origin',origin:'https://agent.test'};
  expect((await webApi(req('web/voice/status',undefined,webHeaders),store)).status).toBe(200);
- expect((await webApi(req('web/voice/status',undefined,{...webHeaders,cookie:'session=x'}),store)).status).toBe(403);
+ expect((await webApi(req('web/voice/status',undefined,{...webHeaders,cookie:'session=x'}),store)).status).toBe(200);
  expect((await webApi(req('web/voice/speech',{text:'Привет'},{...webHeaders,origin:'https://evil.test'}),store)).status).toBe(403);
  let forwarded='';const decision=await webApi(req('web/approvals/abc123/decide',{decision:'rejected'},webHeaders),store,async trusted=>{forwarded=new URL(trusted.url).pathname;expect(trusted.headers.has('origin')).toBe(false);expect(trusted.headers.has('cookie')).toBe(false);return Response.json({ok:true});});expect(decision.status).toBe(200);expect(forwarded).toBe('/api/approvals/abc123/decide');
  let calls=0;

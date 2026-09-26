@@ -29,23 +29,21 @@ export const OfficeLiveSchema = z
   })
   .refine((v) => new Set(v.agents.map((a) => a.agentId)).size === 12);
 export type LiveSnapshot = z.infer<typeof OfficeLiveSchema>;
+export class SessionExpired extends Error {}
 export class LiveClient {
-  private token = "";
   private generation = 0;
   clear() {
-    this.token = "";
     this.generation++;
   }
   async request(path: string, body?: unknown) {
     const generation = this.generation;
     const response = await fetch("/api/web/" + path, {
       method: body === undefined ? "GET" : "POST",
-      credentials: "omit",
+      credentials: "same-origin",
       cache: "no-store",
       redirect: "error",
       signal: AbortSignal.timeout(15000),
       headers: {
-        ...(this.token ? { authorization: "Bearer " + this.token } : {}),
         ...(body === undefined ? {} : { "content-type": "application/json" }),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -53,7 +51,7 @@ export class LiveClient {
     if (generation !== this.generation) throw new Error("Сессия завершена");
     if (response.status === 401) {
       this.clear();
-      throw new Error("Авторизация истекла. Подключитесь заново.");
+      throw new SessionExpired("Авторизация истекла. Подключитесь заново.");
     }
     if (!response.ok)
       throw new Error(
@@ -69,11 +67,15 @@ export class LiveClient {
   }
   async pair(code: string) {
     const generation = this.generation;
-    const result = z
-      .object({ token: z.string().regex(/^[a-f0-9]{64}$/) })
-      .parse(await this.request("pair", { code }));
+    await this.request("session/pair", { code });
     if (generation !== this.generation) throw new Error("Сессия завершена");
-    this.token = result.token;
+  }
+  async restore() {
+    await this.request("session");
+  }
+  async logout() {
+    await this.request("session/logout", {});
+    this.clear();
   }
   async snapshot() {
     return OfficeLiveSchema.parse(await this.request("office"));
