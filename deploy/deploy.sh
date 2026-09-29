@@ -136,7 +136,8 @@ RSYNC_EXCLUDES=(
 # гитом (`node_modules/`, `data/`, `.env`) сюда не попадает — `--exclude-standard`
 # его отфильтровывает, поэтому маски выше остаются нужны.
 UNTRACKED_EXCLUDES="$(mktemp)"
-trap 'rm -f "$UNTRACKED_EXCLUDES"; release_deploy_lock' EXIT
+IGNORED_EXCLUDES="$(mktemp)"
+trap 'rm -f "$UNTRACKED_EXCLUDES" "$IGNORED_EXCLUDES"; release_deploy_lock' EXIT
 #
 # Аудит 2026-08-20: здесь стояло `… > "$UNTRACKED_EXCLUDES" || true`, и `|| true`
 # относился ко ВСЕЙ пайплайне. Не отработал `git ls-files` (каталог без .git —
@@ -146,10 +147,28 @@ trap 'rm -f "$UNTRACKED_EXCLUDES"; release_deploy_lock' EXIT
 # гейт беззвучно деградировал до одних масок выше — ровно то состояние, из-за
 # которого send-test-trigger.ts и test-banner.ts оказались в проде.
 # Без git мы не знаем, что отслеживается, — значит и выкатывать нечего.
+#
+# AUD-20260921-036: `--exclude-standard` выше оставлял дыру ровно там, где её
+# меньше всего ждут. Игнорируемое гитом — не отслеживаемое, но и в этот список
+# не попадало, так что черновик под `.gitignore` уезжал в прод, если его имя не
+# угадала маска. Так на проде с мая лежат семь проб юзербота, и
+# `join-and-smoke.ts` ни под одну маску не подходит. Поэтому второй список —
+# игнорируемое (`--ignored`, каталоги целиком через `--directory`): в прод едет
+# только то, что лежит в коммите. Маски выше остаются как страховка на случай
+# симлинков и копии без `.gitignore`.
+# Пути якорятся `/` к корню agent/: без якоря `index.ts` из корня исключил бы и
+# отслеживаемый `lib/index.ts` — rsync сравнивает шаблон без слэша с именем в
+# любом каталоге.
 if ! git -C "$REPO_ROOT" ls-files --others --exclude-standard -- agent/ \
-     | sed 's|^agent/||' > "$UNTRACKED_EXCLUDES"; then
+     | sed 's|^agent/|/|' > "$UNTRACKED_EXCLUDES"; then
   red "git ls-files не отработал в $REPO_ROOT — нечем отличить код из коммита"
   red "  от черновика в рабочем каталоге. Выкатка остановлена."
+  exit 1
+fi
+if ! git -C "$REPO_ROOT" ls-files --others --ignored --exclude-standard --directory -- agent/ \
+     | sed 's|^agent/|/|' > "$IGNORED_EXCLUDES"; then
+  red "git ls-files --ignored не отработал в $REPO_ROOT — нечем отличить код"
+  red "  из коммита от игнорируемого черновика. Выкатка остановлена."
   exit 1
 fi
 UNTRACKED_COUNT="$(wc -l < "$UNTRACKED_EXCLUDES" | tr -d ' ')"
@@ -157,7 +176,12 @@ if [ "$UNTRACKED_COUNT" != "0" ]; then
   cyan "== не уедет в прод: $UNTRACKED_COUNT неотслеживаемый(х) файл(ов) в agent/ =="
   head -10 "$UNTRACKED_EXCLUDES"
 fi
-RSYNC_EXCLUDES+=(--exclude-from "$UNTRACKED_EXCLUDES")
+IGNORED_COUNT="$(wc -l < "$IGNORED_EXCLUDES" | tr -d ' ')"
+if [ "$IGNORED_COUNT" != "0" ]; then
+  cyan "== не уедет в прод: $IGNORED_COUNT игнорируемый(х) гитом путь(ей) в agent/ =="
+  head -20 "$IGNORED_EXCLUDES"
+fi
+RSYNC_EXCLUDES+=(--exclude-from "$UNTRACKED_EXCLUDES" --exclude-from "$IGNORED_EXCLUDES")
 
 if [ "$DRY_RUN" = "1" ]; then
   cyan "== DRY RUN: rsync --dry-run, no restart =="
