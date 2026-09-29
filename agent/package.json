@@ -27,5 +27,13 @@
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "overrides": {
+    "fast-uri": "^3.1.6",
+    "qs": "^6.16.0",
+    "body-parser": "^2.3.0",
+    "hono": "^4.12.34",
+    "@hono/node-server": "^1.19.15",
+    "ip-address": "^10.7.2"
   }
 }
