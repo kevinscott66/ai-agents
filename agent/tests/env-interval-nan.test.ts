@@ -72,7 +72,10 @@ describe("почему это важно", () => {
     // большой и не «не запускать вовсе». Прежняя форма (>10 срабатываний за
     // 50 мс) мерила загруженность машины: в полном прогоне на 392 файла
     // event-loop успевает меньше, и тест краснел через раз — при том, что
-    // поведение setInterval от нагрузки не зависит.
+    // поведение setInterval от нагрузки не зависит. Порог «>2» оказался той
+    // же меркой: на раннере CI прогон на 993 файла роняет его снова, поэтому
+    // от счётчика требуется ровно то, что отличает 1 мс от 10 с, — хотя бы
+    // одно срабатывание.
     let nanTicks = 0;
     let slowTicks = 0;
     const nan = setInterval(() => nanTicks++, NaN as unknown as number);
@@ -80,7 +83,7 @@ describe("почему это важно", () => {
     await new Promise((r) => setTimeout(r, 100));
     clearInterval(nan);
     clearInterval(slow);
-    expect(nanTicks).toBeGreaterThan(2);
+    expect(nanTicks).toBeGreaterThan(0);
     expect(slowTicks).toBe(0);
   });
 });
