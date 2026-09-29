@@ -47,6 +47,25 @@ async function failOf(p: Promise<unknown>): Promise<Error> {
   throw new Error("ожидали отказ, а вызов вернул результат");
 }
 
+/**
+ * Отказ именно со стадии чтения тела.
+ *
+ * `AbortSignal.timeout` в fetchJson снимает обе стадии сразу, поэтому на
+ * загруженном раннере бюджет может истечь ещё до заголовков — и отказ придёт
+ * с «request failed», то есть со стадии соединения. Проверяем мы вторую
+ * стадию, а не скорость чужой машины, поэтому при таком исходе повторяем с
+ * большим бюджетом, а не подкручиваем утверждение. В норме хватает первого
+ * прохода: сервер локальный, заголовки приходят сразу.
+ */
+async function readStageFailure(label: string): Promise<Error> {
+  let err = new Error("попыток не было");
+  for (const timeoutMs of [300, 1_000, 3_000]) {
+    err = await failOf(fetchJson(`${base}/stall`, { label, timeoutMs }));
+    if (err.message.startsWith(`${label} response read failed:`)) break;
+  }
+  return err;
+}
+
 let srv: ReturnType<typeof Bun.serve>;
 let base = "";
 
@@ -75,9 +94,7 @@ describe("audit-2026-08-20 / fetchJson: обрыв чтения тела тож�
   });
 
   test("сообщение не голый TimeoutError — видно, что это чтение ответа", async () => {
-    const err = await failOf(
-      fetchJson(`${base}/stall`, { label: "tgstat", timeoutMs: 300 }),
-    );
+    const err = await readStageFailure("tgstat");
     expect(err.message).toMatch(/^tgstat response read failed:/);
     expect(err.message).toMatch(/tim(ed )?out/i);
   });
