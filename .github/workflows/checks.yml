@@ -7,7 +7,9 @@ name: Repo Checks
 #
 # AUD-20260919-004 — эти джобы обязательны в защите main. Список обязательных
 # проверок на 2026-09-20: пять джоб отсюда, гейт авторства `kevinscott66 only`
-# и три native-джобы из native.yml. Переименование джобы здесь НЕ переименует
+# и три native-джобы из native.yml. Джоб здесь с 2026-09-29 шесть: deps-audit
+# добавлена и присылает check run, но в список обязательных её должен внести
+# владелец — до этого её краснота мёржу не мешает. Переименование джобы здесь НЕ переименует
 # обязательную проверку в настройках репозитория: старое имя останется
 # требоваться, нового никто не пришлёт, и PR перестанут мёрджиться. Меняя
 # `name:`, правь и список в защите ветки (Settings → Branches, либо
@@ -182,6 +184,41 @@ jobs:
 
       - name: Assert test count is inside the baseline corridor
         run: .github/scripts/assert-test-baseline.sh /tmp/bun-test-output.txt
+
+  # Аудит 2026-09-29 (пункт «обнови зависимости» из чек-листа): проверки
+  # зависимостей в CI не было вовсе — ни здесь, ни в native.yml/deploy.yml, ни
+  # dependabot/renovate. `bun audit` на момент добавления джобы показывал 41
+  # предупреждение: 26 в agent (8 high), 8 в agent/miniapp (5 high), 7 в
+  # site/web (5 high); site/server был чист. Все закрыты в этом же PR полями
+  # "overrides" — джоба здесь для того, чтобы вернувшаяся дыра краснела сама.
+  #
+  # Установки зависимостей нет намеренно: `bun audit` читает bun.lock и не
+  # требует node_modules (проверено на копии пакета без node_modules). Это
+  # заодно значит, что джоба не зависит от установки и не тратит на неё время.
+  #
+  # ВНИМАНИЕ владельцу: новая джоба НЕ становится обязательной сама. Пока её
+  # имя не добавлено в защиту main (Settings → Branches или
+  # `gh api repos/:owner/:repo/branches/main/protection`), красная deps-audit
+  # мёрджу не помешает. См. шапку файла про список обязательных проверок.
+  deps-audit:
+    name: Dependency audit (bun audit, четыре пакета)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.0.2
+        with:
+          bun-version: 1.3.14
+
+      - name: Audit dependencies of every package
+        run: |
+          .github/scripts/check-dependency-audit.sh \
+            .github/dependency-audit-allowlist.txt \
+            agent agent/miniapp site/server site/web
 
   # Аудит 2026-08-12: в site/ лежат 15 тестовых файлов — 146 тестов сервера
   # (site/server: cors, rate-limit, api-hardening, ingest-slug, digest-meta,
