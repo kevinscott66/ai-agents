@@ -6,10 +6,9 @@ name: Repo Checks
 # Add new repo-wide invariants here rather than spinning up new workflows.
 #
 # AUD-20260919-004 — эти джобы обязательны в защите main. Список обязательных
-# проверок на 2026-09-20: пять джоб отсюда, гейт авторства `kevinscott66 only`
-# и три native-джобы из native.yml. Джоб здесь с 2026-09-29 шесть: deps-audit
-# добавлена и присылает check run, но в список обязательных её должен внести
-# владелец — до этого её краснота мёржу не мешает. Переименование джобы здесь НЕ переименует
+# проверок на 2026-09-29: все шесть джоб отсюда (deps-audit внесена в тот же
+# день, итого десять контекстов), гейт авторства `kevinscott66 only` и три
+# native-джобы из native.yml. Переименование джобы здесь НЕ переименует
 # обязательную проверку в настройках репозитория: старое имя останется
 # требоваться, нового никто не пришлёт, и PR перестанут мёрджиться. Меняя
 # `name:`, правь и список в защите ветки (Settings → Branches, либо
@@ -24,12 +23,20 @@ name: Repo Checks
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
   workflow_dispatch:
 
-# NOTE: push trigger on main is intentionally omitted while pre-existing
-# conflict markers in README.md / agent/ONBOARDING.md remain unresolved
-# (tracked as a discovered follow-up of T-507). Re-enable once those are
-# cleaned and the check is green on a one-shot manual dispatch.
+# Триггер на push в main включён 2026-09-29 (AUD-20260929-041) по условию,
+# которое здесь же и было записано: маркеров конфликта в README.md и
+# agent/ONBOARDING.md больше нет, разовый `workflow_dispatch` на main зелёный
+# по всем шести джобам (прогон 36614247357).
+#
+# Зачем: без него состояние main видно только через чужой PR. Обязательная
+# проверка `Test suite baseline` простояла красной с 23.09 по 29.09
+# (AUD-20260929-038) — шесть дней ни один PR не мог быть слит, и заметили это
+# случайно. Прогон на push даёт main собственный цвет и письмо владельцу в тот
+# же час, когда он меняется.
 
 permissions:
   contents: read
@@ -66,9 +73,19 @@ jobs:
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.sha }}
+          # На push в main база — предыдущее состояние ветки. Без этого
+          # `origin/main` ниже указывал бы на сам проверяемый коммит, диапазон
+          # выходил бы пустым, и джоба была бы зелёной, ничего не прочитав.
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           BASE_SHA="$PR_BASE_SHA"
+          # Нулевой SHA присылает push в новую ветку — предыдущего состояния нет.
+          if [ -z "$BASE_SHA" ] && [ -n "$PUSH_BEFORE_SHA" ] \
+            && [ "$PUSH_BEFORE_SHA" != "0000000000000000000000000000000000000000" ] \
+            && git cat-file -e "$PUSH_BEFORE_SHA^{commit}" 2>/dev/null; then
+            BASE_SHA="$PUSH_BEFORE_SHA"
+          fi
           if [ -z "$BASE_SHA" ]; then
             BASE_SHA="$(git rev-parse "origin/${DEFAULT_BRANCH}")"
           fi
