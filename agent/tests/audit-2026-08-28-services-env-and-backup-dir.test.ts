@@ -40,18 +40,27 @@ const BACKUP_SRC = readFileSync(new URL("../lib/backup.ts", import.meta.url), "u
 describe("предпосылки", () => {
   test("setInterval схлопывает задержку больше 2^31-1 в 1 мс", async () => {
     // Именно из-за этого «раз в год» превращается в «257 раз за 300 мс».
+    //
+    // Проверяем схлопывание, а не скорость загруженного раннера: счётчик за
+    // фиксированное окно мерил бы чужой event-loop, и прежняя форма («>20 за
+    // 150 мс») краснела на CI. Отсюда две страховки. Ждём до двух секунд —
+    // за это время 1 мс набирает порог на любой машине. И рядом крутится
+    // контрольный интервал на 10 с: он обязан дать ноль, то есть
+    // несхлопнувшийся интервал не сработает ни разу.
     let ticks = 0;
+    let slowTicks = 0;
     const t = setInterval(() => ticks++, 3_000_000_000);
-    // Проверяем схлопывание, а не скорость загруженного CI-раннера.
-    // Несхлопнувшийся интервал за две секунды не сработает ни разу.
+    const slow = setInterval(() => slowTicks++, 10_000);
     const deadline = Date.now() + 2_000;
     try {
       while (ticks <= 20 && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 10));
       }
       expect(ticks).toBeGreaterThan(20);
+      expect(slowTicks).toBe(0);
     } finally {
       clearInterval(t);
+      clearInterval(slow);
     }
   });
 
