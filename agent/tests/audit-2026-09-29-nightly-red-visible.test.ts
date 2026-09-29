@@ -138,6 +138,22 @@ describe("AUD-042: красный ночной прогон виден без р
     expect(r.calls).not.toContain("issue comment 7");
   });
 
+  // Отдельный случай: вывод есть, а строк `(fail)` в нём нет — джоба упала не
+  // на тестах. `grep` отдаёт 1, и без `|| true` скрипт под `set -o pipefail`
+  // умер бы молча, ровно там, где задача нужна тем более.
+  slowTest("вывод без строк (fail) — задача заводится, а не падает", () => {
+    const { bin, dir, log } = sandbox([]);
+    const out = join(dir, "out.txt");
+    writeFileSync(out, "bun test v1.3.14\nerror: script \"test\" exited with code 1\n");
+    const res = spawnSync("bash", [SCRIPT, "fail", out], {
+      encoding: "utf8",
+      timeout: SPAWN_TIMEOUT_MS,
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, RUN_URL: "https://example/run/2" },
+    });
+    expect(res.status).toBe(0);
+    expect(readFileSync(log, "utf8")).toContain("issue create");
+  });
+
   slowTest("вывод прогона не сохранился — задача всё равно заводится", () => {
     const r = run("fail", [], false);
     expect(r.status).toBe(0);
