@@ -30,6 +30,13 @@ import { db } from "../lib/db.ts";
 
 const AGENT = "qa";
 const CHAT = -560001;
+// Чат, в который не пишет ни этот файл, ни любой другой: им проверяется, что
+// фильтр по чату вообще фильтрует. Раньше здесь стоял `-1` — общий заглушечный
+// чат, в который пишут десятки файлов, и утверждение «там ничего нет» держалось
+// только на порядке файлов. В ночном прогоне с `--rerun-each=5` порядок
+// оказывался другим, и тест получал 15 чужих строк вместо нуля (AUD-039-bis,
+// прогон 36614243001).
+const EMPTY_CHAT = -560002;
 const BIG = "ю".repeat(200_000);
 
 const AUDIT_SRC = readFileSync(new URL("../lib/audit.ts", import.meta.url), "utf-8");
@@ -113,7 +120,7 @@ describe("фильтры и порядок не изменились", () => {
     logAction({ agentKey: AGENT, chatId: CHAT, actionType: "SEND_MESSAGE", status: "ok" });
     expect(listActions({ agentKey: AGENT, chatId: CHAT }).length).toBe(2);
     expect(listActions({ agentKey: AGENT, chatId: CHAT, status: "error" }).length).toBe(1);
-    expect(listActions({ agentKey: AGENT, chatId: -1 }).length).toBe(0);
+    expect(listActions({ agentKey: AGENT, chatId: EMPTY_CHAT }).length).toBe(0);
     expect(listActions({ agentKey: "orchestrator", chatId: CHAT }).length).toBe(0);
   });
 

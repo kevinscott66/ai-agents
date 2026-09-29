@@ -18,9 +18,14 @@
  *         decisions in later, unrelated tests (e.g. an agent:pm:locked row
  *         leaking into a CREATE_TASK test that assumed the global default).
  *       - T-812: строки `permissions`, которые тест поменял и не вернул.
- *     Resetting before each test gives every test a clean slate while leaving
- *     the global autonomy default intact (tests set their own overrides in the
- *     test body, which runs after this hook).
+ *       - AUD-20260929-040: строка `autonomy_modes` со scope 'global' — её
+ *         прежняя формулировка «leaving the global autonomy default intact»
+ *         описывала намерение, но не исполняла его: 34 файла пишут глобальный
+ *         режим, и почти все не возвращают прежний. Строка восстанавливается
+ *         по снимку так же, как `permissions`.
+ *     Resetting before each test gives every test a clean slate and returns the
+ *     global autonomy default to what the migrations seeded (tests set their own
+ *     overrides in the test body, which runs after this hook).
  *
  * P2bis (nightly, 2026-09-10). Оба верхних пункта добавлены сюда потому, что
  * `bun test tests --rerun-each=5` в nightly был красным четыре ночи подряд, а
@@ -148,6 +153,48 @@ function restorePermissions(): void {
   })();
 }
 
+/**
+ * AUD-20260929-040: глобальный режим автономии — ровно та же ловушка, что
+ * `permissions` в T-812, только на одной строке.
+ *
+ * Сброс выше снимает scope 'agent' и 'chat', а 'global' намеренно не трогал:
+ * его отсутствие не равно посеянному миграцией 003 `semi_auto`… но и оставлять
+ * его как есть нельзя. `setAutonomy("global", "*", "auto")` зовут 34 файла, и
+ * почти никто не возвращает прежнее значение — после такого файла любой тест,
+ * который ждёт дефолт, получает `auto`. Обычный прогон это скрывает (порядок
+ * файлов у bun не фиксирован, и дефолт часто спрашивают раньше), а
+ * `--rerun-each=5` в nightly проявляет: он был красным с 25.09.2026, и падало
+ * там именно ожидание дефолта — `expect(getAutonomy(OPEN_CHAT, "design"))`
+ * получал `auto` вместо `semi_auto` (прогон 36559200830).
+ *
+ * Восстанавливаем по снимку и только при расхождении: строка одна, запрос
+ * дешёвый, а сброс без снимка подменил бы посеянный дефолт на «строки нет».
+ */
+const GLOBAL_SQL = `SELECT mode FROM autonomy_modes WHERE scope = 'global' AND scope_id = '*'`;
+
+function globalAutonomy(): string | null {
+  const row = db.prepare(GLOBAL_SQL).get() as { mode: string } | undefined;
+  return row?.mode ?? null;
+}
+
+const globalAutonomySnapshot = globalAutonomy();
+
+function restoreGlobalAutonomy(): void {
+  if (globalAutonomySnapshot === null) {
+    db.prepare(
+      `DELETE FROM autonomy_modes WHERE scope = 'global' AND scope_id = '*'`,
+    ).run();
+    return;
+  }
+  db.prepare(
+    `INSERT INTO autonomy_modes(scope, scope_id, mode, updated_at)
+     VALUES ('global', '*', ?, ?)
+     ON CONFLICT(scope, scope_id) DO UPDATE SET
+       mode = excluded.mode,
+       updated_at = excluded.updated_at`,
+  ).run(globalAutonomySnapshot, Date.now());
+}
+
 beforeEach(() => {
   _resetRateLimits();
   _resetRateLimiter();
@@ -155,5 +202,6 @@ beforeEach(() => {
   db.prepare(
     `DELETE FROM autonomy_modes WHERE scope IN ('agent', 'chat')`,
   ).run();
+  if (globalAutonomy() !== globalAutonomySnapshot) restoreGlobalAutonomy();
   if (permissionsSignature() !== permSignature) restorePermissions();
 });
