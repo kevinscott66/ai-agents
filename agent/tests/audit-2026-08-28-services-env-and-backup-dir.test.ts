@@ -40,11 +40,21 @@ const BACKUP_SRC = readFileSync(new URL("../lib/backup.ts", import.meta.url), "u
 describe("предпосылки", () => {
   test("setInterval схлопывает задержку больше 2^31-1 в 1 мс", async () => {
     // Именно из-за этого «раз в год» превращается в «257 раз за 300 мс».
+    //
+    // Утверждение держит контрольный интервал на 10 с: важно не «сколько
+    // успеет», а что переполнение даёт КРОШЕЧНЫЙ интервал, а не большой и не
+    // «не запускать вовсе». Прежняя форма (>20 срабатываний за 150 мс) мерила
+    // загруженность машины и краснела на общих раннерах — при том, что
+    // поведение setInterval от нагрузки не зависит (ср. env-interval-nan).
     let ticks = 0;
+    let slowTicks = 0;
     const t = setInterval(() => ticks++, 3_000_000_000);
+    const slow = setInterval(() => slowTicks++, 10_000);
     await new Promise((r) => setTimeout(r, 150));
     clearInterval(t);
-    expect(ticks).toBeGreaterThan(20);
+    clearInterval(slow);
+    expect(ticks).toBeGreaterThan(0);
+    expect(slowTicks).toBe(0);
   });
 
   test("fs.mkdirSync('') бросает, а не создаёт cwd", () => {
