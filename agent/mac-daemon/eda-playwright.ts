@@ -620,13 +620,16 @@ export function edaShopPage(page: any): ShopPage {
         if (!name || !dishMatches(name, query) || EDA_TEXT.outOfStock.test(d.text)) continue;
         // Одинаковые названия в меню не различаем — такое блюдо не заказать.
         if (menu.filter((x) => dishName(x.title, x.meta) === name).length !== 1) continue;
-        // Опции и цена без доплат — из окна блюда; окно не открылось или не понятно — блюда нет в расчёте.
+        // Опции, название и цена без доплат — из окна блюда; окно не открылось
+        // или не прочитано — блюда нет в расчёте. Название отдельным условием:
+        // `dishName` возвращает null, когда заголовок окна пуст, а по такому
+        // блюду ни id не собрать, ни в корзине его потом не узнать.
         if (inspected >= SHOP_CANDIDATES_MAX || Date.now() >= deadline) break;
         inspected++;
         const dialog = await dishDialog(i, d.title);
         await closeDialogs();
         if (!dialog) break; // A broken dialog selector must not cost one timeout per dish.
-        if (!dialog.groups || dialog.base === null || !edaDialogMatches(d, dialog.raw)) continue;
+        if (!dialog.groups || dialog.name === null || dialog.base === null || !edaDialogMatches(d, dialog.raw)) continue;
         cards.push({
           id: edaDishId(place, dialog.name), name: dialog.name, price_rub: dialog.base, available: true,
           ...(dialog.groups.length ? { options: dialog.groups } : {}),
