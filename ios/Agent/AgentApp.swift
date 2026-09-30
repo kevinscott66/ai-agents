@@ -460,6 +460,7 @@ struct RootView: View {
                 List {
                     Section {
                         Label("Чат с командой", systemImage: "bubble.left.and.bubble.right")
+                        NavigationLink { RemoteMacView(server:server) } label: { Label("Экран Mac",systemImage:"desktopcomputer") }
                         if let conversationId = model.conversationId {
                             NavigationLink { KnowledgeView(server: server, conversationID: conversationId) { conversation, message in
                                 menu = false

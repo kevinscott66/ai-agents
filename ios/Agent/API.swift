@@ -261,6 +261,10 @@ struct AgentAPI {
         }
         return try JSONDecoder().decode(T.self, from: data)
     }
+    func remote<T:Decodable>(_ path:String,body:[String:String]? = nil,encodedBody:Data? = nil,expectedToken:String) async throws -> T {
+        guard path.range(of:"^[a-zA-Z0-9/-]+$",options:.regularExpression) != nil else {throw AgentError.message("Некорректный запрос")}
+        return try await request("/api/native/remote/"+path,body:body,expectedToken:expectedToken,encodedBody:encodedBody)
+    }
     func voiceAvailable(expectedToken: String) async throws -> Bool {
         struct Status: Decodable { let available: Bool }
         let status: Status = try await request("/api/native/voice/status", expectedToken: expectedToken)
