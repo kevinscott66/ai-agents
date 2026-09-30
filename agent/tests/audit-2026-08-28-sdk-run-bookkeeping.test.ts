@@ -92,6 +92,11 @@ describe("набор безопасных тулзов", () => {
       [
         "CLOUDFLARE_DNS_LIST",
         "GET_BOT_INFO",
+        // Обе добавлены вместе с виртуальным офисом и читают, не меняя:
+        // GET_CAPABILITIES отдаёт статус конфигурации, GITHUB_MCP_READ —
+        // файл, issue или PR («Не изменяет GitHub» в его же описании).
+        "GET_CAPABILITIES",
+        "GITHUB_MCP_READ",
         "GET_CHANNEL_STATS",
         "GET_FIGMA_FILE",
         "GET_GITHUB_STATUS",
