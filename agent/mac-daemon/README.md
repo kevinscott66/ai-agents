@@ -1,57 +1,47 @@
 # mac-daemon (Stage A)
 
-Bun-скрипт, который подключается по WebSocket к бэкенду агентной команды
-(VPS), ждёт команд `MAC_RUN_CLAUDE` и спавнит локальный `claude` CLI в
-разрешённом проекте, стримя stdout/stderr обратно.
+A Bun script that connects to the agent-team backend over WebSocket, receives `MAC_RUN_CLAUDE` commands and launches the local `claude` CLI in an allowed project, streaming stdout/stderr back.
 
-## Зависимости
+## Requirements
 
-- Bun >= 1.1
-- установленный `claude` CLI в `PATH` (или путь в `CLAUDE_BIN`)
+- Bun >= 1.1.
+- `claude` installed in PATH, or configured through `CLAUDE_BIN`.
 
-## Переменные окружения
+## Environment
 
-| Переменная           | Назначение                                                                |
-|----------------------|---------------------------------------------------------------------------|
-| `MAC_BRIDGE_URL`     | WebSocket URL бэкенда, напр. `ws://localhost:8788`.                    |
-| `MAC_BRIDGE_SECRET`  | Shared secret (>= 32 символа). Должен совпадать с бэкендом.               |
-| `MAC_PROJECT_ROOTS`  | CSV абсолютных путей-корней, под которыми разрешён `project`.             |
-| `CLAUDE_BIN`         | Опционально — путь до бинаря `claude` (default: `claude` из `PATH`).      |
-| `MAC_BRIDGE_INSECURE_PLAINTEXT` | `1` — разрешить `ws://` на не-петлевой хост (см. ниже). По умолчанию выключено. |
+| Variable | Purpose |
+| --- | --- |
+| `MAC_BRIDGE_URL` | Backend WebSocket URL, such as `ws://localhost:8788` |
+| `MAC_BRIDGE_SECRET` | Shared secret, at least 32 characters, matching the backend |
+| `MAC_PROJECT_ROOTS` | Comma-separated absolute roots allowed for `project` |
+| `CLAUDE_BIN` | Optional executable path; defaults to `claude` in PATH |
+| `MAC_BRIDGE_INSECURE_PLAINTEXT` | Set to `1` to permit non-loopback `ws://`; disabled by default |
 
-### Требования к `MAC_BRIDGE_URL`
+### Bridge URL and authentication
 
-Демон проверяет мост взаимным HMAC-рукопожатием со случайными nonce и не передаёт секрет. Команды и результаты подписаны отдельно для каждого направления, соединения и порядкового номера. Адрес дополнительно проверяется на старте (`bridge-url.ts`):
+Mutual HMAC authentication uses random nonces without transmitting the secret. Commands and results are signed separately per direction, connection and sequence number. Startup validation in `bridge-url.ts` permits `wss://`, or `ws://` only for loopback (`localhost`, `127.0.0.0/8`, `::1`). Other addresses fail startup with a diagnostic.
 
-- `wss://` — куда угодно;
-- `ws://` — только на петлю (`localhost`, `127.0.0.0/8`, `::1`);
-- всё остальное — демон не стартует и печатает, что именно не так.
+For a separately encrypted transport such as SSH or Tailscale, non-loopback plaintext can be explicitly permitted with `MAC_BRIDGE_INSECURE_PLAINTEXT=1`. Replacing a local listener cannot forge authenticated commands/results without the key. HMAC does not encrypt content; confidentiality requires TLS or an SSH tunnel.
 
-Если между демоном и бриджем уже есть шифрованный транспорт (SSH-туннель на
-не-петлевой адрес, Tailscale), запрет снимается явным
-`MAC_BRIDGE_INSECURE_PLAINTEXT=1`.
+### Protocol upgrade
 
-Подмена локального порта не позволяет выдать команды или результаты без ключа. HMAC не шифрует содержимое; для конфиденциальности требуется TLS или SSH-туннель.
+Update the backend, including `mac-daemon/auth-handshake.ts`, before the daemon. The new daemon does not fall back to the old handshake. Then set backend `MAC_BRIDGE_ALLOW_LEGACY_AUTH=false` and restart to disable old-client compatibility. Rollback requires coordinated versions.
 
-### Обновление протокола
+The CLI uses its own process group. Cancellation/timeout sends SIGINT, followed by SIGKILL after a grace period, including remaining shell/tool children. macOS EPERM for a group containing only zombies is treated like ESRCH rather than crashing cancellation (#42).
 
-Сначала обновить backend (включая `mac-daemon/auth-handshake.ts`), затем Mac-демон. Новый демон не откатывается к старому рукопожатию. После обновления демона установить на backend `MAC_BRIDGE_ALLOW_LEGACY_AUTH=false` и перезапустить сервис, чтобы отключить совместимость со старыми клиентами. Откат требует согласованных версий обеих сторон.
-
-CLI запускается отдельной группой процессов; отмена и тайм-аут посылают SIGINT группе, затем SIGKILL после grace period, включая оставшиеся shell/tool-процессы. Ответ `EPERM` на сигнал группе на macOS значит «в группе одни зомби» и считается, как `ESRCH`, завершением, а не ошибкой: раньше он пробрасывался и ронял демон на отмене (#42).
-
-## Запуск вручную
+## Manual startup
 
 ```bash
 cd mac-daemon
 MAC_BRIDGE_URL=ws://localhost:8788 \
 MAC_BRIDGE_SECRET=$(cat ~/.config/mac-daemon/secret) \
-MAC_PROJECT_ROOTS=/Users/dobropalm/programs \
+MAC_PROJECT_ROOTS=/absolute/path/to/projects \
 bun run start
 ```
 
-## Установка через launchd
+## launchd installation
 
-Сохрани в `~/Library/LaunchAgents/com.dobropalm.mac-daemon.plist`:
+Save the following as `~/Library/LaunchAgents/com.dobropalm.mac-daemon.plist`, replacing the project paths and secret:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -59,64 +49,47 @@ bun run start
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key>
-  <string>com.dobropalm.mac-daemon</string>
+  <key>Label</key><string>com.dobropalm.mac-daemon</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/opt/homebrew/bin/bun</string>
-    <string>run</string>
-    <string>/Users/dobropalm/programs/ai_agents/agent/mac-daemon/daemon.ts</string>
+    <string>/opt/homebrew/bin/bun</string><string>run</string>
+    <string>/absolute/path/to/ai_agents/agent/mac-daemon/daemon.ts</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>MAC_BRIDGE_URL</key>
-    <string>ws://localhost:8788</string>
-    <key>MAC_BRIDGE_SECRET</key>
-    <string>REPLACE_WITH_>=32_CHAR_SECRET</string>
-    <key>MAC_PROJECT_ROOTS</key>
-    <string>/Users/dobropalm/programs</string>
+    <key>MAC_BRIDGE_URL</key><string>ws://localhost:8788</string>
+    <key>MAC_BRIDGE_SECRET</key><string>REPLACE_WITH_AT_LEAST_32_CHAR_SECRET</string>
+    <key>MAC_PROJECT_ROOTS</key><string>/absolute/path/to/projects</string>
   </dict>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>/tmp/mac-daemon.out.log</string>
-  <key>StandardErrorPath</key>
-  <string>/tmp/mac-daemon.err.log</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/tmp/mac-daemon.out.log</string>
+  <key>StandardErrorPath</key><string>/tmp/mac-daemon.err.log</string>
 </dict>
 </plist>
 ```
 
-Загрузить:
+Load:
 
 ```bash
 launchctl load -w ~/Library/LaunchAgents/com.dobropalm.mac-daemon.plist
 launchctl list | grep mac-daemon
 ```
 
-Выгрузить:
+Unload:
 
 ```bash
 launchctl unload ~/Library/LaunchAgents/com.dobropalm.mac-daemon.plist
 ```
 
-## Безопасность Stage B
+## Stage B security
 
-- Наши 5 режимов отображаются в 4 режима CLI и уходят **флагом** `--permission-mode`
-  (не переменной окружения — `sanitizeChildEnv` вырезала бы её из окружения ребёнка):
-  `ask`→`default`, `accept_edits`→`acceptEdits`, `auto`→`acceptEdits`, `plan`→`plan`,
-  `bypass`→`bypassPermissions`. Отдельного «исполнять всё без спроса» между `acceptEdits`
-  и `bypassPermissions` у CLI нет, поэтому `auto` — синоним `accept_edits`, а не
-  третий уровень: он НЕ обходит `MAC_ALLOW_BYPASS`. См. `toPermissionMode` в `protocol.ts`.
-- `bypass` режим доступен только при `MAC_ALLOW_BYPASS=true` в env бэкенда.
-- Denied patterns: бэкенд проверяет промпт против regex-ов из `MAC_DENIED_PROMPT_PATTERNS` (CSV).
-- Kill switch: команда `MAC_STOP` от бэкенда останавливает все активные Claude процессы
-  `SIGINT`-ом, а через `KILL_GRACE_MS` (5 с) эскалирует до `SIGKILL` — см. `kill.ts`.
-  Один только `SIGINT` процесс, игнорирующий его, не останавливает.
-- `MAC_PROJECT_ROOTS` — единственный белый список путей. Всё, что вне корней, отклоняется без спавна.
-- Одновременно демон держит один WebSocket; при разрыве — kill активных детей (SIGINT,
-  затем SIGKILL) и реконнект 1→2→5→10 секунд.
+- Five application modes map to four CLI `--permission-mode` flags: `ask` → `default`, `accept_edits` → `acceptEdits`, `auto` → `acceptEdits`, `plan` → `plan`, `bypass` → `bypassPermissions`. The flag is used because `sanitizeChildEnv` would strip an environment override. `auto` is an alias of `accept_edits`, not a mode bypassing `MAC_ALLOW_BYPASS`; see `toPermissionMode` in `protocol.ts`.
+- Bypass requires backend `MAC_ALLOW_BYPASS=true`.
+- The backend checks prompts against CSV regexes in `MAC_DENIED_PROMPT_PATTERNS`.
+- `MAC_STOP` sends SIGINT to all active Claude processes, escalating to SIGKILL after `KILL_GRACE_MS` (5 seconds); see `kill.ts`.
+- `MAC_PROJECT_ROOTS` is the sole path allowlist. Paths outside it are rejected before spawning.
+- One WebSocket is active at a time. Disconnect terminates children with SIGINT/SIGKILL and reconnects after 1, 2, 5 and then 10 seconds.
 
 ## Codex sessions
 
@@ -140,242 +113,108 @@ Fallback is disabled in bypass mode. Codex → Claude is blocked (`fallbackBlock
 
 Verification: local installed Claude accepted the readiness command and produced the structured `authentication_unavailable` classification with sanitized daemon environment; no raw provider output was logged. Quota/billing cases are covered with isolated subprocess fixtures, not a live exhausted account.
 
-## Управление Mac (MAC_CONTROL)
+## Mac control (`MAC_CONTROL`)
 
-Закрытый список команд без Claude CLI: `lock`, `sleep`, `volume`, `mute`, `unmute`,
-`open_app`, `reminders`, `reminder_add`, `event_add`, `shutdown`, `restart`.
-Сервер и демон разбирают команду одним строгим разбором (`lib/mac-control.ts`);
-исполнитель `macctl.ts` превращает её в фиксированный argv без оболочки.
-Команда принимается только от владельца (MAC_USER_IDS) и только от оркестратора.
-Чат при этом важен не для всех команд: напоминания и события (`reminders`,
-`reminder_add`, `event_add`, а также «календарь на сегодня» помощника) владелец
-зовёт из любого своего чата — из приложения, веб-панели, группы команды. Всё,
-что трогает саму машину (`lock`, `sleep`, `volume`, `mute`, `unmute`,
-`open_app`, `shutdown`, `restart`, `open_workspace`), остаётся привилегией
-личного чата: сообщение в группе видят и пересылают. Плата за послабление
-названа прямо — список напоминаний, прочитанный в группе, в группе и останется;
-выключение и перезагрузка всегда идут через подтверждение в чате
-(`docs/approval-policy.md`).
+A closed command set runs without the Claude CLI: `lock`, `sleep`, `volume`, `mute`, `unmute`, `open_app`, `reminders`, `reminder_add`, `event_add`, `shutdown`, `restart`. Both sides use the strict parser in `lib/mac-control.ts`; `macctl.ts` constructs fixed argv without a shell. Only the owner (`MAC_USER_IDS`) through the orchestrator can invoke commands.
 
-Всё выключено по умолчанию. Включает владелец в окружении демона:
+Reminders and calendar operations, including today's calendar, are permitted from any owner chat: native app, web panel or team group. Device operations (`lock`, `sleep`, `volume`, `mute`, `unmute`, `open_app`, `shutdown`, `restart`, `open_workspace`) remain private-chat only. Reminder data requested in a group becomes visible there. Shutdown/restart always require chat approval; see `docs/approval-policy.md`.
 
-- `MAC_CONTROL_ENABLED=true` — сам выключатель;
-- `MAC_APPS=alias=bundle.id,...` — единственный способ назвать приложение для `open_app`;
-- `MAC_CALENDAR_ENABLED=true` — напоминания и события (помощник EventKit);
-- `MAC_CALENDAR_BIN_DIR=/абсолютный/путь` — постоянная папка помощника вне папки
-  релиза. Разрешение macOS привязано к пути бинаря, поэтому из релиза оно теряется
-  на каждой выкатке; без переменной остаётся путь внутри релиза.
+Disabled by default. The owner configures:
 
-Разрешения macOS выдаёт только владелец, руками:
+- `MAC_CONTROL_ENABLED=true`.
+- `MAC_APPS=alias=bundle.id,...`: the only application names accepted by `open_app`.
+- `MAC_CALENDAR_ENABLED=true` for the EventKit helper.
+- `MAC_CALENDAR_BIN_DIR=/absolute/path`: a stable helper directory outside release folders. macOS permission is bound to the executable path; omitting this uses the release directory and loses permission continuity after replacement.
 
-1. `sh build-calendar.sh` собирает два бинаря: помощника `bin/agent-calendar` и
-   прокладку `bin/agent-calendar-run`, через которую его и зовут. Прокладка нужна
-   не для удобства: разрешение TCC спрашивается у «ответственного» процесса, а им
-   для всего поддерева демона становится bun — у него нет строки о том, зачем ему
-   календарь, поэтому диалог не показывается и доступ отказывается молча.
-   Подробности — в `calendar-spawn.c`.
-2. Диалоги «Календари» и «Напоминания» приходят только когда помощник отвечает сам
-   за себя, то есть под launchd или под прокладкой:
-   `bin/agent-calendar-run authorize` и `bin/agent-calendar-run authorize-reminders`.
-   Из оболочки агента диалога не будет — ответственным окажется терминал.
-3. Громкость, выключение и перезагрузка через `osascript` попросят
-   «Автоматизация → System Events» при первом вызове; без него демон вернёт
-   `automation_access_required`.
+Only the owner grants macOS permissions:
 
-Проверка вручную: `bun macctl.ts '{"command":"volume","level":30}'`.
-Наружу уходят только фиксированные коды ошибок, stderr не пересылается.
+1. `sh build-calendar.sh` builds `bin/agent-calendar` and `bin/agent-calendar-run`. The launcher establishes the helper as the TCC-responsible process; otherwise Bun lacks the calendar usage description and access is silently denied. See `calendar-spawn.c`.
+2. Run `bin/agent-calendar-run authorize` and `bin/agent-calendar-run authorize-reminders` through the launcher/launchd. An agent shell can make the terminal responsible instead, preventing the intended prompt.
+3. `osascript` operations request Automation → System Events permission on first use. Without it, the daemon returns `automation_access_required`.
 
-## Такси (Яндекс Go)
+Manual check: `bun macctl.ts '{"command":"volume","level":30}'`. Only fixed error codes leave the daemon; stderr is not forwarded.
 
-Операции `quote`, `prepare`, `confirm`, `abandon`, `status`, `cancel` приходят
-кадром `taxi` и разбираются строго (`lib/taxi.ts`). Браузер — обычный Chrome через
-`playwright-core` с отдельным профилем; никаких стелс-приёмов. Капча или страница
-входа — отказ и скриншот владельцу. На капче окно остаётся на ней, выходит наверх
-и не закрывается 15 минут (`CAPTCHA_HOLD_MS`, так у всех исполнителей): владелец
-проходит капчу сам, агент повторяет вызов. Позиции, которые исполнитель покупок
-положил в корзину до капчи, убираются в начале следующего `prepare`. Всё про
-вёрстку — в `taxi-selectors.ts`.
+## Taxi (Yandex Go)
 
-Всё выключено по умолчанию. Подготовка — только руками владельца:
+The `taxi` frame supports `quote`, `prepare`, `confirm`, `abandon`, `status`, `cancel`, validated by `lib/taxi.ts`. It uses installed Chrome through `playwright-core` with an isolated profile and no stealth techniques. Login/CAPTCHA returns a failure and an owner screenshot. CAPTCHA keeps the browser visible for 15 minutes (`CAPTCHA_HOLD_MS`, shared by executors) for owner completion; the agent then retries. Shopping items added before CAPTCHA are removed at the next `prepare`. Selectors live in `taxi-selectors.ts`.
 
-1. Отдельный аккаунт Яндекса для агента и карта с лимитом расходов; основной
-   аккаунт в профиль агента не вносить.
-2. `cd agent/mac-daemon && bun install` — ставит `playwright-core` (браузер не
-   скачивается, используется установленный Chrome).
-3. Окружение демона:
-   - `TAXI_ENABLED=true`;
-   - `TAXI_PROFILE_DIR` — абсолютный путь к каталогу профиля, владелец — текущий
-     пользователь, права `700` (иначе `profile_insecure`);
-   - `TAXI_HEADLESS=true` — по желанию, без окна (Яндекс чаще показывает капчу);
-   - `TAXI_BROWSER_CHANNEL` — по умолчанию `chrome`.
-4. Вход: `TAXI_PROFILE_DIR=… bun taxi.ts login` — окно Chrome, владелец входит
-   сам и жмёт Enter в терминале. Агент пароли и коды не вводит.
-5. Сверка локаторов: `bun taxi.ts probe` печатает дерево доступности страницы,
-   `bun taxi.ts quote "откуда" "куда"` — расчёт без заказа. Если тексты кнопок
-   и полей отличаются, правится только `taxi-selectors.ts`.
-6. Яндекс Go работает из российского региона: при VPN на Mac проверь, что
-   `taxi.yandex.ru` открывается без редиректа.
-7. На сервере: `TAXI_ENABLED=true`, владелец в `MAC_USER_IDS` и
-   `MINIAPP_ADMIN_USER_IDS`, активный ключ подписи в приложении.
+Disabled by default; owner setup:
 
-Заказ — два шага: `prepare` (маршрут, тариф, цена; ничего не нажимается) и
-`confirm` (цена ещё раз, сверка с подписанным потолком, одно нажатие «Заказать»).
-Сессия `prepare` одноразовая и живёт 3 минуты. Браузер закрывается после
-5 минут простоя.
+1. Use a separate Yandex account and a spending-limited card, not the primary account.
+2. `cd agent/mac-daemon && bun install` installs `playwright-core`; it does not download a browser.
+3. Set `TAXI_ENABLED=true`, `TAXI_PROFILE_DIR` to an absolute, current-user-owned directory with mode `700` (otherwise `profile_insecure`), optional `TAXI_HEADLESS=true`, and `TAXI_BROWSER_CHANNEL` (default `chrome`). Headless mode may trigger more CAPTCHAs.
+4. `TAXI_PROFILE_DIR=… bun taxi.ts login`: the owner signs in directly in Chrome and presses Enter. The agent does not enter passwords or codes.
+5. `bun taxi.ts probe` prints the accessibility tree; `bun taxi.ts quote "origin" "destination"` estimates without ordering. Adjust only `taxi-selectors.ts` if labels differ.
+6. Verify `taxi.yandex.ru` opens without a regional redirect, particularly when the Mac uses a VPN.
+7. Set server `TAXI_ENABLED=true`, include the owner in `MAC_USER_IDS` and `MINIAPP_ADMIN_USER_IDS`, and enroll an active app signing key.
 
-## Доставка (курьер Яндекс Go)
+`prepare` reads route, fare and price without ordering. `confirm` rereads price, checks the signed ceiling and clicks Order once. Preparation is single-use and expires after three minutes; browser idle timeout is five minutes.
 
-Кадр `delivery`, операции те же, что у такси (`lib/delivery.ts`); код — `delivery.ts`,
-страница — `delivery-playwright.ts`, вёрстка — `delivery-selectors.ts`. Страница —
-`dostavka.yandex.ru/order/express/`: адреса и расчёт экспресс-курьера сверены на живом
-профиле. «Курьер» и «Грузовой» на этой странице не предлагаются — в расчёте их нет,
-а заказ такого тарифа — отказ. Контакты и кнопка заказа сверены 2026-09-18; комментарий и статусы — «НЕ сверено»:
-пока их не сверили, исполнитель упрётся в отказ до нажатия — деньги не спишутся.
+## Delivery (Yandex Go)
 
-1. Окружение демона:
-   - `DELIVERY_ENABLED=true`;
-   - `DELIVERY_PROFILE_DIR` — отдельный от `TAXI_PROFILE_DIR` каталог профиля (Chrome
-     запирает профиль; совпадение — отказ `profile_shared`), права `700`;
-   - `DELIVERY_HEADLESS`, `DELIVERY_BROWSER_CHANNEL` — как у такси.
-2. Вход: `DELIVERY_PROFILE_DIR=… bun delivery.ts login` — владелец входит сам, Enter.
-   Телефон отправителя подставляет Яндекс Go из аккаунта; пустой телефон получателя
-   исполнитель заполняет тем же номером (из поля в поле, наружу не читается). Другое
-   пустое обязательное поле — отказ `contact_required`. Способ оплаты привязывает
-   владелец в Яндекс Go: без него кнопка «Заказать» неактивна — отказ `payment_needs_owner`.
-   Если вместо «Заказать» висит «Подтвердите данные» (имя, телефон, код из SMS) —
-   отказ `data_confirm_needs_owner`: подтверждает владелец в Яндекс Go, агент кодов не вводит.
-3. Сверка: `bun delivery.ts probe` печатает `guard`, `contact_required` и дерево
-   доступности; `bun delivery.ts quote "откуда" "куда"` — расчёт без заказа. Сверь
-   поле комментария, контакты, кнопку заказа и `DELIVERY_STATE_TEXT`. Правится только `delivery-selectors.ts`.
-4. На сервере: `DELIVERY_ENABLED=true`, владелец в `MAC_USER_IDS` и
-   `MINIAPP_ADMIN_USER_IDS`, активный ключ подписи.
+The `delivery` frame uses the same operations (`lib/delivery.ts`), with `delivery.ts`, `delivery-playwright.ts` and `delivery-selectors.ts`. The page is `dostavka.yandex.ru/order/express/`. Address entry and express estimates were checked on a live profile. Courier/Cargo tariff options are not offered on that page and are rejected. Contacts and the order button were verified on 2026-09-18; comment/status selectors were still **unverified**, causing a refusal before purchase until confirmed.
 
-Заказ — `prepare` (маршрут, тариф, комментарий, цена) и `confirm` (цена, сверка с
-потолком, одно нажатие). Сессия живёт 3 минуты, браузер закрывается после 5 минут простоя.
+1. Set `DELIVERY_ENABLED=true`; `DELIVERY_PROFILE_DIR` must be separate from `TAXI_PROFILE_DIR` and mode `700`. Shared profiles are rejected as `profile_shared` because Chrome locks them. `DELIVERY_HEADLESS` and `DELIVERY_BROWSER_CHANNEL` follow taxi settings.
+2. `DELIVERY_PROFILE_DIR=… bun delivery.ts login`: owner signs in and presses Enter. Yandex supplies the sender's phone; an empty recipient phone is filled from that field without exporting it. Other missing required contacts produce `contact_required`. Owner adds payment details directly; missing payment returns `payment_needs_owner`. An identity-confirmation screen returns `data_confirm_needs_owner`; the owner enters SMS codes.
+3. `bun delivery.ts probe` reports guard/contact state and accessibility; `bun delivery.ts quote "origin" "destination"` estimates. Check comment, contacts, order button and `DELIVERY_STATE_TEXT`; edit only `delivery-selectors.ts`.
+4. Enable server `DELIVERY_ENABLED`, owner allowlists and an active signing key.
 
-## Яндекс Лавка
+`prepare` reads route, tariff, comment and price; `confirm` checks the ceiling and clicks once. Session TTL is three minutes; browser idle timeout is five minutes.
 
-Операции `quote`, `prepare`, `confirm`, `abandon`, `status` приходят кадром `shop`
-и разбираются строго (`lib/shop.ts`). Браузер и правила — как у такси: отдельный
-профиль Chrome, без стелс-приёмов, капча или вход — отказ и скриншот. Вёрстка —
-в `shop-selectors.ts`. Поиск и карточки товаров сверены на публичных страницах;
-корзина, оформление, оплата и заказы видны только после входа — их локаторы
-сверяет владелец.
+## Yandex Lavka
 
-Всё выключено по умолчанию. Подготовка — только руками владельца:
+The `shop` frame supports `quote`, `prepare`, `confirm`, `abandon`, `status` through `lib/shop.ts`. Chrome isolation, owner login and CAPTCHA handling follow taxi rules. `shop-selectors.ts` contains page selectors. Public search/product cards were verified; authenticated cart, checkout, payment and order selectors require owner verification.
 
-1. Тот же отдельный аккаунт Яндекса и карта с лимитом, что для такси.
-2. Окружение демона:
-   - `SHOP_ENABLED=true`;
-   - `SHOP_PROFILE_DIR` — отдельный каталог профиля (не профиль такси), права `700`;
-   - `SHOP_HEADLESS`, `SHOP_BROWSER_CHANNEL` — как у такси.
-3. Вход и адреса: `SHOP_PROFILE_DIR=… bun shop.ts login` — владелец входит сам,
-   добавляет свои адреса доставки и привязывает карту (или SberPay/Яндекс Пэй),
-   затем Enter. Карту агент не вводит: без сохранённого способа оплаты —
-   `payment_needs_owner`. Новых адресов агент не заводит; по просьбе владельца он
-   умеет только переключиться на один из уже сохранённых (`set_address`): открывает
-   окно адресов, выбирает адрес, чьей подписи хватает словам запроса, — и только
-   если такой ровно один, — затем перечитывает шапку. Не нашлось или подходит
-   нескольким — окно закрывается, адрес прежний. Без адреса — `address_required`.
-4. Сверка локаторов: `bun shop.ts quote "молоко" "хлеб"` — поиск без корзины;
-   `bun shop.ts probe` — дерево доступности текущей страницы: открой руками
-   корзину с товаром, страницу оформления (до оплаты) и «Мои заказы», на каждой
-   нажми Enter. Если тексты отличаются — правится только `shop-selectors.ts`.
-5. Корзина профиля должна быть пустой: чужие товары — отказ `cart_not_empty`.
-6. На сервере: `SHOP_ENABLED=true`, владелец в `MAC_USER_IDS` и
-   `MINIAPP_ADMIN_USER_IDS`, активный ключ подписи.
+Owner setup:
 
-Заказ — `prepare` (подписанные товары в пустую корзину, итог со страницы
-оформления, ничего не оплачивается) и `confirm` (итог ещё раз, сверка с
-подписанным потолком, одно нажатие «Оплатить»). Любой отказ до оплаты убирает
-добавленные товары из корзины. Сессия одноразовая и живёт 5 минут.
+1. Use the separate Yandex account and spending-limited card.
+2. Set `SHOP_ENABLED=true`, an isolated mode-700 `SHOP_PROFILE_DIR` distinct from taxi, plus optional `SHOP_HEADLESS` and `SHOP_BROWSER_CHANNEL`.
+3. `SHOP_PROFILE_DIR=… bun shop.ts login`: owner signs in, adds delivery addresses and a payment method, then presses Enter. No saved payment produces `payment_needs_owner`. The agent does not create addresses; `set_address` selects an existing address only when exactly one label matches the request, then rereads the header. Missing/ambiguous matches close the dialog without changing the address; no address returns `address_required`.
+4. `bun shop.ts quote "milk" "bread"` searches without a cart. `bun shop.ts probe` inspects the current page; manually open a populated cart, checkout before payment and order history, pressing Enter at each. Update only `shop-selectors.ts`.
+5. A nonempty preexisting cart returns `cart_not_empty`.
+6. Enable server `SHOP_ENABLED`, owner allowlists and an active signing key.
 
-## Яндекс Еда
+`prepare` adds signed items to an empty cart and reads checkout total without paying. `confirm` rereads total, checks the signed ceiling and clicks Pay once. Failure before payment removes the added items. Preparation is single-use with a five-minute TTL.
 
-Тот же кадр `shop`, тот же `SHOP_ENABLED` и тот же профиль `SHOP_PROFILE_DIR`
-(один вход в Яндекс на Лавку и Еду). Вёрстка — в `eda-selectors.ts`, код
-страницы — `eda-playwright.ts`. На живом профиле сверены поиск ресторанов, адрес
-в шапке, стоимость доставки, карточки меню (`product-card-v2-*`), окно блюда и
-корзина; оформление, оплата и заказы — предположения,
-помеченные «НЕ сверено». Пока владелец их не сверил, исполнитель
-упрётся в отказ до оплаты (`address_required`, `place_not_found`, `cart_mismatch`,
-`price_unreadable`) — заказ не пройдёт, но и деньги не спишутся.
+## Yandex Eats
 
-Сверка — только руками владельца:
+Uses the same `shop` frame, `SHOP_ENABLED` and `SHOP_PROFILE_DIR` as Lavka. Page code is `eda-playwright.ts`; selectors are `eda-selectors.ts`. Restaurant search, header address, delivery fee, menu cards (`product-card-v2-*`), dish dialog and cart were verified on a live profile. Checkout, payment and orders remain **unverified**; failures such as `address_required`, `place_not_found`, `cart_mismatch` or `price_unreadable` stop execution before payment.
 
-1. Вход и адрес: `SHOP_PROFILE_DIR=… bun shop.ts login eda` — войти, выбрать адрес
-   доставки, проверить сохранённую карту, Enter.
-2. `bun shop.ts eda-quote "название ресторана" "блюдо"` — поиск ресторана и блюд
-   без корзины. `place_not_found` — поправить `edaSearchUrl` или `placeLink`/`placeTitle`;
-   пустой список блюд — `dishCard`/`dishTitle`/`dishPrice`/`dishMeta`.
-3. `bun shop.ts probe eda`: руками открой ресторан, положи одно блюдо (посмотри
-   счётчик и «минус» на карточке), открой корзину, страницу оформления до оплаты и
-   «Мои заказы»; на каждой нажми Enter. Сверь `dishCounter`, `dishMinus`,
-   `addressButton`, `cartRow*`, окно адресов (`addressDialog`, `addressRadio`),
-   тексты `checkout`, `pay`, `total`, `savedCard` и
-   `EDA_STATE_TEXT`. Если отличаются — правится только `eda-selectors.ts`.
-4. Корзина Еды должна быть пустой. Если после «В корзину» остаётся окно
-   («корзина другого ресторана» и т. п.) — исполнитель закрывает его и отказывает.
+Owner verification:
 
-Окно блюда и корзина сверены на живом профиле (Папа Джонс): название, вес, цена,
-количество, группы опций (`h4` с подсказкой, `label` с доплатой «+ N ₽», радио —
-обязательный выбор одного, чекбоксы «Выберите до N»), кнопка «В корзину»
-(`product-full-card-add-to-cart[-disabled]`) и строки корзины
-(`product-card-row-root`: название, опции, сумма строки, вес, количество). Расчёт
-открывает окно каждого найденного блюда (до трёх на запрос) и отдаёт группы опций;
-незнакомую подсказку или доплату не угадываем — блюдо в расчёт не попадает.
-Исполнитель отмечает подписанные опции, выставляет количество, перечитывает окно
-(`options_mismatch` при расхождении) и жмёт «В корзину».
+1. `SHOP_PROFILE_DIR=… bun shop.ts login eda`: sign in, choose delivery address, check saved card and press Enter.
+2. `bun shop.ts eda-quote "restaurant" "dish"`: search without a cart. For `place_not_found`, inspect `edaSearchUrl`, `placeLink`, `placeTitle`; for empty dishes, inspect `dishCard`, `dishTitle`, `dishPrice`, `dishMeta`.
+3. `bun shop.ts probe eda`: open a restaurant, add one dish, inspect counters/minus controls, then cart, checkout before payment and order history. Press Enter at each. Verify `dishCounter`, `dishMinus`, `addressButton`, `cartRow*`, `addressDialog`, `addressRadio`, `checkout`, `pay`, `total`, `savedCard`, `EDA_STATE_TEXT`. Edit only `eda-selectors.ts`.
+4. Start with an empty Eats cart. A remaining modal after Add to cart, such as a different-restaurant warning, is closed and execution rejected.
 
-## Яндекс Маркет
+Live verification of the Papa John's dish/cart UI covered name, weight, price, quantity, option groups (`h4` hints, surcharge labels, required radio choices and bounded checkbox choices), `product-full-card-add-to-cart[-disabled]` and `product-card-row-root`. Estimates inspect up to three matching dish dialogs and return option groups. Unknown hints/surcharges exclude a dish rather than guessing. Execution selects signed options and quantity, rereads the dialog, rejects `options_mismatch`, then adds to cart.
 
-Тот же кадр `shop`, `SHOP_ENABLED` и профиль `SHOP_PROFILE_DIR`. Вёрстка — в
-`market-selectors.ts`, код страницы — `market-playwright.ts`. Поиск, карточка и
-адрес сверены на живом профиле; корзина, оформление и статусы помечены «НЕ
-сверено» — пока их не сверили, исполнитель упрётся в отказ до оплаты.
+## Yandex Market
 
-Товар — номер карточки из ссылки `/card/<slug>/<номер>`.
-Доставка на расчёте не читается (`delivery_rub: null`): её цена видна только на
-оформлении, и итог сверяется с подписанным потолком.
+Uses the same shopping frame, flag and profile. Selectors: `market-selectors.ts`; page code: `market-playwright.ts`. Search, product page and address were verified; cart, checkout and statuses remain **unverified** and must fail before payment until checked.
 
-1. `SHOP_PROFILE_DIR=… bun shop.ts login market` — войти, выбрать адрес, проверить
-   сохранённую карту (не «при получении»), Enter.
-2. `bun shop.ts market-quote "товар"` — поиск без корзины. Пустой список —
-   `marketSearchUrl`, `snippet*`; id не читается — `snippetLink` и `marketIdFromHref`.
-3. `bun shop.ts probe market`: руками открой карточку товара, положи его в корзину
-   (посмотри счётчик и «плюс»/«минус»), открой корзину, оформление до оплаты и
-   «Мои заказы»; на каждой нажми Enter. Сверь `productTitle`, `productOffer`,
-   `cartButton`, `qty*`, `addressButton`, `cartItem*`, тексты `checkout`, `pay`,
-   `total`, `savedCard`, `payOnDelivery` и `MARKET_STATE_TEXT`. Правится только
-   `market-selectors.ts`.
-4. Корзина Маркета должна быть пустой. Если после «В корзину» страница просит
-   выбрать размер или цвет — отказ `options_required`; допродажу исполнитель закрывает.
+Product identity is the numeric ID in `/card/<slug>/<id>`. Estimates return `delivery_rub: null`; delivery appears at checkout and the final total is checked against the signed ceiling.
 
-## Починка селекторов (SHOP_REPAIR)
+1. `SHOP_PROFILE_DIR=… bun shop.ts login market`: sign in, choose address, verify a saved card rather than pay-on-delivery, then Enter.
+2. `bun shop.ts market-quote "product"`: search without a cart. Check `marketSearchUrl`/`snippet*` for empty results, and `snippetLink`/`marketIdFromHref` for missing IDs.
+3. `bun shop.ts probe market`: inspect product page, cart addition, quantity controls, cart, checkout before payment and order history. Verify `productTitle`, `productOffer`, `cartButton`, `qty*`, `addressButton`, `cartItem*`, `checkout`, `pay`, `total`, `savedCard`, `payOnDelivery`, `MARKET_STATE_TEXT`; edit only `market-selectors.ts`.
+4. Start with an empty Market cart. Required size/color selection returns `options_required`; upsell dialogs are closed.
 
-Кадр `repair {service, code}` (`selector-repair.ts`): свежая ветка от
-`origin/main` в `<SELECTOR_REPAIR_REPO>/.claude/worktrees/`, `bun install`,
-`claude --print` с неизменяемым заданием, проверка изменённых путей, коммит,
-пуш ветки и `gh pr create`. Мержа нет.
+## Selector repair (`SHOP_REPAIR`)
 
-- `SELECTOR_REPAIR_REPO` — клон репозитория с доступом `git push` и `gh`,
-  внутри `MAC_PROJECT_ROOTS`. Не задан — `repair_disabled`.
-- `bun shop.ts selfcheck [eda|market]` — только чтение: открывает страницу поиска
-  в профиле покупок и печатает счётчики селекторов и имена
-  `data-testid` / `data-auto` / `data-zone-name` (без текста страницы).
-- На время починки браузер покупок закрыт, покупки получают `shop_busy`.
+A `repair {service, code}` frame invokes `selector-repair.ts`: fresh branch from `origin/main` under `<SELECTOR_REPAIR_REPO>/.claude/worktrees/`, `bun install`, `claude --print` with a fixed task, changed-path validation, commit, push and `gh pr create`. It never merges.
 
-## Задача на код (CODE_TASK)
+- `SELECTOR_REPAIR_REPO` must be within `MAC_PROJECT_ROOTS`, with git push and gh access. Missing configuration returns `repair_disabled`.
+- `bun shop.ts selfcheck [eda|market]` is read-only: opens search and reports selector counts and `data-testid` / `data-auto` / `data-zone-name` names, not page text.
+- Repair closes the shopping browser; concurrent purchases return `shop_busy`.
 
-Кадр `code_task {id, task: {title, goal}}` (`code-task.ts`): тот же клон
-`SELECTOR_REPAIR_REPO`, свежая ветка `claude/improve-YYYYMMDD-HHMM` от
-`origin/main` в `.claude/worktrees/`, `bun install --frozen-lockfile`,
-`claude --print` с рамкой из `lib/code-task.ts` и одобренным текстом задачи.
-Затем демон сам смотрит `git status`: пусто — `code_task_no_change`, путь вне
-`isCodeTaskPath` — `code_task_forbidden_paths`. Иначе `tsc`, коммит названных
-путей, пуш и `gh pr create`. Мержа нет.
+## Code tasks (`CODE_TASK`)
 
-- Одна задача за раз (`code_task_busy`); браузер покупок не трогается.
-- Таймауты: подготовка 5 мин, исполнитель 35 мин, `tsc` 3 мин, git 2 мин.
-- Ответ — одна строка JSON (`CodeTaskOutcome`), вывод исполнителя мосту не уходит.
-- Рабочие копии остаются на диске, удаляет их владелец.
+`code_task {id, task: {title, goal}}` invokes `code-task.ts` in the same configured repository. It creates `claude/improve-YYYYMMDD-HHMM` from `origin/main` under `.claude/worktrees/`, runs `bun install --frozen-lockfile`, then `claude --print` with `lib/code-task.ts` constraints and the approved task.
+
+The daemon checks git status: no changes returns `code_task_no_change`; paths outside `isCodeTaskPath` return `code_task_forbidden_paths`. Otherwise it runs `tsc`, commits only named paths, pushes and opens a PR. It never merges.
+
+- One task at a time (`code_task_busy`); shopping browser state is untouched.
+- Timeouts: preparation five minutes, executor 35 minutes, `tsc` three minutes, git two minutes.
+- Response is one `CodeTaskOutcome` JSON line; executor output is not forwarded to the bridge.
+- Worktrees remain on disk for owner cleanup.

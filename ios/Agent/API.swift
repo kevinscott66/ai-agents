@@ -37,7 +37,7 @@ struct KnowledgeSource: Decodable {
     var created: Double? = nil
     let excerpt: String
 }
-struct ConversationRecord: Codable, Identifiable { let id: String; let title: String; let updated: Double; var archived: Int? = nil }
+struct ConversationRecord: Codable, Identifiable { let id: String; let title: String; let updated: Double; var archived: Int? = nil; var agentKey: String? = nil }
 struct SharedLocation: Codable, Equatable {
     let latitude: Double
     let longitude: Double
@@ -345,9 +345,10 @@ struct AgentAPI {
         }
         return result
     }
-    func createConversation(_ id: String, title: String, expectedToken: String? = nil) async throws {
+    func createConversation(_ id: String, title: String, expectedToken: String? = nil) async throws -> ConversationRecord {
         struct Result: Decodable { let conversation: ConversationRecord }
-        let _: Result = try await request("/api/native/conversations", body: ["id":id,"title":Self.conversationTitle(title)], expectedToken: expectedToken)
+        let result: Result = try await request("/api/native/conversations", body: ["id":id,"title":Self.conversationTitle(title)], expectedToken: expectedToken)
+        return result.conversation
     }
     /// Переименовать и/или убрать в архив; nil — не менять.
     func editConversation(_ id: String, title: String? = nil, archived: Bool? = nil, expectedToken: String? = nil) async throws {
@@ -376,9 +377,9 @@ struct AgentAPI {
         try Credentials.save(result.validatedToken(), server: server)
     }
     func send(_ text: String, id: String, conversationId: String? = nil, expectedToken: String? = nil,
-              attachmentIds: [String] = [], location: SharedLocation? = nil) async throws -> Turn {
-        struct Payload: Encodable { let id: String; let text: String; let conversationId: String?; let attachmentIds: [String]; let location: SharedLocation? }
-        let data = try JSONEncoder().encode(Payload(id: id, text: text, conversationId: conversationId, attachmentIds: attachmentIds, location: location))
+              attachmentIds: [String] = [], location: SharedLocation? = nil, agentKey: String? = nil) async throws -> Turn {
+        struct Payload: Encodable { let id: String; let text: String; let conversationId: String?; let attachmentIds: [String]; let location: SharedLocation?; let agentKey: String? }
+        let data = try JSONEncoder().encode(Payload(id: id, text: text, conversationId: conversationId, attachmentIds: attachmentIds, location: location, agentKey: agentKey == "orchestrator" ? nil : agentKey))
         let turn: Turn = try await request("/api/native/turns", expectedToken: expectedToken, encodedBody: data)
         return try turn.validated(for: id)
     }

@@ -1,179 +1,128 @@
-# ai-agents
+# DOBROPALM Agent
 
-A multi-agent assistant with a twelve-role software team, Telegram integration
-and an authenticated API for a native iPhone client. Each role is an autonomous agent with its own system prompt,
-permission envelope and audit trail; a shared orchestrator routes conversation,
-delegates work and escalates anything risky to a human.
+**A Russian-first personal assistant with a twelve-role engineering team, native iPhone client and interactive virtual office.**
 
-The engineering focus is controlled delegation, scoped project memory,
-human approvals and recoverable execution. This repository contains the server,
-operator dashboard and supporting integrations.
+Built to turn a request into a verified result: understand the goal, select an available tool, delegate a bounded task, obtain required approval, execute and check the outcome. The engineering focus is reliable execution across clients—not unrestricted autonomy.
 
-## What it does
+[Engineering case study](docs/PORTFOLIO.md) · [Architecture & execution design](docs/personal-agent/EXECUTION_DESIGN.md) · [Tools & MCP](docs/personal-agent/TOOLS_AND_MCP.md) · [Security](SECURITY.md) · [CI](https://github.com/kevinscott66/ai-agents/actions)
 
-Twelve agents share one Telegram bot token and are differentiated by role
-prompts. They read the group conversation, pick up work from a persistent
-queue, execute tools, and report back. Actions that change the outside world
-pass through a permission gate before dispatch; anything marked risky waits for
-an explicit human approval issued from an authenticated client.
+> **Project status:** actively developed personal software. Features in source are not a promise that every integration is configured or deployed. External accounts, a configured backend and, for local operations, a connected Mac are required. There is no public unauthenticated assistant demo or preconfigured banking access.
 
-An MTProto userbot runs alongside the Bot API to cover what the Bot API cannot
-do — reactions, deletions, dialog access.
+## Product surfaces
 
-## Recent capabilities
+| Surface | Purpose |
+| --- | --- |
+| **Telegram team** | Twelve separately configured role bots, bounded delegation, tasks and approvals |
+| **Native iPhone app** | Owner-paired conversations, voice, attachments, project memory and action confirmation |
+| **Browser chat** | Shared native conversation history and approvals at `/chat/` |
+| **Virtual office** | Twelve fictional young-adult role avatars with dedicated workstations; 2D mode and optional 3D at `/office/` |
+| **Operator Mini App** | Tasks, permissions, logs, agents and operational controls |
+| **Mac bridge** | Local project work and supported desktop actions through an authenticated executor |
 
-- **Project memory.** Conversations keep a compact record of facts, decisions and
-  outstanding tasks with message provenance. Users assign projects manually;
-  sharing a fact with other chats requires explicit approval.
-- **Team dialogue.** The leader can answer alone or delegate to relevant roles.
-  Specialist messages retain their actual author. Bounded delegation and cycle
-  checks prevent an endless round of agent responses.
-- **Native conversations.** Owner-scoped chat history, device authentication and
-  in-chat action approvals support a companion iPhone client.
-- **Media tools.** Authenticated media handling and image-generation integrations
-  support assistant attachments, with provider configuration and access controls.
-- **Mac execution.** A bridge dispatches approved work to Codex or Claude. Provider
-  fallback is restricted to eligible failures before execution; it must not repeat
-  an action whose execution outcome is uncertain.
+The office's local demo generates mock activity without model calls. In connected mode, role-bound conversations use the existing backend. Office animation never creates work or proves productivity. 3D renders in the browser; hosting the backend does not move rendering off the user's device.
 
-See [chat and project knowledge](docs/native-knowledge.md) for storage boundaries,
-concurrency controls and the collaboration model.
+## What is implemented
 
-### Voice and browser chat
+- **A coordinated team.** Lead, PM, Product, Backend, Frontend, Telegram, AI, QA, SMM, Copy, Design and Permissions roles. Delegation preserves author identity and has cycle/depth limits.
+- **Scoped memory.** Conversation and project knowledge with message provenance and explicit sharing. Private native history is separate from Telegram group history.
+- **Recoverable conversations.** Durable turn IDs, owner/device checks, role binding and polling after uncertain delivery. iPhone uses the server's conversation role; the office keeps the selected dialog stable across updates from other devices.
+- **Voice and media.** Transcription → agent execution → generated speech, plus authenticated attachments and image providers. This is a chained voice pipeline, not full-duplex speech-to-speech.
+- **Controlled execution.** Role permissions, approval queues, signed purchase flows, audit records and uncertain-outcome handling. A submitted request is not reported as a completed action.
+- **Tools and MCP.** Internal team MCP, capability/configuration inspection and an official GitHub MCP adapter restricted to reading files, issues and PRs in the configured repository. Existing integrations cover web search, project work, DNS, media and supported Yandex workflows.
 
-A standalone browser client at `/chat/` shares the native conversation history and
-supports in-chat approvals. The rightmost voice control starts a conversation:
-recording → transcription → existing team → neural speech. An audio-reactive orb
-uses measured microphone and playback levels. Both sides remain in chat history.
+## Integration boundaries
 
-The native client includes the same conversational mode. Recording pauses during
-responses to prevent echo; interruption is an explicit playback control. Russian
-transcription includes punctuation guidance. This is a chained voice pipeline,
-not embedded ChatGPT or full-duplex speech-to-speech. Ordinary iPhone dictation
-and device read-aloud remain available separately.
+| Integration | Current scope |
+| --- | --- |
+| GitHub | Read-only status/MCP plus a constrained code-task → PR workflow; merge and deployment remain separately controlled |
+| Yandex Go, food, groceries and delivery | Specialized browser workflows through the Mac executor, with preparation, confirmation and result checks; login and compatible service pages are required |
+| T-Bank personal account | Local iPhone transfer preparation and opening the bank; the proposed banking executor is **not implemented** |
+| Computer and servers | Supported Mac commands and authorized project/CLI execution; not arbitrary control of every device or host |
+| Office status | Owner-attributed execution, personal tasks and approval state; not a complete feed of every background worker or group member |
 
-See [voice architecture and limitations](docs/conversational-voice.md). Private
-configuration, signing material and release archives are excluded from this
-portfolio update.
+See [the tool inventory](docs/personal-agent/TOOLS_AND_MCP.md) for prerequisites. A configured flag or installed MCP does not establish account access or successful end-to-end execution.
 
 ## Architecture
 
+```mermaid
+flowchart TD
+    TG[Telegram role bots] --> TEAM[Role orchestration]
+    IOS[Native iPhone] --> API[Owner-authenticated API]
+    CHAT[Browser chat] --> API
+    OFFICE[Virtual office: 2D / 3D] --> API
+    API --> TEAM
+    TEAM --> TOOLS[Scoped tool dispatch]
+    TOOLS --> GATES[Permissions / approvals / signatures]
+    GATES --> MAC[Authenticated Mac executor]
+    GATES --> SERVICES[Supported service adapters]
+    TOOLS --> READ[Read-only tools and MCP]
+    TEAM --> DATA[(SQLite: tasks, history, knowledge, audit)]
+    API --> DATA
 ```
-Telegram ──▶ telegraf bot ──▶ orchestrator-team.ts
-                                    │
-                     per-agent loop (tool-loop.ts) ◀──▶ Codex / Claude
-                                    │
-                     action-dispatch.ts + permissions-gate
-                            ↙                    ↘
-                 telegram-actions            userbot (gramjs)
-                            ↘                    ↙
-                          audit log + SQLite (WAL)
-                                    │
-                        miniapp-server ◀──▶ Preact UI
+
+**Stack:** TypeScript · Bun · SQLite · Claude Agent SDK / configured model providers · Telegram Bot API and optional MTProto · Swift/SwiftUI · React / React Three Fiber / Three.js · Preact · Vite · Playwright · GitHub Actions.
+
+## Explore locally
+
+Run the virtual office demo without personal service credentials:
+
+```sh
+git clone https://github.com/kevinscott66/ai-agents.git
+cd ai-agents/virtual-office
+bun install --frozen-lockfile
+bun run dev
 ```
 
-**Roles**
+Requires Bun 1.3.14+ and Node 22. Open `http://127.0.0.1:4317`. The local demo is explicitly simulated. See [office setup](virtual-office/README.md).
 
-| Role | Responsibility |
-|------|----------------|
-| `orchestrator` | Team coordination and message routing |
-| `pm` | Planning, status, deadlines |
-| `product` | Product decisions and requirements |
-| `backend` | Server code, APIs, data layer |
-| `frontend` | UI and web interfaces |
-| `tgdev` | Telegram platform integration |
-| `aieng` | Prompts, model plumbing, self-diagnostics |
-| `qa` | Testing and quality control |
-| `smm` | Content and social distribution |
-| `copy` | Copywriting and documentation |
-| `design` | Visual design, SVG generation |
-| `perm` | Access control and security review |
+For the agent backend, start from the repository root:
 
-## Safety model
-
-The interesting engineering here is the part that stops agents from doing
-damage.
-
-- **Tiered autonomy.** Every role runs in one of four modes — `locked`,
-  `manual`, `semi_auto`, `auto` — set per role and per action class.
-- **Fail-closed permissions.** An action with no explicit grant is denied.
-  Unknown provider or role values resolve to deny rather than to a default.
-- **Approval gates.** Risky actions are queued for human approval and dispatched
-  only after an explicit decision; approval cannot be inferred from context.
-- **Audited execution.** Every tool call and dispatched action is written to an
-  append-only audit log alongside the task it belongs to.
-- **Delegation loop protection.** Task handoff between roles is cycle-checked.
-- **Hardened units.** The systemd units run as a non-root user under
-  `ProtectSystem=strict` with an explicit `ReadWritePaths` allowlist and the
-  environment file marked inaccessible to the service itself.
-
-## Operator dashboard
-
-A Preact + Vite Mini App served over HTTPS from the same process, with six
-views: summary, tasks, approvals, agents, permissions and logs. Live updates
-stream over SSE.
-
-## Stack
-
-Bun · TypeScript · `@anthropic-ai/claude-agent-sdk` · telegraf (Bot API) ·
-telegram/gramjs (MTProto) · zod · SQLite via `bun:sqlite` in WAL mode ·
-Preact + Vite · systemd · GitHub Actions
-
-## Quick start
-
-```bash
-git clone https://github.com/kevinscott66/ai-agents
-cd ai-agents/agent
-bun install
+```sh
+cd agent
+bun install --frozen-lockfile
 cp .env.example .env
-bun test
+# Configure model access, bot tokens and explicit allowlists before starting.
+bun run typecheck
+bun test tests
 bun run start
 ```
 
-Build the Mini App:
+Use [agent/.env.example](agent/.env.example) as the configuration reference. Each role has its own bot-token variable; an empty Telegram allowlist denies access. Keep credentials outside Git. Native pairing, Mac permissions and signed iOS distribution require operator setup; they are not provisioned by cloning this repository.
 
-```bash
-cd agent/miniapp && bun install && bun run build
+## Verification
+
+The repository contains regression suites for authorization, ownership isolation, approvals, role dispatch, uncertain execution, database recovery and client synchronization. Browser tests exercise the office and reconnect behavior; Swift fixtures cover native contracts and state recovery.
+
+```sh
+# From agent/
+bun run typecheck
+bun test tests
+
+# From virtual-office/
+bun test tests
+bun run build
+# Start the local demo before browser scenarios:
+bun run test:browser
+
+# From repository root, on macOS with Xcode tools:
+python3 ios/tests/run.py
 ```
 
-Minimum configuration — see `agent/.env.example` for the annotated full set:
+Use the [CI run for the exact revision](https://github.com/kevinscott66/ai-agents/actions) as evidence. Test counts change; passing unit tests is not a security certification or proof that a live payment/order succeeded.
 
-```bash
-TELEGRAM_BOT_TOKEN=
-CLAUDE_CODE_OAUTH_TOKEN=      # or ANTHROPIC_API_KEY with USE_AGENT_SDK=false
-TELEGRAM_ALLOWED_GROUP_IDS=   # fail-closed: empty means the bots answer nowhere
-TELEGRAM_API_ID=
-TELEGRAM_API_HASH=
-TELEGRAM_USERBOT_PHONE=
-USERBOT_SESSION_KEY=
+## Repository map
+
+```text
+agent/          orchestration, tools, integrations, tests, Mini App, Mac bridge
+virtual-office/ browser office, contracts, demo gateway and browser tests
+ios/            native SwiftUI client and regression fixtures
+docs/           architecture, contracts, implementation status and case study
+site/           companion site sources
+deploy/         deployment templates and operational tooling
 ```
 
-## Tests
+## Roadmap and limits
 
-```bash
-bun test          # full suite
-bun run typecheck # tsc --noEmit
-```
+The durable goal → task → turn → approval model, additional executor readiness probes, isolated server-side browser workers and the personal banking executor remain separate work. Human login and bank challenges are not bypassed. Production setup and provider credentials are intentionally not distributed with the portfolio.
 
-Regression tests cover the permission gate, approval dispatch, deployment units,
-database path resolution, secret scrubbing and userbot flood control. A large
-share are regression tests written against specific production incidents and
-named for the date they were found.
-
-## Layout
-
-```
-agent/        application source, tests, tools, Mini App, mac bridge
-site/         companion web service (server + Vite frontend)
-deploy/       systemd units, staged blue/green deploy, deploy locking
-```
-
-## Notes on this repository
-
-Configure credentials and deployment-specific values outside Git. Do not commit
-OAuth sessions, device tokens, signing certificates, conversation databases,
-personal media or private operational logs. See [SECURITY.md](SECURITY.md).
-
-## Licence
-
-MIT — see [LICENSE](LICENSE).
+Read the [engineering case study](docs/PORTFOLIO.md) for design decisions and trade-offs, and [SECURITY.md](SECURITY.md) for reporting guidance. MIT licensed: [LICENSE](LICENSE).

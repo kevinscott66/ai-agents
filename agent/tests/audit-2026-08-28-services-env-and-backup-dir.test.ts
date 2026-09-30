@@ -41,20 +41,27 @@ describe("предпосылки", () => {
   test("setInterval схлопывает задержку больше 2^31-1 в 1 мс", async () => {
     // Именно из-за этого «раз в год» превращается в «257 раз за 300 мс».
     //
-    // Утверждение держит контрольный интервал на 10 с: важно не «сколько
-    // успеет», а что переполнение даёт КРОШЕЧНЫЙ интервал, а не большой и не
-    // «не запускать вовсе». Прежняя форма (>20 срабатываний за 150 мс) мерила
-    // загруженность машины и краснела на общих раннерах — при том, что
-    // поведение setInterval от нагрузки не зависит (ср. env-interval-nan).
+    // Проверяем схлопывание, а не скорость загруженного раннера: счётчик за
+    // фиксированное окно мерил бы чужой event-loop, и прежняя форма («>20 за
+    // 150 мс») краснела на CI. Отсюда две страховки. Ждём до двух секунд —
+    // за это время 1 мс набирает порог на любой машине. И рядом крутится
+    // контрольный интервал на 10 с: он обязан дать ноль, то есть
+    // несхлопнувшийся интервал не сработает ни разу.
     let ticks = 0;
     let slowTicks = 0;
     const t = setInterval(() => ticks++, 3_000_000_000);
     const slow = setInterval(() => slowTicks++, 10_000);
-    await new Promise((r) => setTimeout(r, 150));
-    clearInterval(t);
-    clearInterval(slow);
-    expect(ticks).toBeGreaterThan(0);
-    expect(slowTicks).toBe(0);
+    const deadline = Date.now() + 2_000;
+    try {
+      while (ticks <= 20 && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      expect(ticks).toBeGreaterThan(20);
+      expect(slowTicks).toBe(0);
+    } finally {
+      clearInterval(t);
+      clearInterval(slow);
+    }
   });
 
   test("fs.mkdirSync('') бросает, а не создаёт cwd", () => {

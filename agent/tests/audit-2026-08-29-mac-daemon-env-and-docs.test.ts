@@ -110,7 +110,12 @@ describe("README не расходится с кодом", () => {
 
   test("каждое отображение режима из кода описано в README", () => {
     for (const mode of RUN_MODES) {
-      expect(README).toContain(`\`${mode}\`→\`${toPermissionMode(mode)}\``);
+      // Пробелы вокруг стрелки не значат ничего: README переводили на английский,
+      // и в прозе `ask` → `default` набрано с пробелами. Проверяем саму пару
+      // «режим — флаг», а не типографику, иначе тест краснеет на переводе.
+      expect(README).toMatch(
+        new RegExp(`\`${mode}\`\\s*→\\s*\`${toPermissionMode(mode)}\``),
+      );
     }
   });
 
