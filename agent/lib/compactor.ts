@@ -26,6 +26,7 @@ import { log } from "./log.ts";
 // agent-prompts.ts: тот же фенс ставится при сборке system-промпта, и две
 // реализации закрывашки неизбежно разошлись бы.
 import { untrusted } from "./agent-prompts.ts";
+import { matchBraceEnd, balancedJsonSliceAt } from "./json-from-model.ts";
 
 export interface CompactorContext {
   agentKey: string;
@@ -290,29 +291,13 @@ ${untrusted("agent-reply", ctx.agentReply)}
 /**
  * Конец объекта, начинающегося в `start` (индекс `{`), либо -1.
  *
- * Считает глубину и умеет строки: `{"line":"a } b"}` не должен закрываться на
- * скобке внутри строки, а `\"` внутри строки не должен её закрывать.
+ * Сам проход по символам — в `lib/json-from-model.ts`: тот же сканер нужен
+ * черновику дня и фактчекеру, и пока копий было несколько, починка одной из них
+ * оставляла остальные сломанными (аудит 30.09.2026). Обёртка сохранена, потому
+ * что на неё есть тесты через `_compactorInternals`.
  */
 function matchBrace(s: string, start: number): number {
-  let depth = 0;
-  let inStr = false;
-  let esc = false;
-  for (let i = start; i < s.length; i++) {
-    const c = s[i];
-    if (inStr) {
-      if (esc) esc = false;
-      else if (c === "\\") esc = true;
-      else if (c === '"') inStr = false;
-      continue;
-    }
-    if (c === '"') inStr = true;
-    else if (c === "{") depth++;
-    else if (c === "}") {
-      depth--;
-      if (depth === 0) return i;
-    }
-  }
-  return -1;
+  return matchBraceEnd(s, start);
 }
 
 /**
@@ -336,11 +321,17 @@ function matchBrace(s: string, start: number): number {
 function extractJSON(s: string): string | null {
   for (let i = 0; i < s.length; i++) {
     if (s[i] !== "{") continue;
-    const end = matchBrace(s, i);
     // Не `break`: незакрытая скобка снаружи ничего не говорит о вложенных —
     // «Формат {"op":"noop" ... вот: {"ops":[]}» закрывает только вторую.
-    if (end < 0) continue;
-    const cand = s.slice(i, end + 1);
+    //
+    // Аудит 30.09.2026: здесь был `s.slice(i, end + 1)`, то есть СЫРОЙ срез.
+    // Если модель поставила внутри строки настоящий перевод строки, JSON.parse
+    // на нём бросал, кандидат отбрасывался как «не наш», и разбор уходил в
+    // жадный откат — то есть сжатие молча терялось. Срез приходит уже
+    // санитизированным.
+    const found = balancedJsonSliceAt(s, i);
+    if (!found.ok) continue;
+    const cand = found.json;
     try {
       const parsed: unknown = JSON.parse(cand);
       if (
