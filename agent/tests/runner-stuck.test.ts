@@ -135,3 +135,33 @@ test("срок демона длиннее ожидания моста: серв
   expect(TAXI_RUN_DEADLINE_MS).toBeGreaterThan(MAC_TAXI_TIMEOUT_MS);
   expect(DELIVERY_RUN_DEADLINE_MS).toBeGreaterThan(MAC_DELIVERY_TIMEOUT_MS);
 });
+
+
+test("hung browser release cannot retain runner forever", async () => {
+ await expect(settleOrRelease(never(), {deadlineMs:5,selfSettleMs:5,graceMs:5,releaseTimeoutMs:5,release:never})).rejects.toThrow("runner_stuck");
+});
+test("optional shop diagnostics are bounded and swallow late rejection", async () => {
+ const {boundedShopDiagnostic}=await import("../mac-daemon/shop");
+ expect(await boundedShopDiagnostic(never,null,5)).toBeNull();
+ expect(await boundedShopDiagnostic(async()=>{throw Error("closed")},null,5)).toBeNull();
+ expect(await boundedShopDiagnostic(async()=>"image",null,5)).toBe("image");
+});
+
+test("diagnostic rejection after timeout stays handled", async () => {
+ const {boundedShopDiagnostic}=await import("../mac-daemon/shop");
+ let reject!: (e: Error)=>void;
+ const result=boundedShopDiagnostic(()=>new Promise((_,r)=>{reject=r}),null,5);
+ expect(await result).toBeNull(); reject(Error("late")); await Bun.sleep(5);
+});
+
+test("failed shutdown quarantines shop browser without unhandled rejection", async () => {
+ let launches=0;
+ const runner=new ShopRunner({SHOP_ENABLED:"true",SHOP_PROFILE_DIR:"/profile"},opts(async()=>{
+  launches++;
+  return {page:()=>({openHome:async()=>{throw Error("probe");}}),close:async()=>{throw Error("close failed");}};
+ },100));
+ await runner.run({op:"status",service:"lavka"}).catch(()=>null);
+ await runner.close();
+ expect(await runner.run({op:"status",service:"lavka"})).toMatchObject({ok:false,code:"browser_unavailable"});
+ expect(launches).toBe(1);
+});
