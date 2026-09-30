@@ -222,34 +222,72 @@ export function researchPrompt(exclude: string[]): string {
   ].join("\n");
 }
 
-/** Вытащить первый сбалансированный {...} из текста модели и распарсить. */
-function extractJson(raw: string): { articles: DraftArticle[] } {
+/**
+ * Вытащить первый сбалансированный {...} из текста модели и распарсить.
+ *
+ * Аудит 2026-09-30: прод падал с `research failed: JSON Parse error:
+ * Unterminated string` (юнит `delabs-daily-draft`, 29.09 08:03 UTC). Виноват не
+ * обрыв ответа: скобки-то сбалансированы, а внутри строки стоял НАСТОЯЩИЙ
+ * перевод строки. JSON запрещает сырые управляющие символы в строках, и
+ * `JSON.parse` называет это «Unterminated string» — сообщение уводит в сторону
+ * лимитов и таймаутов, тогда как причина ровно одна: модель просили отдать
+ * `body` из нескольких абзацев, и абзацы она разделила переводом строки, а не
+ * `\n`. Ждать от модели идеального экранирования смысла нет — черновик дня
+ * терялся целиком из-за одного байта.
+ *
+ * Поэтому сканер, который и так знает, внутри строки он или нет, по пути
+ * экранирует сырые управляющие символы. Для корректного JSON это тождественная
+ * операция: там таких символов внутри строк не бывает по определению. Настоящий
+ * обрыв ответа по-прежнему падает — с «unbalanced JSON braces», чем он и
+ * является.
+ */
+export function extractJson(raw: string): { articles: DraftArticle[] } {
   const start = raw.indexOf("{");
   if (start < 0) throw new Error("no JSON object in model output");
   let depth = 0;
   let inStr = false;
   let esc = false;
+  const out: string[] = [];
   for (let i = start; i < raw.length; i++) {
     const ch = raw[i];
     if (inStr) {
+      out.push(escapeInString(ch));
       if (esc) esc = false;
       else if (ch === "\\") esc = true;
       else if (ch === '"') inStr = false;
       continue;
     }
+    out.push(ch);
     if (ch === '"') inStr = true;
     else if (ch === "{") depth++;
     else if (ch === "}") {
       depth--;
       if (depth === 0) {
-        const slice = raw.slice(start, i + 1);
-        const obj = JSON.parse(slice);
+        const obj = JSON.parse(out.join(""));
         if (!obj || !Array.isArray(obj.articles)) throw new Error("JSON has no articles[]");
         return obj;
       }
     }
   }
   throw new Error("unbalanced JSON braces");
+}
+
+/**
+ * Один символ внутри JSON-строки → то, что допустимо внутри JSON-строки.
+ * Всё, что ниже 0x20, JSON требует экранировать; у четырёх символов есть
+ * короткая запись, остальные уходят в `\uXXXX`. Прочие символы — как есть.
+ */
+function escapeInString(ch: string): string {
+  const code = ch.charCodeAt(0);
+  if (code >= 0x20) return ch;
+  const short: Record<string, string> = {
+    "\n": "\\n",
+    "\r": "\\r",
+    "\t": "\\t",
+    "\b": "\\b",
+    "\f": "\\f",
+  };
+  return short[ch] ?? `\\u${code.toString(16).padStart(4, "0")}`;
 }
 
 /**
