@@ -103,21 +103,34 @@ with tempfile.TemporaryDirectory(prefix='agent-knowledge-tests-') as scratch:
     subprocess.run(['xcrun', 'swiftc', '-parse-as-library', '-module-cache-path', str(temp/'cache'), str(temp/'Knowledge.swift'), '-o', str(temp/'test')], check=True, timeout=90)
     subprocess.run([str(temp/'test')], check=True, timeout=15)
 
-# Actual silence detector and UTF16-safe neural speech boundaries from production.
+# Production voice policy and controller; only platform audio/network interfaces are stubbed.
 with tempfile.TemporaryDirectory(prefix='agent-conversation-voice-tests-') as scratch:
     temp = Path(scratch)
-    source = (root / 'Agent/ConversationVoice.swift').read_text().split('enum VoiceConversationPolicy {')[1]
-    (temp / 'VoicePolicy.swift').write_text('import Foundation\nenum VoiceConversationPolicy {' + source + r'''
-precondition(!VoiceConversationPolicy.finishedUtterance(samples: 3, silence: 2))
-precondition(!VoiceConversationPolicy.finishedUtterance(samples: 4, silence: 1.19))
-precondition(VoiceConversationPolicy.finishedUtterance(samples: 4, silence: 1.2))
-let original = String(repeating: "Привет 👨‍👩‍👧‍👦. ", count: 900)
-let chunks = VoiceConversationPolicy.chunks(original)
-precondition(chunks.count > 1 && chunks.joined() == original)
-precondition(chunks.allSatisfy { $0.utf16.count <= 3000 })
-print("PASS: voice silence boundary and lossless UTF16-safe neural speech chunks")
-''')
-    subprocess.run(['xcrun', 'swiftc', '-module-cache-path', str(temp / 'cache'), str(temp / 'VoicePolicy.swift'), '-o', str(temp / 'test')], check=True, timeout=90)
+    source = (root / 'Agent/ConversationVoice.swift').read_text().split('struct ConversationVoiceView: View')[0]
+    source = source.replace('import SwiftUI', '').replace('import AVFoundation', '')
+    source = source.replace(': ObservableObject', '').replace('@Published ', '')
+    (temp / 'ConversationVoice.swift').write_text('import Foundation\n' + source)
+    subprocess.run(['xcrun', 'swiftc', '-module-cache-path', str(temp / 'cache'),
+                    str(root / 'Agent/VoiceSession.swift'), str(temp / 'ConversationVoice.swift'),
+                    str(root / 'tests/ConversationVoiceFixture.swift'), '-o', str(temp / 'test')], check=True, timeout=90)
+    subprocess.run([str(temp / 'test')], check=True, timeout=20)
+
+# Exercise production VoiceOutput while network preparation is suspended or fails.
+with tempfile.TemporaryDirectory(prefix='agent-playback-tests-') as scratch:
+    temp = Path(scratch)
+    source = (root / 'Agent/VoiceOutput.swift').read_text().split('@MainActor struct VoiceSettingsView: View')[0]
+    source = source.replace('import AVFoundation', '').replace('import SwiftUI', '').replace(', ObservableObject', '').replace('@Published ', '')
+    source = source.replace('UserDefaults.standard', 'testDefaults')
+    source = 'import Foundation\nlet testDomain = "agent-playback-" + UUID().uuidString\nlet testDefaults = UserDefaults(suiteName: testDomain)!\n' + source
+    (temp / 'VoiceOutput.swift').write_text(source)
+    stubs = (root / 'tests/ConversationVoiceFixture.swift').read_text().split('@main struct Check')[0]
+    stubs = '\n'.join(line for line in stubs.splitlines() if not line.startswith('@MainActor enum VoiceOutput') and not line.startswith('enum SpeechText'))
+    stubs = stubs.replace('static let defaultToSpeaker', 'static let duckOthers = Self(rawValue: 8)\n        static let defaultToSpeaker')
+    stubs = stubs.replace('static var plays = 0', 'static var plays = 0\n    var enableRate = false\n    var rate: Float = 1\n    func pause() { isPlaying = false }')
+    (temp / 'Platform.swift').write_text(stubs)
+    subprocess.run(['xcrun', 'swiftc', '-module-cache-path', str(temp / 'cache'),
+                    str(root / 'Agent/VoiceSession.swift'), str(temp / 'Platform.swift'), str(temp / 'VoiceOutput.swift'),
+                    str(root / 'tests/VoicePlaybackFixture.swift'), '-o', str(temp / 'test')], check=True, timeout=90)
     subprocess.run([str(temp / 'test')], check=True, timeout=15)
 
 # Hybrid dictation must never overwrite a draft the user edited after dictating.

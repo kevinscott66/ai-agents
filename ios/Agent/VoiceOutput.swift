@@ -191,7 +191,7 @@ import SwiftUI
             do {
                 for chunk in VoiceConversationPolicy.chunks(text) {
                     let audio = try await api.speechAudio(chunk, voice: self.serverVoice, expectedToken: token)
-                    guard self.playback == id else { return }
+                    try await self.waitUntilResumed(id)
                     let output = try AVAudioPlayer(data: audio)
                     Self.applyRate(output)
                     guard output.prepareToPlay(), output.play() else { throw AgentError.message("Не удалось воспроизвести ответ") }
@@ -209,15 +209,27 @@ import SwiftUI
             } catch {
                 guard self.playback == id else { return }
                 self.player = nil
-                self.serverTask = nil
                 if played {
+                    self.serverTask = nil
                     self.error = "Озвучивание прервано: \(error.localizedDescription)"
                     self.advance(completed: false)
                 } else {
                     // Server voice unavailable: still read the reply with the device voice.
-                    self.speakOnDevice(text)
+                    do {
+                        try await self.waitUntilResumed(id)
+                        self.serverTask = nil
+                        self.speakOnDevice(text)
+                    } catch { /* Stopped while waiting to resume; do not restart speech. */ }
                 }
             }
+        }
+    }
+    private func waitUntilResumed(_ id: UUID) async throws {
+        while true {
+            try Task.checkCancellation()
+            guard playback == id else { throw CancellationError() }
+            if !isPaused { return }
+            try await Task.sleep(for: .milliseconds(50))
         }
     }
     func stop() {
@@ -242,6 +254,11 @@ import SwiftUI
                 player.pause()
                 isPaused = true
             }
+            return
+        }
+        if serverTask != nil {
+            // Preparation between chunks has no AVAudioPlayer yet, but can still be paused.
+            isPaused.toggle()
             return
         }
         if isPaused {
