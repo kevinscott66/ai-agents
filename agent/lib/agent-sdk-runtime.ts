@@ -1,3 +1,4 @@
+import { withSdkStartupDeadline, SdkStartupTimeout } from "./sdk-startup-deadline.ts";
 import { inferenceProvider } from "./inference-provider.ts";
 /**
  * Альтернативный inference-рантайм через @anthropic-ai/claude-agent-sdk —
@@ -90,6 +91,7 @@ export function shouldFallbackToRaw(
   rawApiAvailable = true,
 ): boolean {
   if (!rawApiAvailable) return false;
+  if (e instanceof SdkStartupTimeout || (e instanceof AgentSdkRunError && e.subtype === "startup_timeout")) return false;
   // Бюджет: raw-путь упрётся в ту же проверку в callAnthropic.
   if (e instanceof BudgetExceededError) return false;
   // Побочные эффекты уже случились — повтор отправит сообщение / создаст
@@ -892,7 +894,7 @@ export async function runTextViaAgentSdk(opts: {
   let sawResult = false;
   let lastAssistant = "";
   try {
-    for await (const m of query({
+    for await (const m of withSdkStartupDeadline(query({
       prompt: opts.prompt,
       options: {
         systemPrompt: opts.system,
@@ -906,7 +908,7 @@ export async function runTextViaAgentSdk(opts: {
         ...(opts.model ? { model: opts.model } : {}),
         env: buildSubscriptionEnv(),
       } as any,
-    })) {
+    }))) {
       const type = (m as any).type;
       if (type === "assistant") {
         const used = sdkUsageTokens((m as any).message?.usage);
@@ -1048,7 +1050,7 @@ export async function runViaAgentSdk(opts: RunWithToolsOpts): Promise<string> {
   let overspent = false;
   const spend = usageWriter(opts.agentKey);
   try {
-    for await (const m of query({
+    for await (const m of withSdkStartupDeadline(query({
       prompt: promptInput,
       options: {
         systemPrompt: fullSystem,
@@ -1066,7 +1068,7 @@ export async function runViaAgentSdk(opts: RunWithToolsOpts): Promise<string> {
         pathToClaudeCodeExecutable: process.env.CLAUDE_BIN,
         env: buildSubscriptionEnv(),
       } as any,
-    })) {
+    }))) {
       const type = (m as any).type;
       if (type === "assistant") {
         // Копим текст на случай, если финальный result окажется пустым:
@@ -1123,7 +1125,7 @@ export async function runViaAgentSdk(opts: RunWithToolsOpts): Promise<string> {
     throw new AgentSdkRunError(getErrorMessage(e), {
       sideEffects: stats.executed > 0,
       partialText: result || lastAssistant,
-      subtype,
+      subtype: e instanceof SdkStartupTimeout ? "startup_timeout" : subtype,
     });
   }
   if (overspent) {

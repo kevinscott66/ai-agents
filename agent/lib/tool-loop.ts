@@ -231,6 +231,7 @@ export async function runWithTools(opts: RunWithToolsOpts): Promise<string> {
       // Бюджет исчерпан — оркестратор глотает эту ошибку штатно, откат только
       // сожжёт ещё один вызов ради того же отказа.
       if (e instanceof BudgetExceededError) throw e;
+      if (e instanceof AgentSdkRunError && e.subtype === "startup_timeout") return e.message;
       if (!shouldFallbackToRaw(e, Boolean(opts.anthropic))) {
         const partial = e instanceof AgentSdkRunError ? e.partialText : "";
         log.error("[agent-sdk] НЕ откатываемся: ход уже дал побочные эффекты", {
