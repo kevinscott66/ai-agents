@@ -1245,7 +1245,7 @@ kbd {
 }
 .live-session {
   position: absolute;
-  z-index: 31;
+  z-index: 4;
   bottom: 20px;
   left: 35px;
   padding: 12px;

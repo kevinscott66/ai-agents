@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { LiveClient, type LiveSnapshot } from "./live-client";
+import { LiveClient, SessionExpired, type LiveSnapshot } from "./live-client";
 import { ROSTER, type RoleId } from "./roster";
 type Message = { role: string; text: string; agentKey?: string };
 export function LiveOffice({
@@ -13,6 +13,8 @@ export function LiveOffice({
 }) {
   const client = useRef(new LiveClient()),
     epoch = useRef(0);
+  const [restoring, setRestoring] = useState(true);
+  const [connecting, setConnecting] = useState(false);
   const [paired, setPaired] = useState(false),
     [code, setCode] = useState(""),
     [error, setError] = useState(""),
@@ -57,6 +59,24 @@ export function LiveOffice({
     setPending(null);
     dialogs.current = {};
   };
+  useEffect(() => {
+    let active = true;
+    void client.current
+      .restore()
+      .then(() => {
+        if (active) setPaired(true);
+      })
+      .catch((e) => {
+        if (active && !(e instanceof SessionExpired))
+          setError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (active) setRestoring(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
   useEffect(
     () => () => {
       epoch.current++;
@@ -81,9 +101,15 @@ export function LiveOffice({
         setError("");
       } catch (e) {
         if (active) {
+          if (e instanceof SessionExpired) disconnect();
           setSnapshot(null);
           onSnapshot(null);
-          setError(String(e instanceof Error ? e.message : e));
+          setError(
+            String(e instanceof Error ? e.message : e) +
+              (e instanceof SessionExpired
+                ? " Проверьте историю перед повтором незавершённой задачи."
+                : ""),
+          );
         }
       } finally {
         if (active) timer = setTimeout(poll, 3000);
@@ -181,16 +207,20 @@ export function LiveOffice({
   };
   return (
     <>
-      {!paired ? (
+      {restoring ? (
+        <p role="status">Восстанавливаем подключение…</p>
+      ) : !paired ? (
         <section className="live-login">
           <h2>Подключение реальных агентов</h2>
           <p>
-            Одноразовый код владельца из команды /pair_native. Ключ остаётся
-            только в памяти вкладки.
+            Введите код из /pair_native один раз. Вход сохраняется в этом
+            браузере на 30 дней, включая перезапуск приложения на Mac.
           </p>
           <form
             onSubmit={async (e) => {
               e.preventDefault();
+              if (connecting) return;
+              setConnecting(true);
               setError("");
               try {
                 await client.current.pair(code.trim());
@@ -198,6 +228,8 @@ export function LiveOffice({
                 setPaired(true);
               } catch (e) {
                 setError(e instanceof Error ? e.message : String(e));
+              } finally {
+                setConnecting(false);
               }
             }}
           >
@@ -210,7 +242,9 @@ export function LiveOffice({
               pattern="[a-f0-9]{32}"
               required
             />
-            <button className="primary">Подключить</button>
+            <button className="primary" disabled={connecting}>
+              {connecting ? "Подключаем…" : "Подключить"}
+            </button>
           </form>
           {error && <p role="alert">{error}</p>}
         </section>
@@ -219,7 +253,22 @@ export function LiveOffice({
           <span>
             {snapshot ? "Реальная система подключена" : "Нет связи с системой"}
           </span>
-          <button onClick={disconnect}>Отключить</button>
+          <button
+            onClick={async () => {
+              try {
+                await client.current.logout();
+                disconnect();
+              } catch (e) {
+                if (e instanceof SessionExpired) disconnect();
+                else
+                  setError(
+                    "Не удалось выйти. Проверьте сеть и повторите выход.",
+                  );
+              }
+            }}
+          >
+            Выйти на этом устройстве
+          </button>
           <small>
             Ваши запросы, личные задачи и согласования. Фоновая работа без
             привязки к вам здесь не отображается.

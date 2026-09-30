@@ -1,3 +1,5 @@
+import { BriefingMotion, briefingTarget } from "./briefing";
+import { activityFor } from "./activity";
 import type { LiveSnapshot } from "./live-client";
 import { useEffect, useMemo, useRef, Suspense } from "react";
 import { useFrame } from "@react-three/fiber";
@@ -5,11 +7,15 @@ import * as THREE from "three";
 import { OfficeCharacter } from "./OfficeCharacter";
 import { ROSTER, seatNumber, type Member, type RoleId } from "./roster";
 function MemberSeat({
+  recipients,
   status,
+  state,
   member,
   onSelect,
 }: {
+  recipients?: RoleId[];
   status?: string;
+  state?: string;
   member: Member;
   onSelect: (id: RoleId) => void;
 }) {
@@ -17,6 +23,8 @@ function MemberSeat({
     yaw = useRef(Math.PI),
     sit = useRef(1),
     walking = useRef(0);
+  const motion = useRef(new BriefingMotion());
+  const target = briefingTarget(member.id, recipients);
   const sprite = useRef<THREE.Sprite>(null);
   const label = useMemo(() => {
     const c = document.createElement("canvas");
@@ -42,7 +50,18 @@ function MemberSeat({
     return t;
   }, [member, status]);
   useEffect(() => () => label.dispose(), [label]);
-  useFrame(({ camera }) => {
+  useFrame(({ camera }, delta) => {
+    motion.current.step(
+      target,
+      { x: member.x, z: member.z + 1.05 },
+      position.current,
+      sit,
+      yaw,
+      walking,
+      Math.min(delta, 0.06),
+    );
+    if (sprite.current)
+      sprite.current.position.set(position.current.x, 2.1, position.current.z);
     if (sprite.current)
       sprite.current.visible =
         camera.position.distanceTo(position.current) < 11 &&
@@ -58,6 +77,16 @@ function MemberSeat({
           yaw={yaw}
           sit={sit}
           walking={walking}
+          conversation={
+            target
+              ? member.id === "orchestrator"
+                ? "speaking"
+                : "listening"
+              : undefined
+          }
+          desk={member}
+          activity={activityFor(state)}
+          typing={activityFor(state) === "working"}
         />
       </Suspense>
       <sprite
@@ -86,8 +115,12 @@ export function TeamMembers({
       {ROSTER.filter((m) => m.id !== "backend").map((member) => (
         <MemberSeat
           key={member.id}
+          recipients={liveSnapshot?.briefingTo}
           member={member}
           onSelect={onSelect}
+          state={
+            liveSnapshot?.agents.find((a) => a.agentId === member.id)?.state
+          }
           status={
             liveSnapshot === undefined
               ? undefined
