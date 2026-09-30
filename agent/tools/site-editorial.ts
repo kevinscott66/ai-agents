@@ -39,6 +39,7 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from "
 import { dirname, join } from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { buildSubscriptionEnv } from "../lib/subscription-env.ts";
+import { balancedJsonSlice } from "../lib/json-from-model.ts";
 
 /** Два вида материалов, у каждого свой набор редактируемых полей. */
 export type Kind = "digests" | "activities";
@@ -295,29 +296,22 @@ export function activityPrompt(a: RawActivity, examples: EditorialEntry[]): stri
     .join("\n");
 }
 
-/** Вытащить первый сбалансированный {...} из текста модели и распарсить. */
+/**
+ * Вытащить первый сбалансированный {...} из текста модели и распарсить.
+ *
+ * Поиск и обезвреживание сырых управляющих символов — в
+ * `lib/json-from-model.ts`; там же разобрано, почему «Unterminated string» от
+ * `JSON.parse` означает не обрыв ответа, а один запрещённый байт. Здесь
+ * остаются только свои сообщения: они закреплены тестами.
+ */
 export function extractJson(raw: string): Record<string, unknown> {
-  const start = raw.indexOf("{");
-  if (start < 0) throw new Error("в ответе модели нет JSON-объекта");
-  let depth = 0;
-  let inStr = false;
-  let esc = false;
-  for (let i = start; i < raw.length; i++) {
-    const ch = raw[i];
-    if (inStr) {
-      if (esc) esc = false;
-      else if (ch === "\\") esc = true;
-      else if (ch === '"') inStr = false;
-      continue;
-    }
-    if (ch === '"') inStr = true;
-    else if (ch === "{") depth++;
-    else if (ch === "}") {
-      depth--;
-      if (depth === 0) return JSON.parse(raw.slice(start, i + 1));
-    }
+  const found = balancedJsonSlice(raw);
+  if (!found.ok) {
+    throw new Error(
+      found.reason === "no-object" ? "в ответе модели нет JSON-объекта" : "незакрытые скобки JSON",
+    );
   }
-  throw new Error("незакрытые скобки JSON");
+  return JSON.parse(found.json) as Record<string, unknown>;
 }
 
 /**

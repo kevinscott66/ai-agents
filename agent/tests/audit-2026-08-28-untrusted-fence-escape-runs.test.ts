@@ -15,7 +15,7 @@
  *
  * Вход недоверенный целиком: тело любой вытянутой WEB_FETCH страницы
  * (sdk-web-guard.ts:523), содержимое страницы вики (tools-schema.ts:1277),
- * реплики чата у компактора (compactor.ts:174,177).
+ * реплики чата у компактора (compactor.ts:173,176).
  */
 import { describe, expect, test } from "bun:test";
 import { untrusted } from "../lib/agent-prompts.ts";

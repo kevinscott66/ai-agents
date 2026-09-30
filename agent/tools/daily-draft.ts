@@ -26,7 +26,20 @@ import { mdToUserbotHtml } from "../lib/telegram-format.ts";
 import { buildCustomEmojiEntities } from "../lib/custom-emoji-map.ts";
 import { extractMessageId } from "../lib/userbot.ts";
 import { cutToCodeUnits } from "../lib/text-cut.ts";
+import { balancedJsonSlice } from "../lib/json-from-model.ts";
 import { delabsChannelId, delabsSiteBase, delabsPendingPath } from "../lib/delabs-env.ts";
+// Сверка с первоисточниками перед публикацией. Отдельным модулем, потому что
+// её делят два пайплайна: этот (канал + сайт) и редактура сайта
+// (tools/site-editorial.ts). Почему проверяет не автор — там же, в шапке.
+import {
+  blocking,
+  extractJson as extractObject,
+  factCheck,
+  fixNote,
+  passed,
+  verdictLine,
+  type FactProblem,
+} from "../lib/fact-check.ts";
 // Текстовые примитивы поста живут отдельным чистым модулем: их делят три
 // шаблона (дайджест, отработка активностей, итоги недели), а этот файл тянет
 // gramjs и Agent SDK. Реэкспорт — чтобы прежние импорты продолжали работать.
@@ -66,6 +79,14 @@ export interface DraftArticle {
    * и в снапшотах оно есть, а падать на разборе архива не за что.
    */
   siteId?: string;
+  /**
+   * Отметка сверки с первоисточниками: когда проверяли и по скольким
+   * источникам фактчекер реально прошёл (lib/fact-check.ts). Статья без этой
+   * отметки в pending попасть не может — `vetArticles` ставит её всем, кого
+   * пропустил. Нужна не коду, а разбору: если в канале снова выйдет неверный
+   * факт, по ней видно, была ли проверка и что она видела.
+   */
+  checked?: { at: string; opened: number };
 }
 export interface PendingDraft {
   createdAt: string; // ISO
@@ -225,69 +246,21 @@ export function researchPrompt(exclude: string[]): string {
 /**
  * Вытащить первый сбалансированный {...} из текста модели и распарсить.
  *
- * Аудит 2026-09-30: прод падал с `research failed: JSON Parse error:
- * Unterminated string` (юнит `delabs-daily-draft`, 29.09 08:03 UTC). Виноват не
- * обрыв ответа: скобки-то сбалансированы, а внутри строки стоял НАСТОЯЩИЙ
- * перевод строки. JSON запрещает сырые управляющие символы в строках, и
- * `JSON.parse` называет это «Unterminated string» — сообщение уводит в сторону
- * лимитов и таймаутов, тогда как причина ровно одна: модель просили отдать
- * `body` из нескольких абзацев, и абзацы она разделила переводом строки, а не
- * `\n`. Ждать от модели идеального экранирования смысла нет — черновик дня
- * терялся целиком из-за одного байта.
- *
- * Поэтому сканер, который и так знает, внутри строки он или нет, по пути
- * экранирует сырые управляющие символы. Для корректного JSON это тождественная
- * операция: там таких символов внутри строк не бывает по определению. Настоящий
- * обрыв ответа по-прежнему падает — с «unbalanced JSON braces», чем он и
- * является.
+ * Сам сканер — в `lib/json-from-model.ts`; там же разобрано, почему
+ * «Unterminated string» от `JSON.parse` означает не обрыв ответа, а один сырой
+ * управляющий символ внутри строки, и почему экранировать их по пути
+ * безопасно. Здесь остаются только свои сообщения и проверка `articles[]`.
  */
 export function extractJson(raw: string): { articles: DraftArticle[] } {
-  const start = raw.indexOf("{");
-  if (start < 0) throw new Error("no JSON object in model output");
-  let depth = 0;
-  let inStr = false;
-  let esc = false;
-  const out: string[] = [];
-  for (let i = start; i < raw.length; i++) {
-    const ch = raw[i];
-    if (inStr) {
-      out.push(escapeInString(ch));
-      if (esc) esc = false;
-      else if (ch === "\\") esc = true;
-      else if (ch === '"') inStr = false;
-      continue;
-    }
-    out.push(ch);
-    if (ch === '"') inStr = true;
-    else if (ch === "{") depth++;
-    else if (ch === "}") {
-      depth--;
-      if (depth === 0) {
-        const obj = JSON.parse(out.join(""));
-        if (!obj || !Array.isArray(obj.articles)) throw new Error("JSON has no articles[]");
-        return obj;
-      }
-    }
+  const found = balancedJsonSlice(raw);
+  if (!found.ok) {
+    throw new Error(
+      found.reason === "no-object" ? "no JSON object in model output" : "unbalanced JSON braces",
+    );
   }
-  throw new Error("unbalanced JSON braces");
-}
-
-/**
- * Один символ внутри JSON-строки → то, что допустимо внутри JSON-строки.
- * Всё, что ниже 0x20, JSON требует экранировать; у четырёх символов есть
- * короткая запись, остальные уходят в `\uXXXX`. Прочие символы — как есть.
- */
-function escapeInString(ch: string): string {
-  const code = ch.charCodeAt(0);
-  if (code >= 0x20) return ch;
-  const short: Record<string, string> = {
-    "\n": "\\n",
-    "\r": "\\r",
-    "\t": "\\t",
-    "\b": "\\b",
-    "\f": "\\f",
-  };
-  return short[ch] ?? `\\u${code.toString(16).padStart(4, "0")}`;
+  const obj = JSON.parse(found.json);
+  if (!obj || !Array.isArray(obj.articles)) throw new Error("JSON has no articles[]");
+  return obj;
 }
 
 /**
@@ -361,6 +334,198 @@ async function research(): Promise<DraftArticle[]> {
     );
   }
   return fresh;
+}
+
+/**
+ * Сверка с первоисточниками — между ресёрчем и публикацией.
+ *
+ * Почему это отдельный проход, а не ещё одно требование в `RESEARCH_SYSTEM`:
+ * требование там стоит с первого дня («каждый факт подкреплён РЕАЛЬНЫМ
+ * источником»), и ручной аудит 23.09.2026 всё равно нашёл в написанном ботом
+ * выдуманные цитаты, перевёрнутые направления сделок и ссылки на чужие
+ * пресс-релизы. Автор перечитывает себя по собственному контексту и
+ * подтверждает то, что сам же написал; поэтому проверяет другой агент, с
+ * чистым контекстом и только по тексту и ссылкам (lib/fact-check.ts).
+ *
+ * Дальше — ровно одна попытка переписать по списку претензий. Не две: если
+ * первоисточник утверждение не подтвердил, второй заход его не найдёт, он
+ * найдёт формулировку помягче — а это ровно то, чего мы не хотим. Не
+ * подтвердилось — статья не выходит.
+ */
+export const REVISE_MAX_TURNS = 14;
+
+export function revisePrompt(a: DraftArticle, problems: FactProblem[]): string {
+  return [
+    "Ты написал эту новость для канала и сайта. Проверка фактов вернула претензии.",
+    "",
+    `title: ${a.title}`,
+    `date: ${a.date}`,
+    `summary: ${a.summary}`,
+    `body: ${a.body}`,
+    "Источники:",
+    ...(a.items ?? []).map((it) => `- ${it.text}: ${it.url}`),
+    fixNote(problems),
+    "",
+    "Открой источники сам и перепиши так, чтобы каждое оставшееся утверждение в них было.",
+    "Объём и стиль прежние: title 70-130 знаков без точки, summary 180-340, body 600-1200 в 2-3 абзацах,",
+    "числа **жирным**, прямая речь в «ёлочках», ссылки как [подпись](https://...).",
+    "Источники можно заменить и дополнить, но каждый должен подтверждать то, рядом с чем стоит.",
+    "",
+    `У тебя ${REVISE_MAX_TURNS} ходов.`,
+    "Если после удаления неподтверждённого новости не остаётся — верни {\"drop\":true} и ничего не выдумывай.",
+    "Статью о собственном отказе не пиши: «материал не опубликован», «редакция не может опубликовать»,",
+    "«источник не поддаётся проверке» — это не новость, а drop. Такой ответ будет снят, и день выйдет короче.",
+    "",
+    "Иначе верни СТРОГО ОДИН JSON-объект и НИЧЕГО кроме него:",
+    '{"title":"...","date":"YYYY-MM-DD","summary":"...","body":"...","items":[{"text":"...","url":"https://..."}]}',
+  ].join("\n");
+}
+
+/** Один заход автора в SDK на исправление — тот же системный промпт, что у ресёрча. */
+async function askAuthor(prompt: string): Promise<string> {
+  let result = "";
+  for await (const m of query({
+    prompt,
+    options: {
+      systemPrompt: RESEARCH_SYSTEM,
+      allowedTools: ["WebSearch", "WebFetch"],
+      maxTurns: REVISE_MAX_TURNS,
+      permissionMode: "default",
+      pathToClaudeCodeExecutable: process.env.CLAUDE_BIN,
+      env: buildSubscriptionEnv(),
+    } as any,
+  })) {
+    if ((m as any).type === "result") result = (m as any).result ?? "";
+  }
+  return result;
+}
+
+/** Один заход автора на исправление. null — статья снимается. */
+export async function reviseArticle(
+  a: DraftArticle,
+  problems: FactProblem[],
+  ask: (prompt: string) => Promise<string> = askAuthor,
+): Promise<DraftArticle | null> {
+  let raw: Record<string, unknown>;
+  try {
+    raw = extractObject(await ask(revisePrompt(a, problems)));
+  } catch {
+    return null;
+  }
+  if (raw.drop === true) return null;
+  const [fixed] = articlesFromResearch({ articles: [raw as unknown as DraftArticle] });
+  if (!fixed) return null;
+  return { ...fixed, emoji: a.emoji };
+}
+
+/**
+ * Проверить черновик и оставить только то, что подтвердилось.
+ *
+ * Возвращает статьи и отчёт для владельца: снятое он должен видеть по имени.
+ * Правило владельца от 17.09.2026 — «должны быть только достоверные источники,
+ * если у меня в канале вдруг разместился какой-то фейк/скам, то говори» — без
+ * этого отчёта выполняется наполовину: бот молча публикует меньше, и почему
+ * меньше, не знает никто.
+ */
+export interface VetResult {
+  articles: DraftArticle[];
+  report: string[];
+}
+
+/**
+ * Отказ от публикации, притворившийся новостью.
+ *
+ * Что случилось 25.09.2026. Из выпуска пропала новость Hotstuff об остановке
+ * perp-торговли — с дедлайном вывода средств. Снял её не фактчекер: на месте
+ * новости на сайте стояла страница «Материал не опубликован: единственный
+ * источник Hotstuff не поддаётся проверке» с телом «Редакция не может
+ * опубликовать материал…». То есть автор, получив претензию «источник не
+ * открылся», вместо `{"drop":true}` написал о своём отказе статью — и она
+ * прошла все проверки как обычный материал: заголовок на месте, ссылка на
+ * месте, длины в норме. Владелец увидел на сайте не «новости нет», а «новость
+ * есть, и она о том, что новости нет».
+ *
+ * Это худший из исходов. Снятая статья видна в отчёте владельцу по имени, и
+ * её можно вернуть руками; статья-отказ выглядит опубликованной и не попадает
+ * ни в один отчёт — пропажу замечает читатель.
+ *
+ * Ловим по ЗАГОЛОВКУ (плюс характерное начало тела): заголовок — утверждение о
+ * событии, и редакционная оговорка в нём ни при каких обстоятельствах не
+ * уместна. В теле такие обороты встречаются у честных материалов («независимое
+ * подтверждение отсутствует»), поэтому тело по этим словам не судим.
+ */
+const REFUSAL_TITLE = [
+  /материал не опубликован/i,
+  /не (?:будет )?опубликован/i,
+  /не публикуется/i,
+  /не поддаётся проверке/i,
+  /редакция (?:не может|отказ)/i,
+  /не удалось (?:подтвердить|проверить|открыть)/i,
+  /проверка (?:фактов )?не состоялась/i,
+  /снято с публикации/i,
+];
+
+export function looksLikeRefusal(a: Pick<DraftArticle, "title" | "body">): boolean {
+  const title = String(a?.title ?? "");
+  if (REFUSAL_TITLE.some((re) => re.test(title))) return true;
+  return /^\s*редакци[яи]\s+не\s+(?:может|станет|будет)/i.test(String(a?.body ?? ""));
+}
+
+export async function vetArticles(
+  articles: DraftArticle[],
+  deps: { check?: typeof factCheck; revise?: typeof reviseArticle } = {},
+): Promise<VetResult> {
+  const check = deps.check ?? factCheck;
+  const revise = deps.revise ?? reviseArticle;
+  const out: DraftArticle[] = [];
+  const report: string[] = [];
+
+  for (const a of articles) {
+    // Отказ автора — не материал. Снимаем до сверки: фактчекеру нечего в нём
+    // проверять, а в корпусе ему не место ни при каком вердикте.
+    if (looksLikeRefusal(a)) {
+      report.push(`✂️ снято целиком: «${a.title}» — это отказ от публикации, а не новость`);
+      console.warn(`[daily-draft] автор вернул отказ вместо новости: «${a.title}»`);
+      continue;
+    }
+
+    let cur = a;
+    let verdict = await check(cur);
+    console.log(`[daily-draft] сверка «${cur.title}»: ${verdictLine(verdict)}`);
+
+    if (!passed(verdict)) {
+      const bad = blocking(verdict.problems);
+      report.push(`⚠️ «${cur.title}» — ${bad.map((p) => p.issue).join("; ")}`);
+      const fixed = await revise(cur, verdict.problems);
+      if (!fixed || looksLikeRefusal(fixed)) {
+        report.push(
+          fixed
+            ? `✂️ снято целиком: «${cur.title}» — автор вернул отказ от публикации вместо переписанной новости`
+            : `✂️ снято целиком: «${cur.title}» — переписать по источникам не вышло`,
+        );
+        console.warn(`[daily-draft] снята статья «${cur.title}»: ${bad.map((p) => p.claim).join(" | ")}`);
+        continue;
+      }
+      cur = fixed;
+      verdict = await check(cur);
+      console.log(`[daily-draft] повторная сверка «${cur.title}»: ${verdictLine(verdict)}`);
+      if (!passed(verdict)) {
+        report.push(
+          `✂️ снято целиком: «${cur.title}» — после правки претензии остались (${blocking(verdict.problems)
+            .map((p) => p.issue)
+            .join("; ")})`,
+        );
+        console.warn(`[daily-draft] снята статья после правки: «${cur.title}»`);
+        continue;
+      }
+      report.push(`✅ переписано по источникам: «${cur.title}»`);
+    }
+    for (const w of verdict.problems.filter((p) => p.severity === "warn"))
+      report.push(`ℹ️ «${cur.title}»: ${w.issue}`);
+    out.push({ ...cur, checked: { at: verdict.at, opened: verdict.opened } });
+  }
+
+  return { articles: out, report };
 }
 
 /** Заголовок дня — короткий, по первой статье. */
@@ -485,10 +650,14 @@ export function buildDraftCaption(
  * `summary`/`body` уезжает в корпус сайта из снапшота канала, да и одобрять
  * вслепую то, что написала модель, не стоит в любом случае.
  */
-export function buildDraftReviewText(articles: DraftArticle[]): string {
+export function buildDraftReviewText(articles: DraftArticle[], notes: string[] = []): string {
   const blocks: string[] = [
     "🔎 ПОЛНЫЙ ТЕКСТ НА САЙТ — прочти до «+»:",
   ];
+  // Отчёт сверки идёт первым блоком, до текстов: снятое и переписанное
+  // владелец должен увидеть раньше, чем то, что осталось. Пустой отчёт
+  // означает «все статьи прошли проверку с первого раза» — тогда и строки нет.
+  if (notes.length) blocks.push(["🧪 Сверка с первоисточниками:", ...notes].join("\n"));
   articles.forEach((a, i) => {
     const lines = [
       `${i + 1}/${articles.length} · ${a.title}`,
@@ -736,6 +905,29 @@ export function buildClient(): TelegramClient {
   );
 }
 
+/**
+ * Сообщение владельцу в Saved Messages мимо черновика.
+ *
+ * Нужно ровно для одного случая: сверка сняла всё, черновика нет, и без этого
+ * сообщения день выглядел бы как молчаливый сбой таймера. Best-effort: не
+ * доставили — пишем в журнал и идём дальше, ронять из-за отчёта нечего.
+ */
+async function reportToOwner(lines: string[]): Promise<void> {
+  const text = lines.filter(Boolean).join("\n");
+  if (!text.trim()) return;
+  let client: TelegramClient | null = null;
+  try {
+    client = buildClient();
+    await client.connect();
+    const peer = await client.getInputEntity("me");
+    for (const chunk of chunkForTelegram(text)) await client.sendMessage(peer, { message: chunk });
+  } catch (e) {
+    console.warn(`[daily-draft] отчёт владельцу не ушёл: ${(e as Error).message}`);
+  } finally {
+    try { await client?.disconnect(); } catch {}
+  }
+}
+
 async function main(): Promise<void> {
   console.log("[daily-draft] start", new Date().toISOString(), "channel", CHANNEL_ID);
 
@@ -774,6 +966,32 @@ async function main(): Promise<void> {
     return;
   }
   console.log(`[daily-draft] got ${articles.length} articles`);
+
+  // Сверка ДО баннера и до превью: снятая статья не должна успеть попасть ни в
+  // заголовок дня, ни в подпись. Проверка стоит ходов SDK, но дешевле, чем
+  // опровержение в канале, — и с 23.09.2026 публикация идёт без апрува, так
+  // что это последняя инстанция перед читателем.
+  let report: string[] = [];
+  try {
+    const vetted = await vetArticles(articles);
+    articles = vetted.articles;
+    report = vetted.report;
+  } catch (e) {
+    fail(`[daily-draft] сверка фактов сорвалась: ${(e as Error).message}`, 1);
+    return;
+  }
+  if (!articles.length) {
+    // Это не ошибка юнита: проверка отработала и не пропустила ничего.
+    // Публиковать нечего — молчание честнее непроверенного выпуска.
+    await reportToOwner([
+      "🧪 Черновик на сегодня не вышел: ни одна новость не прошла сверку с первоисточниками.",
+      ...report,
+    ]);
+    fail("[daily-draft] после сверки не осталось ни одной статьи — черновик не шлём", 0);
+    return;
+  }
+  console.log(`[daily-draft] сверку прошли ${articles.length} статей(ьи)`);
+
 
   const title = dayTitle(articles);
   let banner: Buffer;
@@ -842,7 +1060,7 @@ async function main(): Promise<void> {
     // Отправляем НЕ реплаем на превью: `approve-poll.ts::isApproved` сканирует
     // именно реплаи и на каждый неодобряющий пишет строку «ответ не считается
     // апрувом» — своими же сообщениями засоряли бы этот лог.
-    for (const chunk of chunkForTelegram(buildDraftReviewText(articles))) {
+    for (const chunk of chunkForTelegram(buildDraftReviewText(articles, report))) {
       await client.sendMessage(peer, { message: chunk });
     }
   } catch (e) {
