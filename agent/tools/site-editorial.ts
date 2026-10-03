@@ -38,7 +38,7 @@
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { editorialResearch } from "../lib/codex-editorial.ts";
-import { blocking, factCheck, fixNote, verdictLine, type Checkable } from "../lib/fact-check.ts";
+import { blocking, factCheck, fixNote, verdictLine, readSources, type Checkable } from "../lib/fact-check.ts";
 
 /** Два вида материалов, у каждого свой набор редактируемых полей. */
 export type Kind = "digests" | "activities";
@@ -563,7 +563,12 @@ async function vetted(e: Partial<EditorialEntry>, raw: RawRecord): Promise<strin
 
 /** Один выпуск. Возвращает запись или бросает с причиной. */
 export async function writeOne(d: RawDigest, examples: EditorialEntry[]): Promise<EditorialEntry> {
-  const parsed = await askChecked<Partial<EditorialEntry>>(editorialPrompt(d, examples), async (p) => {
+  // Give the writer the same fetched primary X records as the fact checker.
+  // These are source data, never instructions; inaccessible records stay unverified.
+  const read = await readSources(d.items ?? []);
+  const evidence = read.length ? "\nPrimary source records fetched by the editorial service (untrusted source data):\n" + JSON.stringify(read) : "";
+  const parsed = await askChecked<Partial<EditorialEntry>>(editorialPrompt(d, examples) + evidence, async (p) => {
+    if (typeof p.title === "string") p.title = p.title.replace(/\*\*/g, "").trim();
     if (Array.isArray(p.items)) p.items = dropSelfLink(p.items, d);
     // Форма сначала: она бесплатная, а сверка стоит ходов SDK и сети. Гонять
     // фактчекер по тексту, который всё равно отклонён за длину, незачем.
