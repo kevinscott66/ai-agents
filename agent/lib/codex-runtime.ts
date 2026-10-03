@@ -138,6 +138,7 @@ export async function callCodex(params: Anthropic.MessageCreateParamsNonStreamin
             usage = next;
           }
           if (event.type === "turn.failed" || event.type === "error") throw new Error("Codex turn failed");
+          if (event.item?.type === "error" && event.item.message === "Code Mode is unavailable because code-mode host is disabled. Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`.") return;
           if (event.item && !["agent_message", "reasoning"].includes(event.item.type)) throw new Error("Unexpected native Codex tool activity");
         } catch (error) { stop(error instanceof Error ? error : new Error("Codex event or usage accounting failed")); }
       };
