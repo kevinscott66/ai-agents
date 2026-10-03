@@ -30,3 +30,16 @@ Codex выдаёт структурированный ответ с предло
 6. Проверить возврат на claude и повторное переключение на codex. При проблеме оставить claude.
 
 Официальный CLI workflow: https://developers.openai.com/codex/noninteractive/
+
+
+## DeLabs site editor (2026-10-03)
+
+`site-editorial` and its fact checker use `codex-editorial.ts`: pinned Codex
+0.149.0 with live web search, isolated temporary working directory, no inherited
+service secrets, no local execution/tools, and bounded output/time. Only web search,
+reasoning and assistant text events are accepted. Existing content validators and
+fact-check rejection remain mandatory before writing editorial data. Site refresh
+remains the publication step; Telegram publication is not part of this migration.
+
+The separate daily/weekly draft jobs remain paused until their migration is tested.
+Operational paths, rollout and rollback belong to the private ops handoff.

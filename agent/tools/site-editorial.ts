@@ -37,8 +37,8 @@
  */
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { query } from "@anthropic-ai/claude-agent-sdk";
-import { buildSubscriptionEnv } from "../lib/subscription-env.ts";
+import { editorialResearch } from "../lib/codex-editorial.ts";
+import { blocking, factCheck, fixNote, verdictLine, type Checkable } from "../lib/fact-check.ts";
 
 /** Два вида материалов, у каждого свой набор редактируемых полей. */
 export type Kind = "digests" | "activities";
@@ -145,8 +145,14 @@ export const AUTO_PATH =
  * с одним общим числом новости съедали бы весь бюджет, и активности не
  * редактировались бы никогда. Накопившийся долг разберётся за несколько дней —
  * это лучше, чем один прогон на полчаса.
+ *
+ * 23.09.2026: 8 -> 5. К написанию добавилась сверка с первоисточниками
+ * (`vetted`), а это ещё один заход в SDK на материал, иногда два (претензия →
+ * переписывание → повторная проверка). Прежние восемь перестали помещаться в
+ * получасовое окно таймера, а прогон, налезающий на следующий, ничего не
+ * ускоряет. Долг разберётся за лишний день — выдумка на странице стоит дороже.
  */
-export const EDITORIAL_BATCH: Record<Kind, number> = { digests: 5, activities: 3 };
+export const EDITORIAL_BATCH: Record<Kind, number> = { digests: 3, activities: 2 };
 
 /**
  * Бюджет ходов на один материал.
@@ -471,21 +477,7 @@ export function writeAtomic(path: string, data: unknown): void {
 
 /** Один заход в Agent SDK по подписке. Возвращает текст последнего сообщения. */
 async function ask(prompt: string): Promise<string> {
-  let result = "";
-  for await (const m of query({
-    prompt,
-    options: {
-      systemPrompt: EDITORIAL_SYSTEM,
-      allowedTools: ["WebSearch", "WebFetch"],
-      maxTurns: EDITORIAL_MAX_TURNS,
-      permissionMode: "default",
-      pathToClaudeCodeExecutable: process.env.CLAUDE_BIN,
-      env: buildSubscriptionEnv(),
-    } as any,
-  })) {
-    if ((m as any).type === "result") result = (m as any).result ?? "";
-  }
-  return result;
+  return editorialResearch(EDITORIAL_SYSTEM,prompt);
 }
 
 const stamp = () => ({ at: new Date().toISOString(), by: "site-editorial" });
@@ -503,8 +495,13 @@ export function retryNote(bad: string[]): string {
 /**
  * Спросить, проверить, при отказе переспросить с причинами. Бросает с
  * причинами последней попытки — в журнале юнита видно, чего не хватило.
+ *
+ * Проверка стала асинхронной 23.09.2026: к проверкам формы добавилась сверка
+ * с первоисточниками (`vetted`), а она ходит в сеть. Устройство цикла от этого
+ * не изменилось — претензии фактчекера уходят автору тем же `retryNote`, что и
+ * «лид 120 символов, нужно от 180».
  */
-async function askChecked<T>(prompt: string, check: (p: T) => string[]): Promise<T> {
+async function askChecked<T>(prompt: string, check: (p: T) => Promise<string[]> | string[]): Promise<T> {
   let bad: string[] = [];
   for (let i = 0; i < EDITORIAL_ATTEMPTS; i++) {
     let parsed: T;
@@ -514,17 +511,64 @@ async function askChecked<T>(prompt: string, check: (p: T) => string[]): Promise
       bad = [(err as Error).message];
       continue;
     }
-    bad = check(parsed);
+    bad = await check(parsed);
     if (!bad.length) return parsed;
   }
   throw new Error(bad.join("; "));
 }
 
+/**
+ * Чем проверять. У выпуска это список источников, у активности — ссылка на
+ * страницу проекта: другого первоисточника у карточки «что сделать ради дропа»
+ * и не бывает. Материал, под которым нет ни одной ссылки, проверить нечем —
+ * `verdictFrom` такой случай блокирует, и это правильно: редактуры не будет,
+ * карточка останется с заголовком из поста.
+ */
+function sources(e: Partial<EditorialEntry>, raw: RawRecord): DigestItem[] {
+  const items = e.items ?? raw.items ?? [];
+  if (items.length) return items;
+  return raw.url ? [{ text: raw.title, url: raw.url }] : [];
+}
+
+/**
+ * Сверка написанного с первоисточниками — последняя проверка перед публикацией.
+ *
+ * Проверки выше ловят форму: пустое поле, ярлык вместо заголовка, потерянную
+ * ссылку. Про выдумку модели в шапке `checkEntry` честно сказано, что этим она
+ * не ловится, — и ручной аудит 23.09.2026 показал, чем это кончается: из 71
+ * выпуска, написанного ботом, примерно треть несла выдуманные цитаты,
+ * перевёрнутые направления сделок и ссылки на чужие пресс-релизы. Теперь текст
+ * читает второй агент с чистым контекстом (lib/fact-check.ts), и его претензии
+ * возвращаются автору как обычная причина отказа.
+ *
+ * Блокирующая претензия, пережившая повтор, означает, что записи не будет
+ * вовсе: выпуск ещё постоит текстом поста — это хуже, чем хорошая редактура, и
+ * несравнимо лучше, чем уверенная выдумка на публичной странице.
+ */
+async function vetted(e: Partial<EditorialEntry>, raw: RawRecord): Promise<string[]> {
+  const subject: Checkable = {
+    title: String(e.title ?? ""),
+    date: raw.date,
+    summary: e.summary,
+    body: e.body,
+    intro: e.intro,
+    items: sources(e, raw),
+  };
+  const verdict = await factCheck(subject);
+  console.log(`[site-editorial] сверка ${raw.id}: ${verdictLine(verdict)}`);
+  const bad = blocking(verdict.problems);
+  if (!bad.length) return [];
+  return [fixNote(bad).trim()];
+}
+
 /** Один выпуск. Возвращает запись или бросает с причиной. */
 export async function writeOne(d: RawDigest, examples: EditorialEntry[]): Promise<EditorialEntry> {
-  const parsed = await askChecked<Partial<EditorialEntry>>(editorialPrompt(d, examples), (p) => {
+  const parsed = await askChecked<Partial<EditorialEntry>>(editorialPrompt(d, examples), async (p) => {
     if (Array.isArray(p.items)) p.items = dropSelfLink(p.items, d);
-    return checkEntry(p, d);
+    // Форма сначала: она бесплатная, а сверка стоит ходов SDK и сети. Гонять
+    // фактчекер по тексту, который всё равно отклонён за длину, незачем.
+    const form = checkEntry(p, d);
+    return form.length ? form : await vetted(p, d as RawRecord);
   });
   return {
     title: String(parsed.title).trim(),
@@ -537,7 +581,10 @@ export async function writeOne(d: RawDigest, examples: EditorialEntry[]): Promis
 
 /** Одна активность. Пишем только заголовок и интро — остальное не наше. */
 export async function writeActivity(a: RawActivity, examples: EditorialEntry[]): Promise<EditorialEntry> {
-  const parsed = await askChecked<Partial<EditorialEntry>>(activityPrompt(a, examples), (p) => checkActivity(p, a));
+  const parsed = await askChecked<Partial<EditorialEntry>>(activityPrompt(a, examples), async (p) => {
+    const form = checkActivity(p, a);
+    return form.length ? form : await vetted(p, a as RawRecord);
+  });
   return { title: String(parsed.title).trim(), intro: String(parsed.intro).trim(), ...stamp() };
 }
 
