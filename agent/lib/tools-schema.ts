@@ -1,3 +1,4 @@
+import { shopSearchRunBlocked, noteIncompleteShopSearch } from "./shop-search-run.ts";
 import { nativeTurnContext } from "./native-context.ts";
 /**
  * C5/R-A: Anthropic tool_use схема + диспатчер.
@@ -27,7 +28,7 @@ import { getErrorMessage } from "./errors.ts";
 import { INLINE_TOOL_NAMES } from "./constants.ts";
 import { listCloudflareDns } from "./dispatch/cloudflare.ts";
 import { quoteTaxi, taxiStatus } from "./dispatch/taxi.ts";
-import { checkoutShop, listShopPlaces, quoteShop, setShopAddress, shopStatus } from "./dispatch/shop.ts";
+import { checkoutShop, shopAccessRefusal, listShopPlaces, quoteShop, setShopAddress, shopStatus } from "./dispatch/shop.ts";
 import { deliveryStatus, quoteDelivery } from "./dispatch/delivery.ts";
 import Anthropic from "@anthropic-ai/sdk";
 import type { Telegram } from "telegraf";
@@ -1254,6 +1255,9 @@ export async function executeTool(
     throw e;
   }
   const outcome = inlineOutcome(text);
+  if (["SHOP_QUOTE", "SHOP_PLACES"].includes(name)) {
+    try { if (JSON.parse(text).code === "search_incomplete") noteIncompleteShopSearch(ctx); } catch {}
+  }
   // Отказ лимитера уже записан в своей ветке.
   if (!outcome.error?.startsWith("rate_limited")) auditInline(name, ctx, outcome, Date.now() - started);
   return text;
@@ -1346,6 +1350,15 @@ async function dispatchTool(
     // списке. Считаем и коммитим одним синхронным вызовом: `checkRateLimit`
     // оставляет окно гонки между проверкой и коммитом, а здесь его закрыть
     // нечем — своей резервации у инлайнового пути нет.
+    // Rejected owner/group calls never reach the shopping executor. Do not let
+    // them exhaust the owner's private-chat quota; executeTool still audits them.
+    if (["SHOP_PLACES", "SHOP_QUOTE", "SHOP_CHECKOUT", "SHOP_STATUS", "SHOP_SET_ADDRESS"].includes(name)) {
+      const refusal = shopAccessRefusal(ctx);
+      if (refusal) return fmt({ ok: false, error: refusal });
+    }
+    if (["SHOP_QUOTE", "SHOP_PLACES", "SCHEDULE_FOLLOWUP"].includes(name) && shopSearchRunBlocked(ctx)) {
+      return fmt({ ok: false, code: "search_incomplete", error: "Каталог не удалось проверить. Не повторяй поиск и не назначай автоматическую попытку в этом ходе. Сейчас покажи уже проверенные варианты и обозначь неизвестные цены. Новый запрос владельца разрешит новую проверку." });
+    }
     const rl = checkAndConsumeRateLimit(ctx.agentKey, name);
     if (!rl.ok) {
       const reason = rl.reason ?? "rate limited";

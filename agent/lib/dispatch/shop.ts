@@ -1,3 +1,4 @@
+import { blockFollowupDependency, blockedFollowupDependency } from "../followup-execution.ts";
 /**
  * Шаги 10a–10c: покупки в Яндекс Лавке, Яндекс Еде и Яндекс Маркете через браузер на Mac владельца.
  *
@@ -173,6 +174,11 @@ function ownerRefusal(agentKey: string, chatId: number, userId: string | undefin
   return yandexOwnerRefusal(OWNER_POLICY, agentKey, chatId, userId, delegated);
 }
 
+/** The dispatcher checks the same owner boundary before consuming tool quota. */
+export function shopAccessRefusal(ctx: ShopInlineContext): string | null {
+  return ownerRefusal(ctx.agentKey, ctx.chatId, ctx.triggerUserId, inlineDelegated(ctx));
+}
+
 export type ShopToolResult = { ok: boolean } & Record<string, unknown>;
 
 const SERVICE_ERROR = `service must be one of: ${Object.keys(SHOP_SERVICES).join(", ")}`;
@@ -258,6 +264,7 @@ const SHOP_REDIAL_OPS: readonly ShopRequest["op"][] = ["quote", "places", "statu
  * (один повтор).
  */
 async function askMac(request: ShopRequest, userId: string, chatId: number): Promise<ShopOutcome> {
+  if (blockedFollowupDependency(chatId, userId)) return { ok: false, code: "shop_busy" };
   const started = deps.now();
   let busyCount = 0;
   let relaunched = false;
@@ -279,6 +286,7 @@ async function askMac(request: ShopRequest, userId: string, chatId: number): Pro
         await deps.sleep(SHOP_BUSY_POLL_MS);
         continue;
       }
+      if (["mac_offline", "mac_disconnected", "mac_timeout"].includes(code)) blockFollowupDependency(chatId, userId, "shop_browser");
       log.warn("[shop] mac", { op: request.op, error: code, ms });
       throw e;
     }
@@ -292,6 +300,7 @@ async function askMac(request: ShopRequest, userId: string, chatId: number): Pro
     }
     const busy = !out.ok && out.code === "shop_busy";
     if (!busy || deps.now() - started >= SHOP_BUSY_WAIT_MS) {
+      if (busy || (!out.ok && out.code === "browser_unavailable")) blockFollowupDependency(chatId, userId, "shop_browser");
       // Только операция и исход: адреса и товары — личные, в журнал не идут.
       const held = !out.ok && out.busy_op ? { busy_op: out.busy_op, busy_ms: out.busy_ms } : {};
       log.info("[shop] mac", { op: request.op, ok: out.ok, ...(out.ok ? {} : { code: out.code }), ...held, ms: deps.now() - started });
@@ -373,7 +382,7 @@ export async function quoteShop(input: Record<string, unknown>, ctx: ShopInlineC
       max_rub: maxRubFor(limitsFromEnv(), SHOP_GATE_SERVICE[service]),
       valid_min: Math.round(SHOP_QUOTE_TTL_MS / 60_000),
       note:
-        `Это поиск, не заказ. Для заказа — ${shopOrderType(service)} с выбранными товарами: id, name и price_rub ровно из этого расчёта, qty — сколько просил владелец; ` +
+        `Найденные карточки не являются полным каталогом: пустая выдача не доказывает отсутствие товара, другую причину (адрес/закрытие) без проверки не утверждай. Это поиск, не заказ. Для заказа — ${shopOrderType(service)} с выбранными товарами: id, name и price_rub ровно из этого расчёта, qty — сколько просил владелец; ` +
         (out.place ? "place — ресторан ровно из расчёта; если он не тот, что имел в виду владелец, переспроси; " : "") +
         (out.results.some((r) => r.candidates.some((c) => c.options))
           ? "у блюда с options выбор делает владелец: в каждой группе отметь от min до max вариантов (min ≥ 1 — обязательно, не знаешь выбор — спроси, не выбирай сам), " +
