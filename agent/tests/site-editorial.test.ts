@@ -23,6 +23,9 @@ import {
   INTRO_MAX,
   INTRO_MIN,
   SUMMARY_MIN,
+  SUMMARY_MAX,
+  BODY_MAX,
+  retryNote,
   TITLE_MAX,
   TITLE_MIN,
   activityPrompt,
@@ -52,8 +55,8 @@ const digest = (over: Partial<RawDigest> = {}): RawDigest => ({
 
 const good = (over: Partial<EditorialEntry> = {}): EditorialEntry => ({
   title: "Fermah открыл вайтлист маркетплейса доказательств — заявки принимают до конца октября",
-  summary: `**20 сентября** Fermah открыл вайтлист. ${"Деталь. ".repeat(10)}`,
-  body: "Абзац. ".repeat(80),
+  summary: `**20 сентября** Fermah открыл вайтлист. ${"Деталь. ".repeat(20)}`,
+  body: `${"Абзац. ".repeat(45)}\n\n${"Абзац. ".repeat(45)}`,
   items: [{ text: "Анонс в X", url: "https://x.com/fermah/status/1" }],
   ...over,
 });
@@ -218,11 +221,12 @@ describe("активности — заголовок зовёт тратить 
 
   test("образцы для активностей берутся из активностей, а не из выпусков", () => {
     const manual = {
-      digests: { d: good({ title: "ВЫПУСК" }) },
-      activities: { a: okAct({ title: "КАРТОЧКА" }) },
+      digests: { d: good({ title: `ВЫПУСК ${good().title}` }) },
+      activities: { a: okAct({ title: `КАРТОЧКА ${okAct().title}` }) },
     };
-    expect(styleExamples(manual, "activities").map((e) => e.title)).toEqual(["КАРТОЧКА"]);
-    expect(styleExamples(manual, "digests").map((e) => e.title)).toEqual(["ВЫПУСК"]);
+    const first = (e: EditorialEntry) => e.title.split(" ")[0];
+    expect(styleExamples(manual, "activities").map(first)).toEqual(["КАРТОЧКА"]);
+    expect(styleExamples(manual, "digests").map(first)).toEqual(["ВЫПУСК"]);
   });
 });
 
@@ -247,7 +251,7 @@ describe("промпт", () => {
   });
 
   test("образцы стиля берутся из живой редактуры сайта", () => {
-    const manual = { digests: { x: good({ title: "ОБРАЗЕЦ ЗАГОЛОВКА" }) } };
+    const manual = { digests: { x: good({ title: `ОБРАЗЕЦ ЗАГОЛОВКА ${good().title}` }) } };
     expect(styleExamples(manual).length).toBe(1);
     expect(editorialPrompt(digest(), styleExamples(manual))).toContain("ОБРАЗЕЦ ЗАГОЛОВКА");
   });
@@ -308,5 +312,40 @@ describe("раскладка сайта", () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "digests.json"), JSON.stringify([{ id: "a" }]));
     expect(readCorpus(join(siteTree(root), "src/data/current/digests.json"))).toEqual([{ id: "a" }]);
+  });
+});
+
+describe("норма длины — по выпускам, написанным руками (22.09.2026)", () => {
+  test("выпуск в две строки не проходит: так выглядели сырые посты рядом с разбором", () => {
+    const bad = checkEntry(
+      good({ title: "CypherSquad проводит минт NFT на Zcash", summary: "Минт сегодня в 20:00.", body: "Проверяем доступ через чекер." }),
+      digest(),
+    );
+    expect(bad.length).toBe(3);
+  });
+
+  test("тело одним сплошным абзацем не проходит", () => {
+    expect(checkEntry(good({ body: "Абзац. ".repeat(90) }), digest()).join(" ")).toContain("одним абзацем");
+  });
+
+  test("слишком длинный лид отбраковывается так же, как короткий", () => {
+    expect(checkEntry(good({ summary: "Деталь. ".repeat(60) }), digest()).join(" ")).toContain("лид");
+  });
+
+  test("в промпте обе границы лида и тела", () => {
+    const p = editorialPrompt(digest(), []);
+    expect(p).toContain(`${SUMMARY_MIN}-${SUMMARY_MAX}`);
+    expect(p).toContain(`${BODY_MIN}-${BODY_MAX}`);
+  });
+
+  test("короткий образец не показываем: агент принял бы его за норму", () => {
+    const manual = { digests: { short: good({ body: "Абзац.\n\nЕщё абзац." }) } };
+    expect(styleExamples(manual)).toEqual([]);
+  });
+
+  test("повторная попытка получает причины отказа", () => {
+    const note = retryNote(["лид 120 символов, нужно 180-340"]);
+    expect(note).toContain("лид 120 символов");
+    expect(note).toContain("JSON");
   });
 });
