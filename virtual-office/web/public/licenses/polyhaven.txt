@@ -1,0 +1,7 @@
+Textures: wood_floor, fabric_pattern_07, plastered_wall_02
+Source: Poly Haven — https://polyhaven.com/
+License: CC0 1.0 Universal (public domain dedication)
+License terms: https://creativecommons.org/publicdomain/zero/1.0/
+Provider licensing statement: https://docs.polyhaven.com/en/faq
+Exact source URLs and SHA-256 checksums: assets/manifest.json in the source repository.
+These are texture assets only; no website logos, screenshots or other website content is included.

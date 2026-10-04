@@ -10,6 +10,8 @@ enum AgentError: Error { case message(String) }
 @MainActor enum Credentials { static var token = "fixture"; static func read(server: String) -> String? { token } }
 @MainActor var uploadFails = false
 @MainActor var sentMedia: [String] = []
+@MainActor var sentRole: String?
+@MainActor var authoritativeRole: String?
 @MainActor var sentLocation: SharedLocation?
 @MainActor var pollResult: Turn?
 @MainActor var remoteRunning = false
@@ -28,7 +30,7 @@ struct AgentAPI {
   let more = source.count > offset + page.count
   return ConversationIndex(conversations:page,running:remoteRunning,nextCursor:more ? String(offset + page.count) : nil,more:more)
  }
- @MainActor func createConversation(_ id: String, title: String, expectedToken: String? = nil) async throws { }
+ @MainActor func createConversation(_ id: String, title: String, expectedToken: String? = nil) async throws -> ConversationRecord { ConversationRecord(id: id, title: title, updated: 0, agentKey: authoritativeRole) }
  // Как сервер: архивация переносит диалог между списками, удаление убирает из обоих.
  @MainActor func editConversation(_ id: String, title: String? = nil, archived: Bool? = nil, expectedToken: String? = nil) async throws {
   edits.append((id, title, archived))
@@ -41,8 +43,8 @@ struct AgentAPI {
   let rows = archive.filter { $0.seq < (before ?? Int.max) }
   return ConversationHistory(messages: Array(rows.suffix(100)), more: rows.count > 100, running: remoteRunning)
  }
- @MainActor func send(_ text: String, id: String, conversationId: String? = nil, expectedToken: String? = nil, attachmentIds: [String] = [], location: SharedLocation? = nil) async throws -> Turn {
-  sentMedia = attachmentIds; sentLocation = location
+ @MainActor func send(_ text: String, id: String, conversationId: String? = nil, expectedToken: String? = nil, attachmentIds: [String] = [], location: SharedLocation? = nil, agentKey: String? = nil) async throws -> Turn {
+  sentRole = agentKey; sentMedia = attachmentIds; sentLocation = location
   return try await withCheckedThrowingContinuation { continuations.append($0) }
  }
  @MainActor func upload(_ item: AttachmentDraft, expectedToken: String) async throws -> NativeAttachment { if uploadFails { throw URLError(.cannotConnectToHost) }; return item.metadata }
@@ -65,8 +67,11 @@ struct AgentAPI {
    precondition(!model.pending && !model.busy && model.lines.isEmpty && model.draft == oversized)
    precondition(UserDefaults.standard.string(forKey: "pendingTurn") == nil && continuations.isEmpty)
   }
+  authoritativeRole = "backend"
   model.draft = String(repeating: "😀", count: 4_000); precondition(model.send(server: "https://one.example"))
   while continuations.count < 1 { await Task.yield() }
+  precondition(sentRole == "backend", "Must send authoritative role from server, not default Lead")
+  authoritativeRole = nil
   model.abandonWaiting()
   model.draft = "second"; model.send(server: "https://two.example")
   while continuations.count < 2 { await Task.yield() }

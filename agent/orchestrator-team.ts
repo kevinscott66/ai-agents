@@ -10,6 +10,7 @@
  *  - упомянули @конкретного бота → отвечает он;
  *  - никого не упомянули          → отвечает Дирижёр.
  */
+import {configureNativeRole} from "./lib/native-roles.ts";
 import "./lib/telegraf-patch.ts";
 import { Telegraf } from "telegraf";
 import { CHARACTERS, type CharacterDef } from "./characters/index.ts";
@@ -142,8 +143,28 @@ export async function buildBot(def: CharacterDef): Promise<RunningBot | null> {
     handoffDeps,
   });
 
+  let nativeMessageId = -Date.now() * 1000;
+  const nativeRunner: import("./lib/native-api.ts").NativeLead = async (userId, text, reply, history, media) => {
+      const messageId = nativeMessageId--;
+      const routedText = def.key === "orchestrator" ? text : `@${running.username} ${text}`;
+      const chat = { id: Number(userId), type: "private" as const };
+      const from = { id: Number(userId), is_bot: false, first_name: "Owner" };
+      const ctx = {
+        chat, from, message: { message_id: messageId, date: Math.floor(Date.now() / 1000), chat, from, text:routedText, entities: def.key === "orchestrator" ? [] : [{type:"mention",offset:0,length:running.username.length+1}] },
+        telegram: bot.telegram, botInfo: { id: running.id, username: running.username },
+        sendChatAction: async () => true,
+        reply: async (answer: string) => {
+          reply(answer);
+          return { message_id: nativeMessageId--, date: Math.floor(Date.now() / 1000), chat, text: answer };
+        },
+      } as unknown as import("telegraf").Context;
+      await processVoice(ctx, { text, native: true, ...media, history: history?.map((m,i) => ({id:i,chat_id:userId,from_user_id:userId,ts:Date.now(),is_bot:m.role === "assistant" ? 1 : 0,agent_key:m.role === "assistant" ? (m.agentKey ?? "orchestrator") : null,from_name:"Owner",text:m.text})) });
+  };
+  configureNativeRole(def.key,nativeRunner);
+  if(def.key === "orchestrator") configureNativeLead(nativeRunner);
+
   if (def.key === "orchestrator") {
-    let nativeMessageId = -Date.now() * 1000;
+
     configureKnowledgeExtraction();
     configureSigningCodeSender(async (userId, text) => { await bot.telegram.sendMessage(userId, text); });
     // Шаг 9: итог подписанного заказа такси приходит владельцу в личку, отказ со страницы — со скриншотом.
@@ -160,21 +181,7 @@ export async function buildBot(def: CharacterDef): Promise<RunningBot | null> {
     registerSignedActionExecutor(executeSignedTaxi);
     registerSignedActionExecutor(executeSignedShop);
     registerSignedActionExecutor(executeSignedDelivery);
-    configureNativeLead(async (userId, text, reply, history, media) => {
-      const messageId = nativeMessageId--;
-      const chat = { id: Number(userId), type: "private" as const };
-      const from = { id: Number(userId), is_bot: false, first_name: "Owner" };
-      const ctx = {
-        chat, from, message: { message_id: messageId, date: Math.floor(Date.now() / 1000), chat, from, text },
-        telegram: bot.telegram, botInfo: { id: running.id, username: running.username },
-        sendChatAction: async () => true,
-        reply: async (answer: string) => {
-          reply(answer);
-          return { message_id: nativeMessageId--, date: Math.floor(Date.now() / 1000), chat, text: answer };
-        },
-      } as unknown as import("telegraf").Context;
-      await processVoice(ctx, { text, native: true, ...media, history: history?.map((m,i) => ({id:i,chat_id:userId,from_user_id:userId,ts:Date.now(),is_bot:m.role === "assistant" ? 1 : 0,agent_key:m.role === "assistant" ? (m.agentKey ?? "orchestrator") : null,from_name:"Owner",text:m.text})) });
-    });
+
     // Отложенные проверки (lib/followups.ts): вступление владельцу — настоящее
     // сообщение, ход агента идёт ответом на него тем же путём, что и голосовое
     // (без повторной записи входа и без лимита ingest). Отправитель — владелец:
