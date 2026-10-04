@@ -62,7 +62,7 @@ test("catalog disables patch for all models and rejects unknown model fallback",
 test("runtime fails closed on version, missing/duplicate usage and oversized replies; charges final unterminated usage", async () => {
   const dir = await mkdtemp(join(tmpdir(), "codex-protocol-test-"));
   try {
-    for (const scenario of ["version", "missing", "duplicate", "oversized", "unterminated", "native"]) {
+    for (const scenario of ["version", "missing", "duplicate", "oversized", "unterminated", "native", "disabled-warning", "other-error"]) {
       const fake = join(dir, `${scenario}.ts`);
       await writeFile(fake, `#!${process.execPath}
 const args = process.argv.slice(2);
@@ -71,6 +71,7 @@ if (args[0] === '--version') { console.log(scenario === 'version' ? 'codex-cli 0
 if (args[0] === 'debug') { console.log(JSON.stringify({models:[{slug:'test',visibility:'list',priority:1}]})); process.exit(0); }
 await Bun.write(args[args.indexOf('--output-last-message')+1], scenario === 'oversized' ? 'x'.repeat(3*1024*1024) : JSON.stringify({text:'ok',tool_calls:[]}));
 const event = JSON.stringify({type:'turn.completed',usage:{input_tokens:123,output_tokens:45}});
+if (scenario === 'disabled-warning' || scenario === 'other-error') console.log(JSON.stringify({type:'item.completed',item:{type:'error',message:scenario === 'other-error' ? 'Unexpected error' : 'Code Mode is unavailable because code-mode host is disabled. Code mode will fail closed; enable \`features.code_mode_host\` and install \`codex-code-mode-host\`.'}}));
 if (scenario === 'native') console.log(JSON.stringify({type:'item.started',item:{type:'command_execution'}}));
 if (scenario !== 'missing') process.stdout.write(event + (scenario === 'unterminated' ? '' : '\\n'));
 if (scenario === 'duplicate') console.log(event);
@@ -85,8 +86,8 @@ console.log(JSON.stringify({accepted,charged}));`);
       const [code, out, err] = await Promise.all([proc.exited, new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
       expect({scenario, code, err}).toEqual({scenario, code: 0, err: ""});
       const result = JSON.parse(out);
-      expect(result.accepted).toBe(scenario === "unterminated");
-      if (scenario !== "native") expect(result.charged).toBe(["version", "missing"].includes(scenario) ? 0 : 168);
+      expect(result.accepted).toBe(["unterminated", "disabled-warning"].includes(scenario));
+      if (!["native", "other-error"].includes(scenario)) expect(result.charged).toBe(["version", "missing"].includes(scenario) ? 0 : 168);
     }
   } finally { await rm(dir, {recursive: true, force: true}); }
 }, 15_000); // Six isolated multi-process scenarios may exceed the default 5s under build load.
