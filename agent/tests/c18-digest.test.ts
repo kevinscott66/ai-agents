@@ -41,11 +41,22 @@ describe("C18 buildDigest", () => {
     expect(out).not.toContain("(error:");
   });
 
-  test("buildDigest with no data in window → (no data) appears (using future since)", () => {
+  test("buildDigest distinguishes empty activity from missing data (using future since)", () => {
     // Pick a "since" 1 second in the future so nothing matches the 24h window.
     const future = new Date(Date.now() + 60_000);
     const out = buildDigest({ now: future, since: future });
-    expect(out).toContain("(no data)");
+    expect(out).not.toContain("(no data)");
+    expect(out).toContain("Новых изменений задач за период нет.");
+    expect(out).toContain("Действий инструментов за период нет.");
+  });
+
+  test("yesterday usage remains visible without being presented as today's usage", () => {
+    db.prepare("INSERT INTO agent_token_usage(agent_key,date,input_tokens,output_tokens) VALUES(?,?,?,?)")
+      .run("c18_previous", "2098-05-20", 123, 7);
+    const out = buildDigest({ now: new Date("2098-05-21T06:00:00Z") });
+    expect(out).toContain("С полуночи UTC расход токенов не зарегистрирован.");
+    expect(out).toContain("Предыдущие сутки (2098-05-20, UTC): in=123 out=7");
+    expect(out).not.toContain("(no data)");
   });
 
   test("seeded tasks → status counts appear", () => {

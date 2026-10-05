@@ -28,7 +28,6 @@ export interface BuildDigestOptions {
   now?: Date;
 }
 
-const NO_DATA = "(no data)";
 
 /** Format ms duration as compact human string. */
 function fmtAge(ms: number): string {
@@ -67,6 +66,7 @@ export function buildDigest(opts: BuildDigestOptions = {}): string {
 
   const lines: string[] = [];
   lines.push(`📊 Daily digest — ${digestDate} (UTC)`);
+  lines.push("Задачи и инструменты — за 24 часа; токены — с полуночи UTC. Обычные ответы в чате не считаются задачами или действиями инструментов.");
 
   // --- Tasks: per-status counts over last 24h ----------------------------
   lines.push("");
@@ -91,7 +91,7 @@ export function buildDigest(opts: BuildDigestOptions = {}): string {
       total += counts[s];
     }
     if (total === 0) {
-      lines.push(`  ${NO_DATA}`);
+      lines.push("  Новых изменений задач за период нет.");
     } else {
       for (const s of statuses) {
         lines.push(`  ${s}: ${counts[s]}`);
@@ -120,7 +120,7 @@ export function buildDigest(opts: BuildDigestOptions = {}): string {
       )
       .all(sinceMs) as { agent_key: string; n: number }[];
     if (!rows.length) {
-      lines.push(`  ${NO_DATA}`);
+      lines.push("  Действий инструментов за период нет.");
     } else {
       for (const r of rows) {
         lines.push(`  ${r.agent_key}: ${r.n} actions`);
@@ -144,7 +144,7 @@ export function buildDigest(opts: BuildDigestOptions = {}): string {
     const count = countPendingApprovalsInChat();
     const oldest = oldestPendingApprovalAt();
     if (!count || oldest === null) {
-      lines.push(`  ${NO_DATA}`);
+      lines.push("  Ожидают подтверждения: 0.");
     } else {
       const age = fmtAge(now.getTime() - oldest);
       lines.push(`  pending: ${count}, oldest: ${age}`);
@@ -169,7 +169,7 @@ export function buildDigest(opts: BuildDigestOptions = {}): string {
       )
       .all(digestDate) as { agent_key: string; input: number; output: number }[];
     if (!rows.length) {
-      lines.push(`  ${NO_DATA}`);
+      lines.push("  С полуночи UTC расход токенов не зарегистрирован.");
     } else {
       for (const r of rows) {
         const budget = getBudget(r.agent_key);
@@ -181,6 +181,17 @@ export function buildDigest(opts: BuildDigestOptions = {}): string {
     }
   } catch (e: any) {
     lines.push(`  (error: ${e?.message ?? e})`);
+  }
+
+  // Daily usage is stored in UTC buckets; never label yesterday as a rolling 24h total.
+  const previousDate = ymdUTC(new Date(now.getTime() - DAY_MS));
+  try {
+    const previous = db.prepare(
+      "SELECT COALESCE(SUM(input_tokens), 0) AS input, COALESCE(SUM(output_tokens), 0) AS output FROM agent_token_usage WHERE date = ?",
+    ).get(previousDate) as { input: number; output: number };
+    lines.push(`  Предыдущие сутки (${previousDate}, UTC): in=${previous.input} out=${previous.output}`);
+  } catch {
+    lines.push("  Расход за предыдущие сутки временно недоступен.");
   }
 
   // --- Errors: failed actions + self-diag retries last 24h ---------------
@@ -201,7 +212,7 @@ export function buildDigest(opts: BuildDigestOptions = {}): string {
       )
       .get(sinceMs) as { n: number } | undefined)?.n ?? 0;
     if (failedActions === 0 && diagRetries === 0) {
-      lines.push(`  ${NO_DATA}`);
+      lines.push("  Ошибок действий: 0; повторов диагностики: 0.");
     } else {
       lines.push(`  failed actions: ${failedActions}`);
       lines.push(`  self-diag retries: ${diagRetries}`);
