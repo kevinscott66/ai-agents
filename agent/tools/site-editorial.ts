@@ -10,8 +10,8 @@
  * Разницу делал редакционный слой, и делался он руками. Пока руки не дошли,
  * свежий материал висит текстом поста.
  *
- * Этот инструмент — те же руки, только агентские и без выходных. Через Claude
- * Agent SDK (подписка, WebSearch/WebFetch) он берёт материалы канала, у которых
+ * Этот инструмент — те же руки, только агентские и без выходных. Через Codex
+ * research-адаптер он берёт материалы канала, у которых
  * редактуры ещё нет, читает первоисточники поста и переписывает их по образцу
  * самого сайта.
  *
@@ -166,7 +166,7 @@ export const EDITORIAL_MAX_TURNS = 24;
 
 export const EDITORIAL_SYSTEM = [
   "Ты — редактор сайта delabs.space (крипта, airdrop, AI×Web3).",
-  "Пишешь по-русски, сухо и конкретно, без ИИ-клише («в эпоху цифровизации», «давайте разберёмся», «стоит отметить»).",
+  "Пишешь по-русски, живо и конкретно, без ИИ-клише («в эпоху цифровизации», «давайте разберёмся», «стоит отметить»).",
   "Ты не сочиняешь новость, а разворачиваешь уже случившуюся: факты берёшь из поста и его первоисточников.",
   "Ни одной цифры, даты или имени, которых нет в посте или в открытом тобой источнике. Нет факта — не пиши его.",
   "Ссылки не выдумываешь никогда.",
@@ -179,18 +179,14 @@ export const EDITORIAL_SYSTEM = [
 export const LABEL_TITLE = /^[\p{L}\p{N}_]+:\s/u;
 
 /**
- * Границы для выпусков сняты с 250 выпусков, написанных руками: заголовки
- * 70-116 символов (медиана 93), лид 181-270 (медиана 221), тело 284-1359
- * (медиана 796). До 22.09.2026 здесь стояли 40/80/300 — «чтобы не было
- * пусто», — и агент честно писал по нижней границе: выпуск на две строки
- * среди соседей на три абзаца. Нижняя граница — это то, что агент считает
- * нормой, поэтому она взята у десятого процентиля написанного, а не у нуля.
+ * Короткий проверенный анонс не отклоняется ради объёма. Пределы защищают
+ * от пустого/раздутого текста; факты отдельно проверяет vetted.
  */
-export const TITLE_MIN = 70;
+export const TITLE_MIN = 35;
 export const TITLE_MAX = 130;
-export const SUMMARY_MIN = 180;
+export const SUMMARY_MIN = 80;
 export const SUMMARY_MAX = 340;
-export const BODY_MIN = 500;
+export const BODY_MIN = 160;
 export const BODY_MAX = 1600;
 
 /**
@@ -275,13 +271,17 @@ export function editorialPrompt(d: RawDigest, examples: EditorialEntry[]): strin
     sample,
     "",
     "Что нужно:",
-    `- title: ${TITLE_MIN}-${TITLE_MAX} символов, «кто что сделал — деталь с цифрой», без точки в конце.`,
-    "  Форму «Проект: Фраза» не используй: именно её мы и заменяем.",
+    `- title: ${TITLE_MIN}-${TITLE_MAX} символов, «событие + конкретная выгода, масштаб или ограничение для читателя», без точки в конце.`,
+    "  Форму «Проект: Фраза» не используй. Сделай заголовок цепляющим: сильный глагол, проверенная деталь, понятный повод открыть материал.",
+    "  Не выдумывай цифру ради заголовка. Никаких обещаний заработка, гарантированного дропа, ложной срочности или сенсации без подтверждения.",
+    "  Заголовок обязан точно соответствовать итоговому тексту: те же проект, событие, дата и условия. Не называй заявку полученной наградой.",
+    "  Прошедший дедлайн нельзя подавать как приглашение участвовать сейчас.",
+    `Текущая дата UTC: ${new Date().toISOString().slice(0, 10)}. Дата выпуска — не обязательно дата события.`,
     `- summary: 2 предложения, ${SUMMARY_MIN}-${SUMMARY_MAX} символов, начинается с даты события полужирным (**20 сентября**),`,
     "  ключевые числа тоже полужирным.",
-    `- body: 2-3 абзаца Markdown, ${BODY_MIN}-${BODY_MAX} символов. Первый абзац объясняет, что это за проект и что произошло,`,
+    `- body: 1-3 абзаца Markdown, ${BODY_MIN}-${BODY_MAX} символов. Первый абзац объясняет, что это за проект и что произошло,`,
     "  второй — детали, сроки, условия и что сделать читателю, третий (если есть что сказать) — оговорки и риски.",
-    "  Числа полужирным, ссылки в тексте — обычным Markdown. Длину набирай фактами из источников, а не водой.",
+    "  Числа полужирным, ссылки в тексте — обычным Markdown. Короткий факт оставляй короткой новостью; не дополняй выдумками и водой ради длины.",
     "- items: список источников {text,url}. ВСЕ ссылки поста обязаны остаться (текст можно переписать),",
     "  к ним можно добавить те, что ты открыл сам.",
     "",
@@ -385,7 +385,7 @@ export function checkEntry(e: Partial<EditorialEntry>, d: RawDigest): string[] {
     bad.push(`лид ${summary.length} символов, нужно ${SUMMARY_MIN}-${SUMMARY_MAX}`);
   if (body.length < BODY_MIN || body.length > BODY_MAX)
     bad.push(`тело ${body.length} символов, нужно ${BODY_MIN}-${BODY_MAX}`);
-  else if (body.split(/\n\s*\n/).filter((p) => p.trim()).length < 2) bad.push("тело одним абзацем, нужно 2-3");
+
 
   const items = Array.isArray(e.items) ? e.items : [];
   for (const it of items) {
@@ -397,7 +397,7 @@ export function checkEntry(e: Partial<EditorialEntry>, d: RawDigest): string[] {
   // ссылку и дописать свои, но потерять ссылку поста — нет.
   const have = new Set(items.map((it) => it?.url));
   const lost = (d.items ?? []).filter((it) => !have.has(it.url));
-  if (items.length && lost.length) bad.push(`потеряны ссылки поста: ${lost.map((l) => l.url).join(", ")}`);
+  if (lost.length) bad.push(`потеряны ссылки поста: ${lost.map((l) => l.url).join(", ")}`);
 
   return bad;
 }
@@ -447,10 +447,12 @@ export function pickPending<T extends RawRecord>(
   auto: EditorialFile,
   kind: Kind = "digests",
   limit = EDITORIAL_BATCH[kind],
+  retryAfter: Record<string, number> = {},
+  now = Date.now(),
 ): T[] {
   const done = new Set([...Object.keys(manual[kind] ?? {}), ...Object.keys(auto[kind] ?? {})]);
   return rows
-    .filter((r) => r.origin === "telegram" && !done.has(r.id))
+    .filter((r) => r.origin === "telegram" && !done.has(r.id) && !(retryAfter[`${kind}:${r.id}`] > now))
     .sort((a, b) => String(b.date ?? "").localeCompare(String(a.date ?? "")))
     .slice(0, limit);
 }
@@ -597,12 +599,14 @@ export async function main(): Promise<void> {
   const tree = siteTree();
   const manual = readJson<EditorialFile>(join(tree, "src/data/snapshot/editorial.json"), {});
   const auto = readJson<EditorialFile>(AUTO_PATH, {});
+  const retryPath = `${AUTO_PATH}.retries.json`;
+  const retryAfter = readJson<Record<string, number>>(retryPath, {});
   let written = 0;
   let seen = 0;
 
   for (const kind of KINDS) {
     const rows = readCorpus<RawRecord>(join(tree, `src/data/current/${kind}.json`));
-    const pending = pickPending(rows, manual, auto, kind);
+    const pending = pickPending(rows, manual, auto, kind, EDITORIAL_BATCH[kind], retryAfter);
     if (!pending.length) {
       console.log(`[site-editorial] ${kind}: без редактуры никого`);
       continue;
@@ -615,17 +619,22 @@ export async function main(): Promise<void> {
       try {
         into[r.id] = kind === "digests" ? await writeOne(r, examples) : await writeActivity(r, examples);
         written++;
+        delete retryAfter[`${kind}:${r.id}`];
+        writeAtomic(retryPath, retryAfter);
         console.log(`[site-editorial] ${r.id}\n    ${into[r.id].title}`);
         // Пишем после каждого материала: прогон может упереться в таймаут
         // юнита, и терять из-за этого уже написанное незачем.
         writeAtomic(AUTO_PATH, auto);
       } catch (err) {
+        retryAfter[`${kind}:${r.id}`] = Date.now() + 6 * 60 * 60 * 1000;
+        writeAtomic(retryPath, retryAfter);
         console.warn(`[site-editorial] пропущен ${r.id}: ${(err as Error).message}`);
       }
     }
   }
 
   if (seen) console.log(`[site-editorial] написано ${written} из ${seen}; сайт подхватит на пересборке корпуса`);
+  if (seen && !written) throw new Error("No editorial entries passed verification; retries deferred for 6 hours");
 }
 
 if (import.meta.main) {

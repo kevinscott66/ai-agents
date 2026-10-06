@@ -315,17 +315,19 @@ describe("раскладка сайта", () => {
   });
 });
 
-describe("норма длины — по выпускам, написанным руками (22.09.2026)", () => {
+describe("короткие проверенные новости и границы объёма", () => {
   test("выпуск в две строки не проходит: так выглядели сырые посты рядом с разбором", () => {
     const bad = checkEntry(
       good({ title: "CypherSquad проводит минт NFT на Zcash", summary: "Минт сегодня в 20:00.", body: "Проверяем доступ через чекер." }),
       digest(),
     );
-    expect(bad.length).toBe(3);
+    expect(bad.join(" ")).toContain("лид");
+    expect(bad.join(" ")).toContain("тело");
   });
 
-  test("тело одним сплошным абзацем не проходит", () => {
-    expect(checkEntry(good({ body: "Абзац. ".repeat(90) }), digest()).join(" ")).toContain("одним абзацем");
+  test("короткая новость может быть одним абзацем, первоисточники остаются обязательны", () => {
+    expect(checkEntry(good({ body: "Проверенная деталь события. ".repeat(8) }), digest())).toEqual([]);
+    expect(checkEntry(good({items: []}), digest()).join(" ")).toContain("потеряны ссылки");
   });
 
   test("слишком длинный лид отбраковывается так же, как короткий", () => {
@@ -348,4 +350,11 @@ describe("норма длины — по выпускам, написанным 
     expect(note).toContain("лид 120 символов");
     expect(note).toContain("JSON");
   });
+});
+
+// A blocked source must not consume the same slots every half-hour.
+test("retry cooldown frees slots and expires", () => {
+  const rows=[digest({id:"blocked",date:"2026-10-06"}),digest({id:"next",date:"2026-10-05"})];
+  expect(pickPending(rows,{}, {}, "digests",1,{"digests:blocked":200},100)[0].id).toBe("next");
+  expect(pickPending(rows,{}, {}, "digests",1,{"digests:blocked":200},201)[0].id).toBe("blocked");
 });
