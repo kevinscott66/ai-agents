@@ -31,6 +31,7 @@ import {
   activityPrompt,
   checkActivity,
   checkEntry,
+  checkPublication,
   dropSelfLink,
   editorialPrompt,
   extractJson,
@@ -186,14 +187,14 @@ describe("активности — заголовок зовёт тратить 
     expect(checkActivity(okAct(), act())).toEqual([]);
   });
 
-  test("без оговорки после тире не пускаем: это половина пользы заголовка", () => {
-    const bad = checkActivity(okAct({ title: "Lora открыла тестнет аренды ценовой экспозиции на MegaETH и раздаёт очки" }), act());
-    expect(bad.join(" ")).toContain("после тире");
+  test("естественный заголовок без тире проходит, условия остаются в интро", () => {
+    const bad = checkActivity(okAct({ title: "На MegaETH открылся тестнет аренды ценовой экспозиции Lora" }), act());
+    expect(bad).toEqual([]);
   });
 
-  test("заголовок без названия проекта не годится: карточку ищут по проекту", () => {
-    const bad = checkActivity(okAct({ title: "Команда открыла тестнет аренды экспозиции на MegaETH — токен не анонсирован" }), act());
-    expect(bad.join(" ")).toContain("Lora");
+  test("проект уже указан отдельно на карточке", () => {
+    const bad = checkActivity(okAct({ title: "Открылся тестнет аренды ценовой экспозиции на MegaETH" }), act());
+    expect(bad).toEqual([]);
   });
 
   test("границы интро отбивают и отписку, и простыню", () => {
@@ -315,17 +316,19 @@ describe("раскладка сайта", () => {
   });
 });
 
-describe("норма длины — по выпускам, написанным руками (22.09.2026)", () => {
+describe("короткие проверенные новости и границы объёма", () => {
   test("выпуск в две строки не проходит: так выглядели сырые посты рядом с разбором", () => {
     const bad = checkEntry(
       good({ title: "CypherSquad проводит минт NFT на Zcash", summary: "Минт сегодня в 20:00.", body: "Проверяем доступ через чекер." }),
       digest(),
     );
-    expect(bad.length).toBe(3);
+    expect(bad.join(" ")).toContain("лид");
+    expect(bad.join(" ")).toContain("тело");
   });
 
-  test("тело одним сплошным абзацем не проходит", () => {
-    expect(checkEntry(good({ body: "Абзац. ".repeat(90) }), digest()).join(" ")).toContain("одним абзацем");
+  test("короткий пост не проходит как расширенный разбор, источники обязательны", () => {
+    expect(checkEntry(good({ body: "Проверенная деталь события. ".repeat(8) }), digest()).join(" ")).toContain("тело");
+    expect(checkEntry(good({items: []}), digest()).join(" ")).toContain("потеряны ссылки");
   });
 
   test("слишком длинный лид отбраковывается так же, как короткий", () => {
@@ -349,3 +352,31 @@ describe("норма длины — по выпускам, написанным 
     expect(note).toContain("JSON");
   });
 });
+
+// A blocked source must not consume the same slots every half-hour.
+test("retry cooldown frees slots and expires", () => {
+  const rows=[digest({id:"blocked",date:"2026-10-06"}),digest({id:"next",date:"2026-10-05"})];
+  expect(pickPending(rows,{}, {}, "digests",1,{"digests:blocked":200},100)[0].id).toBe("next");
+  expect(pickPending(rows,{}, {}, "digests",1,{"digests:blocked":200},201)[0].id).toBe("blocked");
+});
+
+ test("title-only manual edits allow expansion; full manual bodies stay protected", () => {
+ const rows=[digest({id:"title"}),digest({id:"body"}),digest({id:"short-auto"})];
+ const manual={digests:{title:good({body:undefined}),body:good({body:"Короткий ручной текст"})}};
+ const auto={digests:{"short-auto":good({body:"Старый короткий пост"})}};
+ expect(pickPending(rows,manual,auto).map(r=>r.id).sort()).toEqual(["short-auto","title"]);
+ });
+
+ test("fact checker sees retained manual title and blocks a contradictory published pair", async () => {
+ const proposal=good({title:"Fermah отложил открытие вайтлиста — прежняя дата отменена"});
+ const manual={title:"Fermah открыл вайтлист — заявки принимают сегодня"};
+ let checked=false;
+ const result=await checkPublication(proposal,digest(),manual,async (published)=>{
+   checked=true;
+   expect(published.title).toBe(manual.title);
+   expect(published.body).toBe(proposal.body);
+   return ["Сохранённый заголовок противоречит исследованным фактам"];
+ });
+ expect(checked).toBe(true);
+ expect(result).toHaveLength(1);
+ });
