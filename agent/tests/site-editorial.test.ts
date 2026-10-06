@@ -31,6 +31,7 @@ import {
   activityPrompt,
   checkActivity,
   checkEntry,
+  checkPublication,
   dropSelfLink,
   editorialPrompt,
   extractJson,
@@ -325,8 +326,8 @@ describe("короткие проверенные новости и границ
     expect(bad.join(" ")).toContain("тело");
   });
 
-  test("короткая новость может быть одним абзацем, первоисточники остаются обязательны", () => {
-    expect(checkEntry(good({ body: "Проверенная деталь события. ".repeat(8) }), digest())).toEqual([]);
+  test("короткий пост не проходит как расширенный разбор, источники обязательны", () => {
+    expect(checkEntry(good({ body: "Проверенная деталь события. ".repeat(8) }), digest()).join(" ")).toContain("тело");
     expect(checkEntry(good({items: []}), digest()).join(" ")).toContain("потеряны ссылки");
   });
 
@@ -358,3 +359,24 @@ test("retry cooldown frees slots and expires", () => {
   expect(pickPending(rows,{}, {}, "digests",1,{"digests:blocked":200},100)[0].id).toBe("next");
   expect(pickPending(rows,{}, {}, "digests",1,{"digests:blocked":200},201)[0].id).toBe("blocked");
 });
+
+ test("title-only manual edits allow expansion; full manual bodies stay protected", () => {
+ const rows=[digest({id:"title"}),digest({id:"body"}),digest({id:"short-auto"})];
+ const manual={digests:{title:good({body:undefined}),body:good({body:"Короткий ручной текст"})}};
+ const auto={digests:{"short-auto":good({body:"Старый короткий пост"})}};
+ expect(pickPending(rows,manual,auto).map(r=>r.id).sort()).toEqual(["short-auto","title"]);
+ });
+
+ test("fact checker sees retained manual title and blocks a contradictory published pair", async () => {
+ const proposal=good({title:"Fermah отложил открытие вайтлиста — прежняя дата отменена"});
+ const manual={title:"Fermah открыл вайтлист — заявки принимают сегодня"};
+ let checked=false;
+ const result=await checkPublication(proposal,digest(),manual,async (published)=>{
+   checked=true;
+   expect(published.title).toBe(manual.title);
+   expect(published.body).toBe(proposal.body);
+   return ["Сохранённый заголовок противоречит исследованным фактам"];
+ });
+ expect(checked).toBe(true);
+ expect(result).toHaveLength(1);
+ });
