@@ -187,14 +187,14 @@ describe("активности — заголовок зовёт тратить 
     expect(checkActivity(okAct(), act())).toEqual([]);
   });
 
-  test("без оговорки после тире не пускаем: это половина пользы заголовка", () => {
-    const bad = checkActivity(okAct({ title: "Lora открыла тестнет аренды ценовой экспозиции на MegaETH и раздаёт очки" }), act());
-    expect(bad.join(" ")).toContain("после тире");
+  test("естественный заголовок без тире проходит, условия остаются в интро", () => {
+    const bad = checkActivity(okAct({ title: "На MegaETH открылся тестнет аренды ценовой экспозиции Lora" }), act());
+    expect(bad).toEqual([]);
   });
 
-  test("заголовок без названия проекта не годится: карточку ищут по проекту", () => {
-    const bad = checkActivity(okAct({ title: "Команда открыла тестнет аренды экспозиции на MegaETH — токен не анонсирован" }), act());
-    expect(bad.join(" ")).toContain("Lora");
+  test("проект уже указан отдельно на карточке", () => {
+    const bad = checkActivity(okAct({ title: "Открылся тестнет аренды ценовой экспозиции на MegaETH" }), act());
+    expect(bad).toEqual([]);
   });
 
   test("границы интро отбивают и отписку, и простыню", () => {
