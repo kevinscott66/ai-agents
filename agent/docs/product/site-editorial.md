@@ -1,5 +1,13 @@
 # Site editorial queue
 
+Digest candidates come from `src/data/current/editorial-candidates.json`, not
+the public `current/digests.json`. The site builds this private queue from the
+Telegram snapshot before applying its publication gate, using the same API-date
+selection as the public corpus. Reading public digests would create a permanent
+queue deadlock for withheld drafts. Activities still come from
+`current/activities.json`. A missing queue fails the run instead of looking
+like an empty queue.
+
 `tools/site-editorial.ts` uses `lib/codex-editorial.ts` to research primary sources,
 then the existing factual verifier before publishing editorial overlays. Headlines
 must match the same project, event, date and conditions as the body. Engaging wording

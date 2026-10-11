@@ -314,6 +314,21 @@ describe("раскладка сайта", () => {
     writeFileSync(join(dir, "digests.json"), JSON.stringify([{ id: "a" }]));
     expect(readCorpus(join(siteTree(root), "src/data/current/digests.json"))).toEqual([{ id: "a" }]);
   });
+
+  test("неопубликованный черновик остаётся в отдельной очереди редактора", () => {
+    const root = join(tmp, "draft-layout");
+    const current = join(root, "src/data/current");
+    mkdirSync(current, { recursive: true });
+    writeFileSync(join(current, "editorial-candidates.json"), JSON.stringify([digest({ id: "unpublished" })]));
+    writeFileSync(join(current, "digests.json"), JSON.stringify([]));
+    const candidates = readCorpus<RawDigest>(join(current, "editorial-candidates.json"));
+    expect(pickPending(candidates, {}, {}, "digests").map(row => row.id)).toEqual(["unpublished"]);
+    expect(readCorpus(join(current, "digests.json"))).toEqual([]);
+  });
+
+  test("отсутствующая очередь не выглядит отсутствием новых заметок", () => {
+    expect(() => readCorpus(join(tmp, "missing-editorial-candidates.json"))).toThrow(/нет корпуса/);
+  });
 });
 
 describe("короткие проверенные новости и границы объёма", () => {

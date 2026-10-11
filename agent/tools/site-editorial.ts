@@ -619,7 +619,9 @@ export async function main(): Promise<void> {
   let seen = 0;
 
   for (const kind of KINDS) {
-    const rows = readCorpus<RawRecord>(join(tree, `src/data/current/${kind}.json`));
+    const rows: RawRecord[] = kind === "digests"
+      ? readCorpus<RawRecord>(join(tree, "src/data/current/editorial-candidates.json"))
+      : readCorpus<RawRecord>(join(tree, "src/data/current/activities.json"));
     const pending = pickPending(rows, manual, auto, kind, EDITORIAL_BATCH[kind], retryAfter);
     if (!pending.length) {
       console.log(`[site-editorial] ${kind}: без редактуры никого`);
