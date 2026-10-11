@@ -18,6 +18,13 @@ evidence is a reason to defer, not pad or invent details. Title 35–130 and sum
 80–340 character bounds remain; source preservation
 and factual checks remain mandatory, including when the model returns an empty list.
 
+The shared Codex adapter keeps the publication editor in web-search-only mode.
+The site's separate freshness runner may explicitly enable bounded observations
+downloaded from curated official drop-rule URLs. These page excerpts remain untrusted
+data; the site verifies that every cited quote appears in the fetched text before a
+positive review can be accepted. This mode is opt-in per call and does not permit
+filesystem, shell, or publication tools.
+
 A failed entry waits six hours before another attempt. Retry deadlines are atomically
 stored alongside the automatic editorial file as `<AUTO_PATH>.retries.json`, keeping
 unreachable sources from occupying every batch. Success clears its deadline. If all
