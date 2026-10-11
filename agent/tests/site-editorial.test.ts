@@ -35,6 +35,8 @@ import {
   dropSelfLink,
   editorialPrompt,
   extractJson,
+  isEditorialMeta,
+  needsDigestEditorial,
   pickPending,
   readCorpus,
   siteTree,
@@ -107,13 +109,50 @@ describe("pickPending — кого берём в работу", () => {
     digest({ id: "a", date: "2026-09-18" }),
     digest({ id: "b", date: "2026-09-20" }),
     digest({ id: "c", date: "2026-09-19" }),
-    digest({ id: "api", date: "2026-09-20", origin: "api" }),
+    digest({ id: "api", date: "2026-09-20", origin: "api", title: "Fermah открыл приём заявок на тестирование нового продукта", body: "Факты и контекст. ".repeat(60) }),
   ];
   const empty = { digests: {} };
 
-  test("берём только выпуски канала: у выпусков API редактура своя", () => {
+  test("полные архивные материалы не переписываем без причины", () => {
     const ids = pickPending(rows, empty, empty).map((d) => d.id);
     expect(ids).not.toContain("api");
+  });
+
+  test("короткие и ярлыковые API/saved публикации попадают в общую очередь", () => {
+    const api = digest({ id: "api-short", origin: "api", body: "Проверенный короткий текст.", date: "2026-09-21" });
+    const saved = digest({ id: "saved-label", origin: "saved", title: "Fermah: Открыт вайтлист", body: "Текст. ".repeat(100), date: "2026-09-22" });
+    expect(needsDigestEditorial(api)).toBe(true);
+    expect(needsDigestEditorial(saved)).toBe(true);
+    expect(pickPending([api, saved], empty, empty).map((d) => d.id)).toEqual(["saved-label", "api-short"]);
+  });
+
+  test("при переполнении один слот достаётся самому старому долгу", () => {
+    const all = Array.from({ length: 5 }, (_, i) => digest({ id: `news-${i}`, date: `2026-10-0${i + 1}` }));
+    expect(pickPending(all, empty, empty, "digests", 3).map((d) => d.id)).toEqual(["news-4", "news-3", "news-0"]);
+  });
+
+  test("редакционный отказ не считается готовой статьёй и возвращается в очередь", () => {
+    const failed = good({ title: "Материал об Entropy не выйдет без подтверждённых источников" });
+    const row = digest({ id: "negative" });
+    expect(isEditorialMeta(failed.title)).toBe(true);
+    expect(checkEntry(failed, row).join(" ")).toContain("редакционный отказ");
+    expect(pickPending([row], empty, { digests: { negative: failed } }).map((d) => d.id)).toEqual(["negative"]);
+  });
+
+  test("старые короткие правки повторно проверяются один раз, новые короткие не зацикливаются", () => {
+    const row = digest({ id: "brief" });
+    const brief = good({ body: "Факт и контекст. ".repeat(28) });
+    expect(brief.body!.length).toBeGreaterThanOrEqual(BODY_MIN);
+    expect(brief.body!.length).toBeLessThan(600);
+    expect(pickPending([row], empty, { digests: { brief } }).map((d) => d.id)).toEqual(["brief"]);
+    expect(pickPending([row], empty, { digests: { brief: { ...brief, editorialVersion: 2 } } })).toEqual([]);
+  });
+
+  test("подтверждаемая короткая новость не обязана быть растянута до 600 знаков", () => {
+    const short = good({ body: "Fermah открыл набор участников для тестирования. Условия и сроки названы на официальной странице проекта.\n\nЗаявка не означает гарантированного доступа или вознаграждения. Перед подключением кошелька стоит сверить адрес сайта с анонсом проекта.\n\nПроект не объявлял о токене и не публиковал условия раздачи. Следующие этапы будут указаны в документации." });
+    expect(short.body!.length).toBeGreaterThanOrEqual(BODY_MIN);
+    expect(short.body!.length).toBeLessThan(600);
+    expect(checkEntry(short, digest())).toEqual([]);
   });
 
   test("свежие вперёд: читателю важнее сегодняшний выпуск, чем позавчерашний", () => {

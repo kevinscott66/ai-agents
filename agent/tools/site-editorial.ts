@@ -11,9 +11,9 @@
  * свежий материал висит текстом поста.
  *
  * Этот инструмент — те же руки, только агентские и без выходных. Через Codex
- * research-адаптер он берёт материалы канала, у которых
- * редактуры ещё нет, читает первоисточники поста и переписывает их по образцу
- * самого сайта.
+ * research-адаптер он берёт необработанные заметки канала и короткие либо
+ * шаблонно озаглавленные публикации API/очереди сохранённых материалов,
+ * читает первоисточники и переписывает только подтверждённое.
  *
  * Правит только текст, которым материал представлен читателю: у выпуска —
  * заголовок, лид, тело и список источников, у активности — заголовок и интро.
@@ -91,6 +91,7 @@ export interface EditorialEntry {
   /** Служебное: кто и когда написал. build-index эти поля игнорирует. */
   at?: string;
   by?: string;
+  editorialVersion?: number;
 }
 
 export type EditorialFile = Partial<Record<Kind, Record<string, EditorialEntry>>>;
@@ -186,8 +187,24 @@ export const TITLE_MIN = 35;
 export const TITLE_MAX = 130;
 export const SUMMARY_MIN = 80;
 export const SUMMARY_MAX = 340;
-export const BODY_MIN = 600;
+// A sourced short news item can be complete below 600 characters. The old
+// quota repeatedly rejected verified 350–599 character reports and encouraged
+// padding with unverifiable context.
+export const BODY_MIN = 350;
 export const BODY_MAX = 3200;
+export const LEGACY_BODY_REVIEW_BELOW = 600;
+
+/** Editorial process messages are not articles, even when a checker finds no false claim. */
+export function isEditorialMeta(value: string): boolean {
+  return /(?:материал|публикаци[яюи])[^.!?\n]{0,110}(?:не выйдет|не будет опубликован|без подтвержд[её]нных источников)|нет подтвержд[её]нного события проекта/iu.test(value);
+}
+
+export function needsDigestEditorial(row: RawDigest): boolean {
+  const title = String(row.title ?? "").trim();
+  const body = String(row.body ?? "").trim();
+  return LABEL_TITLE.test(title) || title.length < TITLE_MIN || title.length > TITLE_MAX ||
+    body.length < LEGACY_BODY_REVIEW_BELOW || isEditorialMeta(`${title}\n${row.summary ?? ""}\n${body}`);
+}
 
 /**
  * Сколько раз переспрашиваем модель, если текст не прошёл проверки. Причины
@@ -202,7 +219,7 @@ export const EDITORIAL_ATTEMPTS = 2;
  */
 export const ACT_TITLE_MIN = 35;
 export const ACT_TITLE_MAX = 130;
-export const INTRO_MIN = 350;
+export const INTRO_MIN = 240;
 export const INTRO_MAX = 1200;
 
 /**
@@ -249,7 +266,7 @@ export function editorialPrompt(d: RawDigest, examples: EditorialEntry[]): strin
     )
     .join("\n\n");
   return [
-    "Вот выпуск, который сайт забрал из телеграм-канала как есть. Перепиши его под сайт.",
+    "Вот публикация из очереди сайта. Проверь её по первоисточникам и отредактируй только подтверждённое.",
     "",
     head(d),
     `Текст поста: ${d.summary ?? ""} ${d.body ?? ""}`.trim(),
@@ -274,9 +291,9 @@ export function editorialPrompt(d: RawDigest, examples: EditorialEntry[]): strin
     `Текущая дата UTC: ${new Date().toISOString().slice(0, 10)}. Дата выпуска — не обязательно дата события.`,
     `- summary: 2 предложения, ${SUMMARY_MIN}-${SUMMARY_MAX} символов, начинается с даты события полужирным (**20 сентября**),`,
     "  ключевые числа тоже полужирным.",
-    `- body: 3-5 содержательных абзацев Markdown, ${BODY_MIN}-${BODY_MAX} символов. Первый абзац объясняет, что это за проект и что произошло,`,
+    `- body: 2-5 содержательных абзацев Markdown, ${BODY_MIN}-${BODY_MAX} символов. Первый абзац объясняет, что это за проект и что произошло,`,
     "  Раскрой механику изменения, условия доступа и сроки, практическое значение и подтверждённые ограничения. Добавь контекст из официальной документации, если пост короткий.",
-    "  Каждый абзац должен добавлять новый факт или объяснять механику. Не повторяй лид и не растягивай перечень неизвестного ради объёма.",
+    "  Каждый абзац должен добавлять новый факт или объяснять механику. Не повторяй лид и не растягивай перечень неизвестного ради объёма. Если подтверждено только короткое событие, пиши коротко.",
     "  Числа полужирным, ссылки в тексте — обычным Markdown. Если источников не хватает для содержательного разбора, не дополняй текст выдумками и водой: такой результат не должен проходить как готовый разбор.",
     "- items: список источников {text,url}. ВСЕ ссылки поста обязаны остаться (текст можно переписать),",
     "  к ним можно добавить те, что ты открыл сам.",
@@ -376,7 +393,9 @@ export function checkEntry(e: Partial<EditorialEntry>, d: RawDigest): string[] {
     bad.push(`заголовок ${title.length} символов, нужно ${TITLE_MIN}-${TITLE_MAX}`);
   if (title.endsWith(".")) bad.push("заголовок с точкой в конце");
   if (LABEL_TITLE.test(title)) bad.push("заголовок остался ярлыком «Проект: Фраза»");
-  if (title && title === d.title.trim()) bad.push("заголовок не изменился");
+  if (title && title === d.title.trim() && (d.origin === "telegram" || LABEL_TITLE.test(title)))
+    bad.push("заголовок не изменился");
+  if (isEditorialMeta(`${title}\n${summary}\n${body}`)) bad.push("текст описывает редакционный отказ вместо события");
   if (summary.length < SUMMARY_MIN || summary.length > SUMMARY_MAX)
     bad.push(`лид ${summary.length} символов, нужно ${SUMMARY_MIN}-${SUMMARY_MAX}`);
   if (body.length < BODY_MIN || body.length > BODY_MAX)
@@ -432,7 +451,7 @@ export function dropSelfLink(items: DigestItem[], d: RawDigest): DigestItem[] {
   return items.filter((it) => !d.sourceUrl || it.url !== d.sourceUrl || fromPost.has(it.url));
 }
 
-/** Кого ещё не редактировали: из канала, и ни у человека, ни у агента записи нет. */
+/** Select factual/copy gaps across all published sources; preserve completed human edits. */
 export function pickPending<T extends RawRecord>(
   rows: T[],
   manual: EditorialFile,
@@ -447,14 +466,24 @@ export function pickPending<T extends RawRecord>(
   const manualDone = Object.entries(manual[kind] ?? {}).filter(([, e]) =>
     kind !== "digests" || Boolean(e.body?.trim()),
   ).map(([id]) => id);
-  const autoDone = Object.entries(auto[kind] ?? {}).filter(([, e]) =>
-    kind !== "digests" || (e.body?.trim().length ?? 0) >= BODY_MIN,
-  ).map(([id]) => id);
+  const autoDone = Object.entries(auto[kind] ?? {}).filter(([, e]) => {
+    const revised = (e.editorialVersion ?? 1) >= 2;
+    return kind === "digests"
+      ? (e.body?.trim().length ?? 0) >= (revised ? BODY_MIN : LEGACY_BODY_REVIEW_BELOW) &&
+          !isEditorialMeta(`${e.title ?? ""}\n${e.summary ?? ""}\n${e.body ?? ""}`)
+      : (e.intro?.trim().length ?? 0) >= (revised ? INTRO_MIN : 350);
+  }).map(([id]) => id);
   const done = new Set([...manualDone, ...autoDone]);
-  return rows
-    .filter((r) => r.origin === "telegram" && !done.has(r.id) && !(retryAfter[`${kind}:${r.id}`] > now))
-    .sort((a, b) => String(b.date ?? "").localeCompare(String(a.date ?? "")))
-    .slice(0, limit);
+  const eligible = rows
+    .filter((r) => (r.origin === "telegram" ||
+      (kind === "digests" && ["api", "saved"].includes(r.origin ?? "") && needsDigestEditorial(r))) &&
+      !done.has(r.id) && !(retryAfter[`${kind}:${r.id}`] > now))
+    .sort((a, b) => String(b.date ?? "").localeCompare(String(a.date ?? "")) || a.id.localeCompare(b.id));
+  // Recent stories remain first, but one slot per digest batch pays down the
+  // historical backlog instead of letting each day's new posts starve it.
+  if (kind === "digests" && limit >= 2 && eligible.length > limit)
+    return [...eligible.slice(0, limit - 1), eligible.at(-1)!];
+  return eligible.slice(0, limit);
 }
 
 export function readJson<T>(path: string, fallback: T): T {
@@ -482,7 +511,7 @@ async function ask(prompt: string): Promise<string> {
   return editorialResearch(EDITORIAL_SYSTEM,prompt);
 }
 
-const stamp = () => ({ at: new Date().toISOString(), by: "site-editorial" });
+const stamp = () => ({ at: new Date().toISOString(), by: "site-editorial", editorialVersion: 2 });
 
 /** Приписка к промпту для повторной попытки: что именно не прошло. */
 export function retryNote(bad: string[]): string {
