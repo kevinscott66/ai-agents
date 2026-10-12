@@ -178,6 +178,7 @@ export const EDITORIAL_SYSTEM = [
 
 /** Заголовок-ярлык из канала: «Проект: Фраза». Ровно то, что мы заменяем. */
 export const LABEL_TITLE = /^[\p{L}\p{N}_]+:\s/u;
+export const SOURCE_ONLY_TITLE = /^(?:публикация|пост|сообщение|запись)\s+в\s+(?:X|Twitter|соцсети)\b/iu;
 
 /**
  * Короткий проверенный анонс не отклоняется ради объёма. Пределы защищают
@@ -393,6 +394,7 @@ export function checkEntry(e: Partial<EditorialEntry>, d: RawDigest): string[] {
     bad.push(`заголовок ${title.length} символов, нужно ${TITLE_MIN}-${TITLE_MAX}`);
   if (title.endsWith(".")) bad.push("заголовок с точкой в конце");
   if (LABEL_TITLE.test(title)) bad.push("заголовок остался ярлыком «Проект: Фраза»");
+  if (SOURCE_ONLY_TITLE.test(title)) bad.push("заголовок называет площадку вместо события проекта");
   if (title && title === d.title.trim() && (d.origin === "telegram" || LABEL_TITLE.test(title)))
     bad.push("заголовок не изменился");
   if (isEditorialMeta(`${title}\n${summary}\n${body}`)) bad.push("текст описывает редакционный отказ вместо события");
@@ -579,6 +581,7 @@ function sources(e: Partial<EditorialEntry>, raw: RawRecord): DigestItem[] {
 async function vetted(e: Partial<EditorialEntry>, raw: RawRecord): Promise<string[]> {
   const subject: Checkable = {
     title: String(e.title ?? ""),
+    requireEvent: !("intro" in raw),
     date: raw.date,
     summary: e.summary,
     body: e.body,
