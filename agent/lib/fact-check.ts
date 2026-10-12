@@ -70,6 +70,8 @@ export interface FactVerdict {
 /** Всё, что мы умеем проверять: текст плюс ссылки под ним. */
 export interface Checkable {
   title: string;
+  /** Digest articles need an actual sourced event, not merely a sourced rumour. */
+  requireEvent?: boolean;
   date?: string;
   summary?: string;
   /** Тело выпуска или интро активности — что из них есть. */
@@ -369,6 +371,7 @@ export function factCheckPrompt(c: Checkable, read: ReadSource[] = []): string {
     "8. РИСК ЧИТАТЕЛЯ. Если по материалу можно потерять деньги, а условие не названо — это претензия:",
     "   принудительный выкуп токена, порог ликвидации, дедлайн вывода, токен не торгуется публично,",
     "   реферальная ссылка или код в тексте, обещание награды, которого проект не давал.",
+    c.requireEvent ? "9. ПОВОД ДЛЯ ПУБЛИКАЦИИ. Есть ли подтверждённое событие, о котором статья сообщает читателю? Сам факт, что сторонний аккаунт опубликовал короткий прогноз или слух, не является подтверждением запуска, вайтлиста или листинга проекта. Если материал состоит из пересказа такого поста и списка того, что пока неизвестно, event_supported=false и event_evidence_url=null. Только для подтверждённого события поставь true и укажи URL действительно открытого источника. Не превращай отсутствие подтверждения в самостоятельную новость." : "",
     "",
     "severity:",
     '- "block" — факт неверен, перевёрнут, не подтверждается ни одним источником, цитата не дословна,',
@@ -381,7 +384,9 @@ export function factCheckPrompt(c: Checkable, read: ReadSource[] = []): string {
     "В sources_opened перечисли url, которые ты реально открыл: пустой список означает, что проверки не было.",
     "",
     "Верни СТРОГО ОДИН JSON-объект и НИЧЕГО кроме него:",
-    '{"problems":[{"claim":"...","issue":"...","severity":"block","where":"body","source":"https://..."}],"sources_opened":["https://..."]}',
+    c.requireEvent
+      ? '{"problems":[],"sources_opened":["https://..."],"event_supported":false,"event_evidence_url":null}'
+      : '{"problems":[{"claim":"...","issue":"...","severity":"block","where":"body","source":"https://..."}],"sources_opened":["https://..."]}',
   ]
     .filter((s) => s !== "")
     .join("\n");
@@ -464,6 +469,18 @@ export function verdictFrom(
   // Источник, текст которого лежал в промпте, прочитан независимо от того,
   // вспомнил ли фактчекер перечислить его в sources_opened.
   const opened = new Set([...openedUrls(parsed), ...read.map((r) => r.url)]).size;
+  if (c.requireEvent) {
+    const evidence = parsed.event_evidence_url;
+    const supported = parsed.event_supported === true && typeof evidence === "string" &&
+      /^https?:\/\//.test(evidence) &&
+      new Set([...openedUrls(parsed), ...read.map((r) => r.url)]).has(evidence);
+    if (!supported) problems.unshift({
+      claim: c.title,
+      issue: "нет подтверждённого события и открытого источника для публикации; пересказ слуха или перечень неизвестного не является новостью",
+      severity: "block",
+      where: "title",
+    });
+  }
   if (!(c.items ?? []).length) {
     problems.unshift({
       claim: c.title,
