@@ -197,7 +197,14 @@ export const LEGACY_BODY_REVIEW_BELOW = 600;
 
 /** Editorial process messages are not articles, even when a checker finds no false claim. */
 export function isEditorialMeta(value: string): boolean {
-  return /(?:материал|публикаци[яюи])[^.!?\n]{0,110}(?:не выйдет|не будет опубликован|без подтвержд[её]нных источников)|нет подтвержд[её]нного события проекта/iu.test(value);
+  return [
+    /(?:материал|публикаци[яюи]|стать[яюи]|заметк[ауыи])[^.!?\n]{0,120}(?:не выйдет|не будет опубликован|без подтвержд[её]нных источников|не может быть (?:дополнен|подготовлен|опубликован))/iu,
+    /нет подтвержд[её]нного события проекта/iu,
+    /^(?:сообщени[ея]|информаци[яю]|сведения|заявлени[ея])[^.!?\n]{0,100}(?:требу[ею]т|нужда[ею]тся)[^.!?\n]{0,40}(?:подтверждени|проверк)[^.!?\n]{0,40}(?:первоисточник|официальн)/iu,
+    /^(?:не удалось|не получилось|невозможно)[^.!?\n]{0,40}(?:подтвердить|проверить)[^.!?\n]{0,40}(?:само событие|основн|ключев)/iu,
+    /^(?:(?:официального|независимого|достоверного)\s+)?подтверждени[ея][^.!?\n]{0,110}(?:нет|не найден|не получен)(?:[.!?]|\s|$)/iu,
+    /^(?:событие|инцидент|сообщение)[^.!?\n]{0,110}(?:не подтвержд[её]н|не удалось подтвердить)/iu,
+  ].some((pattern) => pattern.test(String(value ?? "")));
 }
 
 export function needsDigestEditorial(row: RawDigest): boolean {
@@ -268,6 +275,8 @@ export function editorialPrompt(d: RawDigest, examples: EditorialEntry[]): strin
     .join("\n\n");
   return [
     "Вот публикация из очереди сайта. Проверь её по первоисточникам и отредактируй только подтверждённое.",
+    'Если само событие подтвердить не удалось, верни {"defer":true,"reason":"причина"} без статьи. Не заменяй новость текстом о невозможности проверки, списком неизвестного или сообщением редакционного отказа.',
+    "Одного поста стороннего аккаунта недостаточно: найди заявление команды, сооснователя, официальный разбор или другой первоисточник события. Недоступная ссылка не означает, что официального заявления нет.",
     "",
     head(d),
     `Текст поста: ${d.summary ?? ""} ${d.body ?? ""}`.trim(),
@@ -385,6 +394,7 @@ export function extractJson(raw: string): Record<string, unknown> {
  * не поймаешь — против неё работают промпт и требование источников.
  */
 export function checkEntry(e: Partial<EditorialEntry>, d: RawDigest): string[] {
+  if ("defer" in e && e.defer === true) return ["событие не подтверждено: оставить в редакционной очереди"];
   const bad: string[] = [];
   const title = String(e.title ?? "").trim();
   const summary = String(e.summary ?? "").trim();
@@ -607,6 +617,9 @@ export async function checkPublication(
     if (typeof manual[key] === "string" && manual[key]!.trim()) published[key] = manual[key]!.trim();
   }
   if (Array.isArray(manual.items)) published.items = manual.items;
+  if (isEditorialMeta(`${published.title ?? ""}\n${published.summary ?? ""}\n${published.body ?? ""}`)) {
+    return ["итоговый текст после ручных правок описывает редакционный отказ вместо события"];
+  }
   return verify(published, raw as RawRecord);
 }
 

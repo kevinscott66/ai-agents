@@ -439,3 +439,32 @@ test("retry cooldown frees slots and expires", () => {
  expect(checked).toBe(true);
  expect(result).toHaveLength(1);
  });
+
+
+test("Initia-style non-verification headlines are rejected and remain eligible for research", () => {
+ const row=digest({id:"initia-stub",project:"Initia"});
+ const failed=good({title:"Сообщение об инциденте в Initia требует подтверждения первоисточниками",editorialVersion:2});
+ expect(isEditorialMeta(failed.title)).toBe(true);
+ expect(checkEntry(failed,row).join(" ")).toContain("редакционный отказ");
+ expect(pickPending([row],{}, {digests:{[row.id]:failed}}).map(d=>d.id)).toEqual([row.id]);
+ expect(checkEntry({defer:true} as Partial<EditorialEntry>,row).join(" ")).toContain("редакционной очереди");
+});
+
+test("a retained manual stub cannot bypass rejection after overlaying an otherwise valid proposal", async () => {
+ let verified=false;
+ const result=await checkPublication(good(),digest(),{title:"Сообщение об инциденте в Initia требует подтверждения первоисточниками"},async()=>{verified=true;return [];});
+ expect(result.join(" ")).toContain("редакционный отказ");
+ expect(verified).toBe(false);
+});
+
+test("qualified confirmed news is not confused with an editorial refusal", () => {
+ expect(isEditorialMeta("Initia остановила сеть после инцидента. Размер ущерба пока не подтверждён.")).toBe(false);
+ expect(isEditorialMeta("Суд требует подтверждения права собственности")).toBe(false);
+ expect(isEditorialMeta("Сообщение Initia опровергло слухи о выпуске дополнительных INIT")).toBe(false);
+});
+
+
+test("equivalent no-confirmation headline is rejected without excluding secondary-detail caveats",()=>{
+ expect(isEditorialMeta("Официального подтверждения инцидента в Initia пока нет\nПричины инцидента и ущерб пока неизвестны.")).toBe(true);
+ expect(isEditorialMeta("Initia подтвердила остановку L1 и роллапов 23 октября\nНе удалось проверить ключевые параметры компенсации: команда их пока не назвала.")).toBe(false);
+});

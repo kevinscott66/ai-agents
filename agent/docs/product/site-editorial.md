@@ -12,11 +12,21 @@ like an empty queue.
 then the existing factual verifier before publishing editorial overlays. Headlines
 must match the same project, event, date and conditions as the body. Engaging wording
 must not introduce unsupported earnings, rewards or urgency. Digest headlines convey the event and a concrete detail with varied natural syntax, using the owner-approved
-Fermah/Hyperliquid examples as style only. Bodies require 600–3200 characters, targeting
-3–5 substantive paragraphs about mechanism, conditions, dates and limitations. Missing
+Fermah/Hyperliquid examples as style only. Bodies require 350–3200 characters, targeting
+2–5 substantive paragraphs about mechanism, conditions, dates and limitations. Missing
 evidence is a reason to defer, not pad or invent details. Title 35–130 and summary
 80–340 character bounds remain; source preservation
 and factual checks remain mandatory, including when the model returns an empty list.
+
+When the event itself cannot be confirmed, the writer returns `defer: true` with a
+private reason. It must not turn that reason into a headline or article. Entry and
+final-manual-overlay checks reject editorial refusal prose. The factual checker
+requires an explicit supported-event verdict with evidence from an opened source;
+missing, false or uncited verdicts fail closed. A blocked X post is a research
+failure, not proof that the team has made no statement: check official and founder
+channels before deferring. Unknown secondary details can remain caveats in a
+confirmed story. Regression coverage: `tests/site-editorial.test.ts` and
+`tests/editorial-event.test.ts`.
 
 The shared Codex adapter keeps the publication editor in web-search-only mode.
 The site's separate freshness runner may explicitly enable bounded observations
