@@ -92,6 +92,8 @@ export interface EditorialEntry {
   at?: string;
   by?: string;
   editorialVersion?: number;
+  /** Editorial review schedule; never an event/deadline date. */
+  reviewAfter?: string;
 }
 
 export type EditorialFile = Partial<Record<Kind, Record<string, EditorialEntry>>>;
@@ -178,7 +180,27 @@ export const EDITORIAL_SYSTEM = [
 
 /** Заголовок-ярлык из канала: «Проект: Фраза». Ровно то, что мы заменяем. */
 export const LABEL_TITLE = /^[\p{L}\p{N}_]+:\s/u;
-export const SOURCE_ONLY_TITLE = /^(?:публикация|пост|сообщение|запись)\s+в\s+(?:X|Twitter|соцсети)\b/iu;
+export const SOURCE_ONLY_TITLE = /^(?:(?:публикация|пост|сообщение|запись)\s+в\s+(?:X|Twitter|соцсети)\b|[^.!?\n]{1,60}\s+(?:опубликовал[аи]?|разместил[аи]?)\s+(?:ссылк\p{L}*|пост|запись)\s+(?:на|в|о)\s)/iu;
+export const EDITORIAL_VERSION = 3;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const RECENT_REVIEW_DAYS = 30;
+
+/** Scheduling metadata is not evidence that a forecast event occurred. */
+export function digestReviewAfter(entry: Partial<EditorialEntry>, now: number): string {
+  const actionable = /регистраци|заяв(?:к|ок)|клейм|снимок|снимка|дедлайн|airdrop|дроп/iu
+    .test(`${entry.title ?? ""} ${entry.summary ?? ""} ${entry.body ?? ""}`);
+  return new Date(now + (actionable ? 1 : 7) * DAY_MS).toISOString();
+}
+
+export function digestNeedsReview(row: RawDigest, entry: EditorialEntry, now: number): boolean {
+  const text = `${entry.title ?? ""}\n${entry.summary ?? ""}\n${entry.body ?? ""}`;
+  if (SOURCE_ONLY_TITLE.test(entry.title ?? "") || isEditorialMeta(text)) return true;
+  const published = Date.parse(row.date ?? "");
+  if (!Number.isFinite(published) || published < now - RECENT_REVIEW_DAYS * DAY_MS) return false;
+  // A newly introduced policy must actually revisit recent automatic copy.
+  const due = Date.parse(entry.reviewAfter ?? "");
+  return (entry.editorialVersion ?? 1) < EDITORIAL_VERSION || !Number.isFinite(due) || due <= now;
+}
 
 /**
  * Короткий проверенный анонс не отклоняется ради объёма. Пределы защищают
@@ -198,6 +220,9 @@ export const LEGACY_BODY_REVIEW_BELOW = 600;
 /** Editorial process messages are not articles, even when a checker finds no false claim. */
 export function isEditorialMeta(value: string): boolean {
   return [
+    /(?:в материал|в статью|в текст)[^.!?\n]{0,40}не (?:вошл|включ|перенес)/iu,
+    /(?:формулировк|определени)[^.!?\n]{0,100}(?:из исходного поста[^.!?\n]{0,40})?не использу/iu,
+    /(?:исходного поста|черновик)[^.!?\n]{0,80}(?:не использует|убран|исключ[её]н)/iu,
     /(?:материал|публикаци[яюи]|стать[яюи]|заметк[ауыи])[^.!?\n]{0,120}(?:не выйдет|не будет опубликован|без подтвержд[её]нных источников|не может быть (?:дополнен|подготовлен|опубликован))/iu,
     /нет подтвержд[её]нного события проекта/iu,
     /^(?:сообщени[ея]|информаци[яю]|сведения|заявлени[ея])[^.!?\n]{0,100}(?:требу[ею]т|нужда[ею]тся)[^.!?\n]{0,40}(?:подтверждени|проверк)[^.!?\n]{0,40}(?:первоисточник|официальн)/iu,
@@ -210,7 +235,7 @@ export function isEditorialMeta(value: string): boolean {
 export function needsDigestEditorial(row: RawDigest): boolean {
   const title = String(row.title ?? "").trim();
   const body = String(row.body ?? "").trim();
-  return LABEL_TITLE.test(title) || title.length < TITLE_MIN || title.length > TITLE_MAX ||
+  return LABEL_TITLE.test(title) || SOURCE_ONLY_TITLE.test(title) || title.length < TITLE_MIN || title.length > TITLE_MAX ||
     body.length < LEGACY_BODY_REVIEW_BELOW || isEditorialMeta(`${title}\n${row.summary ?? ""}\n${body}`);
 }
 
@@ -275,6 +300,11 @@ export function editorialPrompt(d: RawDigest, examples: EditorialEntry[]): strin
     .join("\n\n");
   return [
     "Вот публикация из очереди сайта. Проверь её по первоисточникам и отредактируй только подтверждённое.",
+    `Дата редакционной проверки (UTC): ${new Date().toISOString().slice(0, 10)}.`,
+    "Не выдавай старую запись за новый запуск. Дата выпуска и дата события различаются: назови фактическую дату события, а при отсутствии нового повода отложи новость.",
+    "Для прошедших сроков используй историческую форму: команда назначила/анонсировала. Не призывай успеть к прошедшему сроку и не утверждай, что обещанное состоялось, без нового подтверждения.",
+    "В статье не объясняй, какие слова/цифры были убраны из черновика или не вошли в материал. Оставляй полезные ограничения события, а не отчёт редактора.",
+    "Проверь медиа первоисточника, если речь о фото, тизере или детали изображения. Текстовая подпись не равна всему посту; непрочитанная картинка не доказывает отсутствие числа или фразы. Если необходимое медиа недоступно, отложи материал.",
     'Если само событие подтвердить не удалось, верни {"defer":true,"reason":"причина"} без статьи. Не заменяй новость текстом о невозможности проверки, списком неизвестного или сообщением редакционного отказа.',
     "Одного поста стороннего аккаунта недостаточно: найди заявление команды, сооснователя, официальный разбор или другой первоисточник события. Недоступная ссылка не означает, что официального заявления нет.",
     "",
@@ -478,17 +508,18 @@ export function pickPending<T extends RawRecord>(
   const manualDone = Object.entries(manual[kind] ?? {}).filter(([, e]) =>
     kind !== "digests" || Boolean(e.body?.trim()),
   ).map(([id]) => id);
-  const autoDone = Object.entries(auto[kind] ?? {}).filter(([, e]) => {
+  const byId = new Map(rows.map(row => [row.id, row]));
+  const autoDone = Object.entries(auto[kind] ?? {}).filter(([id, e]) => {
     const revised = (e.editorialVersion ?? 1) >= 2;
     return kind === "digests"
       ? (e.body?.trim().length ?? 0) >= (revised ? BODY_MIN : LEGACY_BODY_REVIEW_BELOW) &&
-          !isEditorialMeta(`${e.title ?? ""}\n${e.summary ?? ""}\n${e.body ?? ""}`)
+          !digestNeedsReview(byId.get(id) ?? { id, title: e.title }, e, now)
       : (e.intro?.trim().length ?? 0) >= (revised ? INTRO_MIN : 350);
   }).map(([id]) => id);
   const done = new Set([...manualDone, ...autoDone]);
   const eligible = rows
     .filter((r) => (r.origin === "telegram" ||
-      (kind === "digests" && ["api", "saved"].includes(r.origin ?? "") && needsDigestEditorial(r))) &&
+      (kind === "digests" && ["api", "saved"].includes(r.origin ?? "") && (Boolean(auto.digests?.[r.id]) || needsDigestEditorial(r)))) &&
       !done.has(r.id) && !(retryAfter[`${kind}:${r.id}`] > now))
     .sort((a, b) => String(b.date ?? "").localeCompare(String(a.date ?? "")) || a.id.localeCompare(b.id));
   // Recent stories remain first, but one slot per digest batch pays down the
@@ -524,6 +555,22 @@ async function ask(prompt: string, options: ResearchOptions = {}): Promise<strin
 }
 
 const stamp = () => ({ at: new Date().toISOString(), by: "site-editorial", editorialVersion: 2 });
+
+/** The journal is the live human layer too; never regenerate its body behind the editor. */
+export function withJournalEditorial(manual: EditorialFile, journal: unknown): EditorialFile {
+  const result: EditorialFile = { ...manual, digests: { ...manual.digests } };
+  if (!Array.isArray(journal)) throw new Error("Invalid editorial journal");
+  for (const edit of journal) {
+    if (edit?.kind !== "digest" || !["patch", "add"].includes(edit.op) || typeof edit.key !== "string") continue;
+    const fields: Partial<EditorialEntry> = {};
+    for (const key of ["title", "summary", "body"] as const) {
+      if (typeof edit.value?.[key] === "string") fields[key] = edit.value[key];
+    }
+    if (Array.isArray(edit.value?.items)) fields.items = edit.value.items;
+    if (Object.keys(fields).length) result.digests![edit.key] = { ...result.digests![edit.key], ...fields };
+  }
+  return result;
+}
 
 /** Приписка к промпту для повторной попытки: что именно не прошло. */
 export function retryNote(bad: string[]): string {
@@ -617,6 +664,7 @@ export async function checkPublication(
     if (typeof manual[key] === "string" && manual[key]!.trim()) published[key] = manual[key]!.trim();
   }
   if (Array.isArray(manual.items)) published.items = manual.items;
+  if (SOURCE_ONLY_TITLE.test(published.title ?? "")) return ["итоговый заголовок называет площадку вместо события проекта"];
   if (isEditorialMeta(`${published.title ?? ""}\n${published.summary ?? ""}\n${published.body ?? ""}`)) {
     return ["итоговый текст после ручных правок описывает редакционный отказ вместо события"];
   }
@@ -642,6 +690,8 @@ export async function writeOne(d: RawDigest, examples: EditorialEntry[], manual:
     body: String(parsed.body).trim(),
     items: (parsed.items ?? []).map((it) => ({ text: String(it.text).trim(), url: it.url })),
     ...stamp(),
+    editorialVersion: EDITORIAL_VERSION,
+    reviewAfter: digestReviewAfter(parsed, Date.now()),
   };
 }
 
@@ -658,7 +708,8 @@ export async function writeActivity(a: RawActivity, examples: EditorialEntry[]):
 
 export async function main(): Promise<void> {
   const tree = siteTree();
-  const manual = readJson<EditorialFile>(join(tree, "src/data/snapshot/editorial.json"), {});
+  const manual = withJournalEditorial(readJson<EditorialFile>(join(tree, "src/data/snapshot/editorial.json"), {}),
+    JSON.parse(readFileSync(join(tree, "src/data/edits.json"), "utf8")));
   const auto = readJson<EditorialFile>(AUTO_PATH, {});
   const retryPath = `${AUTO_PATH}.retries.json`;
   const retryAfter = readJson<Record<string, number>>(retryPath, {});

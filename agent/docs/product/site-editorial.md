@@ -59,3 +59,35 @@ the update. Generated source preservation checks still run before verification.
 Headlines must not share a mandatory dash, project-first opening, or other fixed template.
 Choose a complete sentence, a detail-led opening, a colon or a dash according to the story;
 do not replace repetitive dashes with repetitive colons or questions. Factual gates remain unchanged.
+
+## Repeat review and source attachments (policy version 3)
+
+Recent automatic digests (30 days from their publication date) are revisited when
+they predate this policy, lack a valid review schedule or reach `reviewAfter`.
+The schedule is editorial metadata: one day for registration/claim/snapshot/drop
+copy and seven days for other news; it is never a source-backed event date.
+Historical complete entries do not loop indefinitely. Confirmed malformed titles
+or discarded-draft commentary remain researchable regardless of age. Existing
+six-hour failure cooldown and batch budgets still apply. API/saved automatic
+entries also participate even when their raw bodies are complete.
+
+The live `edits.json` journal is folded into the human editorial layer. A manual
+body protects the article; title-only corrections remain available to the writer
+and final verifier. A corrupt journal fails the run rather than silently removing
+human protection. No activity steps or statuses are rewritten.
+
+Platform records retain bounded HTTPS media URLs from the platform's media hosts
+and optional untrusted alt text. They are references, not inspected pixels.
+The verifier must explicitly assess each attachment: `inspected` with a reason,
+`text_sufficient` when caption evidence fully supports a nonvisual story, or
+`unavailable`. A story about a photo/teaser cannot use `text_sufficient`; missing
+or unavailable necessary media blocks publication. There is no automatic claim
+that every attachment can be opened: inaccessible visual evidence defers the
+story. Caption-only access cannot establish the absence of numbers or phrases in
+an image. No arbitrary media URL is downloaded by the platform reader.
+
+Dates in source forecasts remain announced dates. Crossing the deadline triggers
+review, not automatic past-tense assertion that the event happened. Avoid reporting
+which phrases were discarded from a draft; retain only useful event limitations.
+Coverage: `tests/editorial-recheck-media.test.ts` plus existing entry/event/source-
+policy regressions. The final site gate has matching source-first/residue cases.
