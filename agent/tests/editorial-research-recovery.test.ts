@@ -1,6 +1,6 @@
 import {test,expect} from 'bun:test';
 import {editorialCatalog} from '../lib/codex-editorial.ts';
-import {parseProblems,verdictFrom,factCheckPrompt} from '../lib/fact-check.ts';
+import {parseProblems,verdictFrom,factCheckPrompt,quotedFragments,fullText} from '../lib/fact-check.ts';
 import {activitySources,checkActivity,checkEntry,editorialPrompt,askChecked,publicationSubject} from '../tools/site-editorial.ts';
 
 test('editorial tool mode exposes hosted search with the code host disabled without changing other models',()=>{
@@ -65,12 +65,14 @@ test('archival review keeps historical event dates instead of requiring a second
  expect(factCheckPrompt({title:'A historical announcement',date:'2026-05-15',requireEvent:true})).toContain('event_supported');
 });
 test('activity verification includes retained rewards and steps so a corrected intro cannot hide contradictions',()=>{
- const raw={id:'metric',title:'Old title',intro:'Old intro',rewardType:'Поинты',spent:'$1+',steps:['Внести реальные средства в пул']};
+ const raw={id:'metric',title:'Old title',intro:'Old intro',rewardType:'Поинты',spent:'$1+',time:'20 мин',steps:['Внести реальные средства в пул']};
  const proposed={title:'Metric запустил обмены токенов и пулы ликвидности',intro:'Награда не подтверждена.'};
  const subject=publicationSubject(proposed,raw,'activities');
  expect(subject.body).toContain('Награда не подтверждена.');
  expect(subject.body).toContain('Поинты');expect(subject.body).toContain('$1+');
  expect(subject.body).toContain(raw.steps[0]);expect(subject.requireEvent).toBe(false);
+ expect(quotedFragments(fullText(subject))).toEqual([]); // Metadata JSON must not invent direct speech.
+ expect(subject.body).toContain('Оценка времени редакцией:');
  expect(raw.intro).toBe('Old intro');expect(proposed.intro).toBe('Награда не подтверждена.');
  expect(publicationSubject(proposed,{...raw,intro:undefined},'activities').requireEvent).toBe(false);
 });

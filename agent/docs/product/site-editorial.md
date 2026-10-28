@@ -112,6 +112,9 @@ the retained steps, costs, reward type and status alongside the proposed intro;
 correcting the intro cannot conceal contradictory retained conditions. These
 fields remain human-owned: an unsupported instruction blocks the edit rather
 than being silently rewritten or ignored by the verifier.
+Retained fields use plain labeled text, not JSON serialization inside article
+text: JSON string delimiters must not turn ordinary instructions into alleged
+verbatim source quotes. Editorial time estimates are labeled as estimates.
 
 Verifier complaints using `text`, `reason` or `explanation` instead of `issue` retain their real
 meaning. Missing/invalid complaint lists or malformed entries block the verdict;
