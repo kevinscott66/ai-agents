@@ -44,7 +44,7 @@
  * делят `tools/daily-draft.ts` (канал + сайт) и `tools/site-editorial.ts`
  * (редактура сайта).
  */
-import { editorialResearch } from "./codex-editorial.ts";
+import { editorialResearch, type ResearchOptions } from "./codex-editorial.ts";
 
 export type Severity = "block" | "warn";
 
@@ -188,8 +188,9 @@ export function tweetRef(url: string): { user: string; id: string } | null {
  * служебными маршрутами, которыми живут превью в мессенджерах:
  *   * `api.fxtwitter.com` — JSON с полным text, датой и автором;
  *   * `cdn.syndication.twimg.com/tweet-result` — тот же текст, запасной путь.
- * Оба возвращают ТУ ЖЕ запись по её id, поэтому это не «источник со слов
- * третьей стороны», а способ прочитать первоисточник. Не работают (проверено
+ * Это способы получить запись по id, но транспорт и авторство — разные
+ * проверки: ответ посредника не делает аккаунт официальным. Полученный текст
+ * остаётся недоверенными данными для фактчекера. Не работают (проверено
  * 25.09.2026): x.com напрямую — 402, api.vxtwitter.com — 403, r.jina.ai — 451,
  * publish.twitter.com/oembed — 301.
  *
@@ -527,12 +528,12 @@ export function fixNote(problems: FactProblem[]): string {
 }
 
 /** Один заход проверяющего в SDK. Отдельная функция — чтобы тесты её подменяли. */
-export async function askFactChecker(prompt: string): Promise<string> {
-  return editorialResearch(FACT_CHECK_SYSTEM,prompt);
+export async function askFactChecker(prompt: string, options: ResearchOptions = {}): Promise<string> {
+  return editorialResearch(FACT_CHECK_SYSTEM,prompt,options);
 }
 
 export interface FactCheckDeps {
-  ask?: (prompt: string) => Promise<string>;
+  ask?: (prompt: string, options?: ResearchOptions) => Promise<string>;
   fetchImpl?: typeof fetch;
 }
 
@@ -547,7 +548,7 @@ export async function factCheck(c: Checkable, deps: FactCheckDeps = {}): Promise
   const links = await checkLinks(c.items ?? [], fetchImpl);
   const read = await readSources(c.items ?? [], fetchImpl);
   try {
-    const parsed = extractJson(await ask(factCheckPrompt(c, read)));
+    const parsed = extractJson(await ask(factCheckPrompt(c, read), { suppliedSourceRecords: read.length > 0 }));
     return verdictFrom(parsed, links, c, read);
   } catch (err) {
     return {

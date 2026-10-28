@@ -28,7 +28,14 @@ channels before deferring. Unknown secondary details can remain caveats in a
 confirmed story. Regression coverage: `tests/site-editorial.test.ts` and
 `tests/editorial-event.test.ts`.
 
-The shared Codex adapter keeps the publication editor in web-search-only mode.
+The shared Codex adapter defaults to web-search-only research. If the writer or
+fact checker actually fetched platform records using `readSources`, that call
+explicitly enables `suppliedSourceRecords`. These records remain untrusted evidence:
+author, date and event must be assessed, third-party claims distinguished from
+official announcements, and reading an excerpt must not be claimed as a web visit.
+The option is carried through writer retries and does not bypass the separate
+event-evidence or final-manual-overlay gates. Without a fetched record the default
+web-search policy remains in force.
 The site's separate freshness runner may explicitly enable bounded observations
 downloaded from curated official drop-rule URLs. These page excerpts remain untrusted
 data; the site verifies that every cited quote appears in the fetched text before a
