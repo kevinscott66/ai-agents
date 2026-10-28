@@ -45,6 +45,7 @@
  * (редактура сайта).
  */
 import { editorialResearch, type ResearchOptions } from "./codex-editorial.ts";
+import {readSourceImages} from './editorial-images.ts';
 
 export type Severity = "block" | "warn";
 
@@ -423,7 +424,7 @@ export function factCheckPrompt(c: Checkable, read: ReadSource[] = []): string {
     "",
     "Верни СТРОГО ОДИН JSON-объект и НИЧЕГО кроме него:",
     c.requireEvent
-      ? '{"problems":[],"sources_opened":["https://..."],"event_supported":false,"event_evidence_url":null,"media_review":[]}'
+      ? '{"problems":[{"claim":"...","issue":"...","severity":"block","where":"body","source":"https://..."}],"sources_opened":["https://..."],"event_supported":false,"event_evidence_url":null,"media_review":[]}'
       : '{"problems":[{"claim":"...","issue":"...","severity":"block","where":"body","source":"https://..."}],"sources_opened":["https://..."],"media_review":[]}',
   ]
     .filter((s) => s !== "")
@@ -464,15 +465,21 @@ export function extractJson(raw: string): Record<string, unknown> {
  * не пропускать.
  */
 export function parseProblems(parsed: Record<string, unknown>): FactProblem[] {
-  const raw = Array.isArray((parsed as any).problems) ? ((parsed as any).problems as any[]) : [];
+  const malformed = (): FactProblem => ({claim: "ответ фактчекера", issue: "некорректная структура замечаний: повтори проверку с claim, issue и severity", severity: "block"});
+  if (!Array.isArray(parsed.problems)) return [malformed()];
+  const raw = parsed.problems as any[];
   return raw
-    .filter((p) => p && (p.claim || p.issue))
     .map((p) => {
+      if (!p || typeof p !== "object" || Array.isArray(p)) return malformed();
+      // Preserve the real blocking reason when the model uses a common alias.
+      // An invalid/nonempty problem must never disappear into a green verdict.
+      const issue = [p.issue, p.text, p.reason, p.explanation].find(v => typeof v === "string" && v.trim());
+      if (!issue) return malformed();
       const s = String(p.severity ?? "").toLowerCase();
       const warn = s === "warn" || s === "warning" || s === "low" || s === "minor" || s === "note";
       return {
         claim: String(p.claim ?? "").trim(),
-        issue: String(p.issue ?? "").trim(),
+        issue: issue.trim(),
         severity: (warn ? "warn" : "block") as Severity,
         where: p.where ? String(p.where).trim() : undefined,
         source: typeof p.source === "string" && /^https?:\/\//.test(p.source) ? p.source : undefined,
@@ -598,8 +605,9 @@ export async function factCheck(c: Checkable, deps: FactCheckDeps = {}): Promise
   const fetchImpl = deps.fetchImpl ?? fetch;
   const links = await checkLinks(c.items ?? [], fetchImpl);
   const read = await readSources(c.items ?? [], fetchImpl);
+  const images = await readSourceImages(read, fetchImpl);
   try {
-    const parsed = extractJson(await ask(factCheckPrompt(c, read), { suppliedSourceRecords: read.length > 0 }));
+    const parsed = extractJson(await ask(factCheckPrompt(c, read), { suppliedSourceRecords: read.length > 0, ...(images.length ? {images} : {}) }));
     return verdictFrom(parsed, links, c, read);
   } catch (err) {
     return {

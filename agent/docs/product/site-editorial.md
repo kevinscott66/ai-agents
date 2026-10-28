@@ -91,3 +91,46 @@ review, not automatic past-tense assertion that the event happened. Avoid report
 which phrases were discarded from a draft; retain only useful event limitations.
 Coverage: `tests/editorial-recheck-media.test.ts` plus existing entry/event/source-
 policy regressions. The final site gate has matching source-first/residue cases.
+
+## Research transport and retry diagnostics
+
+The pinned Codex CLI 0.149.0 catalog can mark the selected model `code_mode_only`.
+Disabling that host then hides hosted web search despite `web_search="live"`.
+`editorialCatalog` selects `direct` tools for the selected research model only;
+it does not change the shared inference catalog, model choice or runtime agents.
+The existing native-capability denylist, read-only sandbox, clean subprocess
+environment and emitted-event allowlist remain in force. Tool configuration
+errors now fail the call instead of being ignored. Validate actual web-search
+events when accepting a CLI/catalog change, not just a plausible final answer.
+
+Activity research includes up to eight unique sources: the app URL and X
+announcements already linked in the original intro/steps. Writer and verifier use the same
+selection; this does not add arbitrary discovered URLs to the service fetcher.
+Source records remain untrusted and official authorship is still checked.
+The publication subject uses an explicit record kind. For activities it includes
+the retained steps, costs, reward type and status alongside the proposed intro;
+correcting the intro cannot conceal contradictory retained conditions. These
+fields remain human-owned: an unsupported instruction blocks the edit rather
+than being silently rewritten or ignored by the verifier.
+
+Verifier complaints using `text`, `reason` or `explanation` instead of `issue` retain their real
+meaning. Missing/invalid complaint lists or malformed entries block the verdict;
+they never become an empty list. Explicit writer deferrals preserve a bounded,
+single-line private reason in retry diagnostics, without publishing that reason.
+Archive editing verifies the original historical event and dates; it does not
+require a second launch or turn elapsed registration terms into a current CTA.
+Regression coverage: `tests/editorial-research-recovery.test.ts` and the isolated
+subprocess contract in `tests/editorial-adapter-contract.test.ts`.
+
+`lib/editorial-images.ts` downloads actual source pixels only from HTTPS
+`pbs.twimg.com/media/` or `/tweet_video_thumb/`. Redirects, arbitrary hosts,
+credentials, nondefault ports, unknown formats and MIME/signature mismatches are
+rejected. There are at most four attempts, 4 MiB per image, 12 MiB total and an
+eight-second timeout per request, with streamed size enforcement. Only JPEG,
+PNG and WebP are attached; video/GIF content is not falsely called inspected.
+The adapter revalidates each image, writes private temporary files, attaches
+them with `--image`, maps filenames to source URLs as untrusted evidence and
+removes the directory after the call. Downloading is not approval: the existing
+explicit media-review and event gates still apply. Tests cover URL boundaries,
+redirects, chunked overflow, format checks, batch caps and actual adapter inputs
+without using credentials or a live model.
