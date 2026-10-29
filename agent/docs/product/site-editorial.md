@@ -4,9 +4,10 @@ Digest candidates come from `src/data/current/editorial-candidates.json`, not
 the public `current/digests.json`. The site builds this private queue from the
 Telegram snapshot before applying its publication gate, using the same API-date
 selection as the public corpus. Reading public digests would create a permanent
-queue deadlock for withheld drafts. Activities still come from
-`current/activities.json`. A missing queue fails the run instead of looking
-like an empty queue.
+queue deadlock for withheld drafts. Activities now come from the parallel private `current/activity-candidates.json`,
+including unpublished drafts, retained manual corrections and journal changes.
+Both queues are loaded and validated before any research/write; absent/malformed
+activity intake fails instead of falling back to public activities or an empty list.
 
 `tools/site-editorial.ts` uses `lib/codex-editorial.ts` to research primary sources,
 then the existing factual verifier before publishing editorial overlays. Headlines
@@ -169,3 +170,27 @@ legal reservation or share-price disclaimer. Material eligibility, deposit,
 identity, deadline and loss conditions remain blocking where they affect the
 claim or proposed action. Actual read-only checks must exercise this distinction;
 prompt wording alone is not evidence that a generated article is correct.
+
+## Activity publication binding (version 1)
+
+The site decides `activityReviewRequired` before projecting public records. Exact
+legacy manual bindings can preserve historically curated guides; this migration is
+not a fresh fact check. New automatic-only or changed records remain private until
+this tool validates the final title/intro with all retained conditions and stores
+an `activityReview` binding. `lib/activity-review.mjs` must remain byte-identical to
+the site's `scripts/lib/activity-review.mjs`; it canonicalizes the listed material
+fields without turning unknown values into zero. `boundAt` is an integrity-binding
+timestamp, not a source/event/lifecycle claim.
+
+Human title/intro edits retain precedence, including journal edits. They no longer
+silently skip review of a new or changed activity; the verifier sees the final pair
+before a receipt is written. Steps, costs, reward/status, funding/investors and dates
+are checked but never rewritten by the agent. An unsupported retained condition
+blocks the update; a new title cannot hide it. Successful receipts bind source input
+and final publication, so later input or manual changes require verification again.
+Missing/old automatic receipts cannot approve new records.
+
+Deployment is paired with the site intake gate: under the existing research/refresh
+locks install site queue generation first, then this tool and its binding module.
+Verify both private queues before releasing the lock. Keep owner journal edits,
+source cooldowns and existing schedules; do not clear retries to force acceptance.

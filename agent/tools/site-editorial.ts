@@ -40,6 +40,7 @@ import { dirname, join } from "node:path";
 import { editorialResearch, type ResearchOptions } from "../lib/codex-editorial.ts";
 import {readSourceImages} from '../lib/editorial-images.ts';
 import {cleanEditorialSources, editorialSourceUrl} from '../lib/editorial-sources.ts';
+import {activityReviewMatches, activityReviewReceipt} from '../lib/activity-review.mjs';
 import { blocking, factCheck, fixNote, verdictLine, readSources, tweetRef, type Checkable } from "../lib/fact-check.ts";
 
 /** Два вида материалов, у каждого свой набор редактируемых полей. */
@@ -80,6 +81,11 @@ export interface RawActivity {
   date?: string;
   origin?: string;
   sourceUrl?: string;
+  raised?: string;
+  investors?: string;
+  dateReceive?: string;
+  deadlineAt?: string;
+  activityReviewRequired?: boolean;
 }
 
 export type RawRecord = RawDigest & RawActivity;
@@ -97,6 +103,7 @@ export interface EditorialEntry {
   editorialVersion?: number;
   /** Editorial review schedule; never an event/deadline date. */
   reviewAfter?: string;
+  activityReview?: {version: number; inputHash: string; outputHash: string; boundAt: string};
 }
 
 export type EditorialFile = Partial<Record<Kind, Record<string, EditorialEntry>>>;
@@ -132,7 +139,21 @@ export function readCorpus<T>(path: string): T[] {
       `нет корпуса ${path} — проверь раскладку сайта (releases/current) и DELABS_SITE_DIR`,
     );
   }
-  return JSON.parse(readFileSync(path, "utf8")) as T[];
+  const rows = JSON.parse(readFileSync(path, "utf8"));
+  if (!Array.isArray(rows)) throw new Error(`Invalid editorial corpus: ${path}`);
+  return rows as T[];
+}
+
+/** Read both private queues before any research/write; missing intake fails closed. */
+export function readEditorialCandidates(tree: string): Record<Kind, RawRecord[]> {
+  const rows = {
+    digests: readCorpus(join(tree, "src/data/current/editorial-candidates.json")),
+    activities: readCorpus(join(tree, "src/data/current/activity-candidates.json")),
+  } as Record<Kind, RawRecord[]>;
+  if (rows.activities.some(row => typeof row.activityReviewRequired !== "boolean")) {
+    throw new Error("Activity candidate queue lacks publication-review state; rebuild site intake first");
+  }
+  return rows;
 }
 export const AUTO_PATH =
   process.env.DELABS_EDITORIAL_AUTO ?? "/var/lib/delabs-editorial/editorial.json";
@@ -518,7 +539,7 @@ export function pickPending<T extends RawRecord>(
   // A manual title alone must not prevent research of a missing body. Human-written
   // bodies stay protected; old short automatic digests can be expanded once.
   const manualDone = Object.entries(manual[kind] ?? {}).filter(([, e]) =>
-    kind !== "digests" || Boolean(e.body?.trim()),
+    kind === "digests" && Boolean(e.body?.trim()),
   ).map(([id]) => id);
   const byId = new Map(rows.map(row => [row.id, row]));
   const autoDone = Object.entries(auto[kind] ?? {}).filter(([id, e]) => {
@@ -526,12 +547,14 @@ export function pickPending<T extends RawRecord>(
     return kind === "digests"
       ? (e.body?.trim().length ?? 0) >= (revised ? BODY_MIN : LEGACY_BODY_REVIEW_BELOW) &&
           !digestNeedsReview(byId.get(id) ?? { id, title: e.title }, e, now)
-      : (e.intro?.trim().length ?? 0) >= (revised ? INTRO_MIN : 350);
+      : Boolean(byId.get(id)) && activityReviewMatches(byId.get(id),
+          { ...byId.get(id), ...activityCopy(e, manual.activities?.[id]) }, e.activityReview, now);
   }).map(([id]) => id);
   const done = new Set([...manualDone, ...autoDone]);
   const eligible = rows
-    .filter((r) => (r.origin === "telegram" ||
+    .filter((r) => (kind === "activities" || r.origin === "telegram" ||
       (kind === "digests" && ["api", "saved"].includes(r.origin ?? "") && (Boolean(auto.digests?.[r.id]) || needsDigestEditorial(r)))) &&
+      !(kind === "activities" && r.activityReviewRequired === false) &&
       !done.has(r.id) && !(retryAfter[`${kind}:${r.id}`] > now))
     .sort((a, b) => String(b.date ?? "").localeCompare(String(a.date ?? "")) || a.id.localeCompare(b.id));
   // Recent stories remain first, but one slot per digest batch pays down the
@@ -570,16 +593,21 @@ const stamp = () => ({ at: new Date().toISOString(), by: "site-editorial", edito
 
 /** The journal is the live human layer too; never regenerate its body behind the editor. */
 export function withJournalEditorial(manual: EditorialFile, journal: unknown): EditorialFile {
-  const result: EditorialFile = { ...manual, digests: { ...manual.digests } };
+  const result: EditorialFile = { ...manual, digests: { ...manual.digests }, activities: { ...manual.activities } };
   if (!Array.isArray(journal)) throw new Error("Invalid editorial journal");
   for (const edit of journal) {
-    if (edit?.kind !== "digest" || !["patch", "add"].includes(edit.op) || typeof edit.key !== "string") continue;
+    if (!["digest", "activity"].includes(edit?.kind) || !["patch", "add", "remove"].includes(edit.op) || typeof edit.key !== "string") continue;
+    const kind: Kind = edit.kind === "digest" ? "digests" : "activities";
+    if (edit.op === "remove") {
+      delete result[kind]![edit.key];
+      continue;
+    }
     const fields: Partial<EditorialEntry> = {};
-    for (const key of ["title", "summary", "body"] as const) {
+    for (const key of (kind === "digests" ? ["title", "summary", "body"] : ["title", "intro"]) as ("title" | "summary" | "body" | "intro")[]) {
       if (typeof edit.value?.[key] === "string") fields[key] = edit.value[key];
     }
-    if (Array.isArray(edit.value?.items)) fields.items = edit.value.items;
-    if (Object.keys(fields).length) result.digests![edit.key] = { ...result.digests![edit.key], ...fields };
+    if (kind === "digests" && Array.isArray(edit.value?.items)) fields.items = edit.value.items;
+    if (Object.keys(fields).length) result[kind]![edit.key] = { ...result[kind]![edit.key], ...fields };
   }
   return result;
 }
@@ -624,7 +652,7 @@ export async function askChecked<T>(prompt: string, check: (p: T) => Promise<str
  * страницу проекта: другого первоисточника у карточки «что сделать ради дропа»
  * и не бывает. Материал, под которым нет ни одной ссылки, проверить нечем —
  * `verdictFrom` такой случай блокирует, и это правильно: редактуры не будет,
- * карточка останется с заголовком из поста.
+ * новая карточка останется в закрытой очереди.
  */
 /** Preserve a bounded private reason instead of hiding every failure behind one label. */
 export function deferReason(e: Partial<EditorialEntry>): string | null {
@@ -669,9 +697,8 @@ function sources(e: Partial<EditorialEntry>, raw: RawRecord, kind: Kind): Digest
  * читает второй агент с чистым контекстом (lib/fact-check.ts), и его претензии
  * возвращаются автору как обычная причина отказа.
  *
- * Блокирующая претензия, пережившая повтор, означает, что записи не будет
- * вовсе: выпуск ещё постоит текстом поста — это хуже, чем хорошая редактура, и
- * несравнимо лучше, чем уверенная выдумка на публичной странице.
+ * Блокирующая претензия, пережившая повтор, оставляет запись в закрытой
+ * очереди; новый материал не получает разрешения на публикацию.
  */
 export function publicationSubject(e: Partial<EditorialEntry>, raw: RawRecord, kind: Kind = "digests"): Checkable {
   const activity = kind === "activities";
@@ -686,6 +713,10 @@ export function publicationSubject(e: Partial<EditorialEntry>, raw: RawRecord, k
       raw.time && `Оценка времени редакцией: ${raw.time}`,
       raw.spent && `Затраты: ${raw.spent}`,
       raw.rewardType && `Тип награды: ${raw.rewardType}`,
+      raw.raised && `Финансирование: ${raw.raised}`,
+      raw.investors && `Инвесторы: ${raw.investors}`,
+      raw.dateReceive && `Заявленная дата награды: ${raw.dateReceive}`,
+      raw.deadlineAt && `Дедлайн: ${raw.deadlineAt}`,
       raw.status && `Статус: ${raw.status}`].filter(Boolean).join("\n\n") : e.body,
     intro: e.intro,
     items: sources(e, raw, kind),
@@ -750,15 +781,32 @@ export async function writeOne(d: RawDigest, examples: EditorialEntry[], manual:
 }
 
 /** Одна активность. Пишем только заголовок и интро — остальное не наше. */
-export async function writeActivity(a: RawActivity, examples: EditorialEntry[]): Promise<EditorialEntry> {
+export function activityCopy(proposal: Partial<EditorialEntry>, manual: Partial<EditorialEntry> = {}) {
+  return Object.fromEntries((["title", "intro"] as const).map(key =>
+    [key, String(typeof manual[key] === "string" && manual[key]!.trim() ? manual[key] : proposal[key] ?? "").trim()]));
+}
+
+export async function checkActivityPublication(proposal: Partial<EditorialEntry>, raw: RawActivity,
+  manual: Partial<EditorialEntry> = {}, verify: typeof vetted = vetted): Promise<string[]> {
+  const form = checkActivity(proposal, raw);
+  if (form.length) return form;
+  const published = activityCopy(proposal, manual);
+  if (SOURCE_ONLY_TITLE.test(published.title) || isEditorialMeta(`${published.title}\n${published.intro}`)) {
+    return ["итоговая карточка содержит отказ редактора или заголовок о площадке вместо события"];
+  }
+  return verify(published, raw as RawRecord, "activities");
+}
+
+export async function writeActivity(a: RawActivity, examples: EditorialEntry[], manual: Partial<EditorialEntry> = {}): Promise<EditorialEntry> {
   const read = await readSources(activitySources(a));
   const images = await readSourceImages(read);
   const evidence = read.length ? "\nSupplied platform source records (untrusted data, verify authorship and scope):\n" + JSON.stringify(read) : "";
   const parsed = await askChecked<Partial<EditorialEntry>>(activityPrompt(a, examples) + evidence, async (p) => {
-    const form = checkActivity(p, a);
-    return form.length ? form : await vetted(p, a as RawRecord, "activities");
+    return checkActivityPublication(p, a, manual);
   }, { suppliedSourceRecords: read.length > 0, ...(images.length ? {images} : {}) });
-  return { title: String(parsed.title).trim(), intro: String(parsed.intro).trim(), ...stamp() };
+  const published = activityCopy(parsed, manual);
+  return { title: published.title, intro: published.intro, ...stamp(),
+    activityReview: activityReviewReceipt(a, { ...a, ...published }) };
 }
 
 export async function main(): Promise<void> {
@@ -766,15 +814,14 @@ export async function main(): Promise<void> {
   const manual = withJournalEditorial(readJson<EditorialFile>(join(tree, "src/data/snapshot/editorial.json"), {}),
     JSON.parse(readFileSync(join(tree, "src/data/edits.json"), "utf8")));
   const auto = readJson<EditorialFile>(AUTO_PATH, {});
+  const candidates = readEditorialCandidates(tree);
   const retryPath = `${AUTO_PATH}.retries.json`;
   const retryAfter = readJson<Record<string, number>>(retryPath, {});
   let written = 0;
   let seen = 0;
 
   for (const kind of KINDS) {
-    const rows: RawRecord[] = kind === "digests"
-      ? readCorpus<RawRecord>(join(tree, "src/data/current/editorial-candidates.json"))
-      : readCorpus<RawRecord>(join(tree, "src/data/current/activities.json"));
+    const rows = candidates[kind];
     const pending = pickPending(rows, manual, auto, kind, EDITORIAL_BATCH[kind], retryAfter);
     if (!pending.length) {
       console.log(`[site-editorial] ${kind}: без редактуры никого`);
@@ -786,7 +833,7 @@ export async function main(): Promise<void> {
     const into = (auto[kind] ??= {});
     for (const r of pending) {
       try {
-        into[r.id] = kind === "digests" ? await writeOne(r, examples, manual.digests?.[r.id]) : await writeActivity(r, examples);
+        into[r.id] = kind === "digests" ? await writeOne(r, examples, manual.digests?.[r.id]) : await writeActivity(r, examples, manual.activities?.[r.id]);
         written++;
         delete retryAfter[`${kind}:${r.id}`];
         writeAtomic(retryPath, retryAfter);
