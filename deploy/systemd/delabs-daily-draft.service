@@ -27,11 +27,12 @@ Environment=DELABS_CHANNEL_ID=-1004471352065
 # сразу после ресёрча, — чтобы «сразу» значило сразу, а не «в течение получаса»,
 # как ходит delabs-approve-poll.timer. Явное вето владельца (ответ текстом на
 # превью) режим по-прежнему уважает: approve-poll.decideAuto.
-ExecStart=/usr/local/bin/bun /opt/agent-team/tools/daily-draft.ts
+ExecStart=/usr/bin/flock -w 1800 /var/lib/delabs-editorial/research.lock /usr/local/bin/bun /opt/agent-team/tools/daily-draft.ts
 ExecStartPost=/usr/local/bin/bun /opt/agent-team/tools/approve-poll.ts
 # До7 ограниченных Codex-вызовов: discovery,4проверки,1исправление+проверка.
-# Бюджет включает bounded source I/O и900с доставки. Lock живёт90мин.
-TimeoutStartSec=3600
+# Общий research.lock сериализует редакторов. Ожидание до1800с, затем
+# bounded source I/O и900с доставки. Draft lock живёт120мин.
+TimeoutStartSec=5400
 NoNewPrivileges=true
 UMask=0077
 ProtectSystem=strict
@@ -51,7 +52,7 @@ RestrictRealtime=true
 RestrictNamespaces=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 SystemCallArchitectures=native
-ReadWritePaths=/opt/web3-puls/drafts /var/lib/agent-codex
+ReadWritePaths=/opt/web3-puls/drafts /var/lib/agent-codex /var/lib/delabs-editorial/research.lock
 
 [Install]
 WantedBy=multi-user.target

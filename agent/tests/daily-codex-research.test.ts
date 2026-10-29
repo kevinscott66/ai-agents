@@ -7,10 +7,10 @@ import {buildFinalText,runPublicationLocked} from '../tools/approve-poll.ts';
 import {verdictFrom,factCheckPrompt,type Checkable} from '../lib/fact-check.ts';
 
 const now=Date.parse('2026-10-29T16:00:00Z');
-const article=(name='Example'):DraftArticle=>({title:`${name} открыл тестирование нового продукта для разработчиков`,date:'2026-10-29',
- summary:'Команда опубликовала условия тестирования нового продукта. Участникам доступна документация с описанием возможностей и ограничений.',
- body:'Команда открыла тестирование продукта и опубликовала документацию. Разработчики могут изучить возможности и условия доступа. '.repeat(6),
- items:[{text:'Официальный анонс',url:'https://example.com/announcement?referral=code'}],sourceCount:1});
+const article=(name='Example'):DraftArticle=>({title:`${name} открыл тестирование нового продукта для разработчиков в открытой программе`,date:'2026-10-29',
+ summary:'Команда опубликовала **условия тестирования** нового продукта для разработчиков. Участникам доступна документация с описанием возможностей, поддерживаемых сценариев работы и ограничений текущей версии.',
+ body:Array.from({length:2},()=>('Команда открыла тестирование продукта и опубликовала документацию. Разработчики могут изучить возможности и условия доступа. ').repeat(3).trim()).join('\n\n'),
+ items:[{text:'Официальный анонс',url:'https://example.com/announcement?referral=code'},{text:'Независимое издание',url:'https://example.net/news'}],sourceCount:2});
 const ask=(articles:DraftArticle[])=>async()=>JSON.stringify({articles});
 const passed=()=>({opened:2,problems:[],at:new Date(now).toISOString()});
 
@@ -49,7 +49,7 @@ test('one-shot channel reader destroys its client after successful and failed re
 test('independent checker sees final cleaned content and a bounded event window, not the writer context',async()=>{
  let calls=0;
  const result=await researchArticles([],{now,ask:ask([article()]),verify:async c=>{
-  calls++;expect(c.requireEvent).toBe(true);expect(c.eventWindow).toEqual({from:'2026-10-28',to:'2026-10-29'});
+  calls++;expect(c.requireEvent).toBe(true);expect(c.requireIndependentSources).toBe(true);expect(c.eventWindow).toEqual({from:'2026-10-28',to:'2026-10-29'});
   expect(c.items?.[0].url).toBe('https://example.com/announcement');
   expect(c.title).toBe(article().title);return passed();
  }});
@@ -60,7 +60,7 @@ test('all-rejected and zero-open-source runs never produce a draft; fewer confir
  for(const verdict of [{...passed(),opened:0},{...passed(),problems:[{claim:'reward',issue:'unsupported reward',severity:'block' as const}]}]) {
   await expect(researchArticles([],{now,ask:ask([article()]),verify:async()=>verdict})).rejects.toThrow('No fresh');
  }
- const other={...article('Omega'),title:'Omega снизил комиссию переводов своего токена до одного цента'};
+ const other={...article('Omega'),title:'Omega снизил комиссию переводов своего токена до одного цента для всех пользователей'};
  const result=await researchArticles([],{now,ask:ask([article('Alpha'),other]),verify:async c=>
   c.title.startsWith('Alpha')?passed():{...passed(),problems:[{claim:'x',issue:'unknown',severity:'block'}]}});
  expect(result.map(a=>a.title)).toEqual([article('Alpha').title]);
@@ -69,7 +69,7 @@ test('all-rejected and zero-open-source runs never produce a draft; fewer confir
 test('only one editorial repair per edition is allowed and revised text must pass a separate verification',async()=>{
  let writes=0,checks=0;
  const rejected={...passed(),problems:[{claim:'forecast',issue:'unsupported forecast must be removed',severity:'block' as const}]};
- const fixed={...article(),body:'Подтверждённые условия тестирования продукта опубликованы командой. '.repeat(12).trim()};
+ const fixed={...article(),body:Array.from({length:2},()=>('Подтверждённые условия тестирования продукта опубликованы командой. ').repeat(6).trim()).join('\n\n')};
  const result=await researchArticles([],{now,ask:async(_system,prompt)=>{
   writes++;
   if(writes===2){expect(prompt).toContain('unsupported forecast must be removed');return JSON.stringify({articles:[fixed]});}
@@ -80,6 +80,12 @@ test('only one editorial repair per edition is allowed and revised text must pas
  await expect(researchArticles([],{now,ask:async()=>{writes++;return JSON.stringify({articles:[article()]});},
   verify:async()=>{checks++;return rejected;}})).rejects.toThrow('No fresh');
  expect(writes).toBe(2);expect(checks).toBe(2);
+});
+
+test('TZ format and factual corrections share one bounded repair and never bypass verification',async()=>{
+ let asks=0,checks=0;const valid=article();
+ const result=await researchArticles([],{now,ask:async()=>{asks++;return JSON.stringify({articles:[asks===1?{...valid,summary:valid.summary.replaceAll('**','')}:valid]});},verify:async()=>{checks++;return passed();}});
+ expect(asks).toBe(2);expect(checks).toBe(1);expect(result).toHaveLength(1);
 });
 
 test('stale, future, invalid and missing dates cannot become today; duplicates never reach the verifier',async()=>{
@@ -147,6 +153,9 @@ test('stale lock recovery uses a separate exclusive gate and never overwrites a 
 test('daily service runs the pinned Codex transport, retains restricted permissions and fits the lock lifetime',()=>{
  const service=readFileSync(new URL('../../deploy/systemd/delabs-daily-draft.service',import.meta.url),'utf8');
  expect(service).toContain('CODEX_AUTH_HOME=/var/lib/agent-codex');expect(service).not.toContain('Environment=CLAUDE_BIN');
+ expect(service).toContain('ExecStart=/usr/bin/flock -w 1800 /var/lib/delabs-editorial/research.lock');
+ expect(service).toContain('/var/lib/agent-codex /var/lib/delabs-editorial/research.lock');
+ expect(DRAFT_LOCK_MAX_AGE_MS).toBeGreaterThan(Number(service.match(/TimeoutStartSec=(\d+)/)?.[1])*1000);
  expect(service).toContain('ProtectSystem=strict');expect(service).toContain('DELABS_CHANNEL_ID=-1004471352065');
  const source=readFileSync(new URL('../tools/daily-draft.ts',import.meta.url),'utf8');
  expect(source).not.toContain('@anthropic-ai/claude-agent-sdk');

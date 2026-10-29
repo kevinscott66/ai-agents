@@ -15,7 +15,7 @@ Each candidate needs a real ISO publication day and an independently supported
 current/yesterday UTC event or new announcement. A future scheduled event is valid
 only when the new official announcement is within that window. Missing/stale dates
 are rejected, not replaced with today. The checker receives the final cleaned text
-in a separate model context, requires at least one opened source, and blocks
+in a separate model context, requires two independently owned opened sources, and blocks
 unsupported event claims, figures, attribution and speculative filler. Source HTTP
 text reads reuse the public-address, DNS-pinned, bounded redirect/size/timeout guard.
 Source images retain the existing fixed HTTPS pbs.twimg.com allowlist, forbidden
@@ -50,8 +50,11 @@ mode or change channel identity implicitly.
 ## Operations
 
 The daily timer is opt-in, at 08:00 UTC (11:00 Moscow), persistent across downtime.
-The oneshot service is bounded to 3,600 seconds; its draft lock expires after 90
-minutes. Codex auth-home write access is required for subscription refresh under
+The oneshot service is bounded to 5,400 seconds; its draft lock expires after 120
+minutes. Research shares the existing editorial flock, waiting at most 30 minutes
+for a running editor instead of spawning competing models on the small server.
+The service may write its draft directory, the existing research lock file and
+Codex auth home for subscription refresh under
 `ProtectSystem=strict`. Other systemd restrictions remain. The weekly timer remains
 independent and disabled unless separately requested.
 
@@ -70,3 +73,36 @@ client lifetime, independent final-text checking, freshness/year boundaries, pri
 URLs, rejected/partial editions, bounded revision, safe source links and concurrent
 publication locking. Run the daily/approve-poll/formatting/editorial subsystem suite
 with an isolated temporary memory database and site ingestion disabled in tests.
+
+## Exact daily content specification
+
+The owner reaffirmed strict compliance with the existing TZ on29October. The
+source rules are `lib/tools-schema.ts` → `PUBLISH_TO_CHANNEL`, the established daily
+research format, and subsequent owner corrections. Daily's later3–4story target
+supersedes the generic tool's5–6example; fewer independently confirmed stories are
+allowed explicitly. Historical Notion/invite destinations are replaced with current
+working destinations; the canonical footer label/structure remains. No invented
+personal experience, unsupported market forecast or forced quota filler is permitted.
+
+`channel-daily-spec.ts` enforces70–130character titles,180–340character descriptions,
+600–1200character complete articles in2–3paragraphs,1–2short bold accents inside each
+description,2–4distinct safe sources, and the TZ's explicit banned filler phrases.
+The independent checker must identify at least two actually opened source owners
+supporting all material claims; related company sites and syndicated mirrors count
+once. A URL cannot be attributed to conflicting owners. Ownership/evidence
+assessment still depends on the model and is not a safety certification.
+
+New drafts carry `channelSpecVersion=1`. Preview and publication share the same
+numbered caption with a brief introduction, complete descriptions, source links,
+and canonical footer. Only complete story blocks may be removed to fit the verified
+account limit, with an overall1900plain UTF-16character ceiling. No title, paragraph
+or footer is truncated. The illustrated cover is the established default; a missing
+or failed trusted image pool uses the historically documented clean fallback.
+
+Strict publication makes exactly one photo send with no split/fallback messages.
+It persists the returned message ID before readback, then verifies exact text,
+photo, link/custom-emoji entities and bold coverage. Telegram may split one bold
+entity where a link starts; identical coverage is valid. A send/readback ambiguity
+retains the attempted draft and returned ID for inspection, never automatic resend.
+Existing pending drafts and weekly formats remain readable through their legacy
+branches. Format repairs and factual repairs share the same one-correction budget.

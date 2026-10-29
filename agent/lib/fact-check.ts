@@ -73,6 +73,7 @@ export interface Checkable {
   title: string;
   /** Digest articles need an actual sourced event, not merely a sourced rumour. */
   requireEvent?: boolean;
+  requireIndependentSources?: boolean;
   /** Optional daily-news window, in UTC calendar days; never inferred from a selected tab. */
   eventWindow?: {from:string;to:string};
   date?: string;
@@ -369,6 +370,7 @@ export function factCheckPrompt(c: Checkable, read: ReadSource[] = []): string {
     "Проверь материал перед публикацией. Он уйдёт в канал и на сайт без редактора.",
     "",
     `Дата материала: ${String(c.date ?? "").slice(0, 10) || "не указана"}`,
+    c.requireIndependentSources ? 'ТЗ канала: каждое существенное утверждение проверь минимум по2 независимым источникам. Официальный блог, документация, аккаунты и домены одного владельца считаются ОДНИМ источником. Несколько зеркал/синдикаций одного материала также ОДИН. Верни independent_sources:[{url,publisher,owner}], где owner — один и тот же нормализованный владелец для связанных изданий; URL должны быть в items и реально прочитаны. Верни all_claims_cross_checked=true только если2 независимых владельца подтверждают факты, числа, даты и ограничения новости; служебная дата выпуска, навигация и футер не являются новостными утверждениями. Иначе false и блокирующее замечание. Первым источником должен быть официальный анонс; верни primary_source_official=true только после проверки его авторства.' : '',
     c.eventWindow ? `Окно свежести события (UTC, включительно): ${c.eventWindow.from} — ${c.eventWindow.to}. Верни event_date (YYYY-MM-DD) самого события либо нового официального анонса по первоисточнику, а не дату агрегатора. Старый повод вне окна не подходит для ежедневного выпуска; если дата не подтверждается, event_supported=false и event_date=null.` : "",
     "Текст:",
     text,
@@ -426,12 +428,13 @@ export function factCheckPrompt(c: Checkable, read: ReadSource[] = []): string {
     `У тебя ${FACT_CHECK_MAX_TURNS} ходов. Сначала открой источники материала, поиск — только на спорное.`,
     "Следи за бюджетом: ответ должен уместиться в него. Осталось два хода — заканчивай и возвращай то,",
     "что уже нашёл; оборванная на середине проверка считается несостоявшейся, и материал не выйдет вовсе.",
+    c.requireIndependentSources ? 'Дополнительные обязательные поля JSON: "independent_sources":[{"url":"https://...","publisher":"...","owner":"..."}],"all_claims_cross_checked":false,"primary_source_official":false.' : '',
     "В sources_opened перечисли url, которые ты реально открыл: пустой список означает, что проверки не было.",
     "",
     "Верни СТРОГО ОДИН JSON-объект и НИЧЕГО кроме него:",
-    c.requireEvent
-      ? '{"problems":[{"claim":"...","issue":"...","severity":"block","where":"body","source":"https://..."}],"sources_opened":["https://..."],"event_supported":false,"event_evidence_url":null,'+(c.eventWindow?'"event_date":null,':'')+'"media_review":[]}'
-      : '{"problems":[{"claim":"...","issue":"...","severity":"block","where":"body","source":"https://..."}],"sources_opened":["https://..."],"media_review":[]}',
+    JSON.stringify({problems:[{claim:'...',issue:'...',severity:'block',where:'body',source:'https://...'}],sources_opened:['https://...'],
+      ...(c.requireEvent?{event_supported:false,event_evidence_url:null}:{}),...(c.eventWindow?{event_date:null}:{}),media_review:[],
+      ...(c.requireIndependentSources?{independent_sources:[{url:'https://...',publisher:'...',owner:'...'}],all_claims_cross_checked:false,primary_source_official:false}:{})}),
   ]
     .filter((s) => s !== "")
     .join("\n");
@@ -553,6 +556,21 @@ export function verdictFrom(
         problems.unshift({claim:c.title,issue:'дата события не подтверждена в окне свежести ежедневного выпуска',severity:'block',where:'date'});
       }
     }
+  }
+  if(c.requireIndependentSources) {
+    const openedSet=new Set([...openedUrls(parsed),...read.map(r=>r.url)]);
+    const urls=new Set((c.items??[]).map(x=>x.url));
+    const records=Array.isArray(parsed.independent_sources)?parsed.independent_sources:[];
+    const byUrl=new Map<string,string>();let malformed=false;
+    for(const r of records) {
+      if(!r||typeof r.url!=='string'||!urls.has(r.url)||!openedSet.has(r.url)||typeof r.publisher!=='string'||!r.publisher.trim()||typeof r.owner!=='string'){malformed=true;continue;}
+      const owner=r.owner.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
+      if(!owner||(byUrl.has(r.url)&&byUrl.get(r.url)!==owner)){malformed=true;continue;}
+      byUrl.set(r.url,owner);
+    }
+    const owners=new Set(byUrl.values());
+    if(malformed||parsed.primary_source_official!==true||parsed.all_claims_cross_checked!==true||owners.size<2||byUrl.size<2||!byUrl.has(c.items?.[0]?.url??''))
+      problems.unshift({claim:c.title,issue:'ТЗ канала: факты не подтверждены минимум двумя независимыми владельцами источников; связанные сайты и зеркала не считаются отдельным подтверждением',severity:'block',where:'items'});
   }
   if (!(c.items ?? []).length) {
     problems.unshift({
