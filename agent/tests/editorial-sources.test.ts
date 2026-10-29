@@ -66,4 +66,8 @@ test('checker guidance requires independent account attribution and distinguishe
  expect(prompt).toContain('Одно совпадение имени, логотипа или галочка');
  expect(prompt).toContain('не требуй официальной публикации этой оценки');
  expect(prompt).toContain('для них по-прежнему нужны подтверждённые условия');
+ expect(prompt).toContain('с конкретным утверждением или действием читателя');
+ expect(prompt).toContain('не обещает фиксированную выплату');
+ expect(prompt).toContain('Для архивной новости проверяй заявленные тогда условия');
+ expect(prompt).toContain('Существенные ограничения допуска, обязательный депозит, KYC');
 });

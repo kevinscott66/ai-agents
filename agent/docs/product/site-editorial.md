@@ -161,3 +161,11 @@ An explicitly labeled editorial duration estimate is checked against the steps,
 not demanded as a project's official promise. Costs, rewards and deadlines still
 require source-backed conditions. Unsupported retained activity instructions
 continue to block publication; they are not silently changed by the writer.
+
+Risk complaints must explain how an omission makes a concrete claim or reader
+action misleading. A historical announcement without a fixed-payout promise or
+current participation instructions does not require reproducing every general
+legal reservation or share-price disclaimer. Material eligibility, deposit,
+identity, deadline and loss conditions remain blocking where they affect the
+claim or proposed action. Actual read-only checks must exercise this distinction;
+prompt wording alone is not evidence that a generated article is correct.
