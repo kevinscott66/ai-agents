@@ -15,7 +15,7 @@ must not introduce unsupported earnings, rewards or urgency. Digest headlines co
 Fermah/Hyperliquid examples as style only. Bodies require 350–3200 characters, targeting
 2–5 substantive paragraphs about mechanism, conditions, dates and limitations. Missing
 evidence is a reason to defer, not pad or invent details. Title 35–130 and summary
-80–340 character bounds remain; source preservation
+80–340 character bounds remain; source-page preservation
 and factual checks remain mandatory, including when the model returns an empty list.
 
 When the event itself cannot be confirmed, the writer returns `defer: true` with a
@@ -137,3 +137,27 @@ removes the directory after the call. Downloading is not approval: the existing
 explicit media-review and event gates still apply. Tests cover URL boundaries,
 redirects, chunked overflow, format checks, batch caps and actual adapter inputs
 without using credentials or a live model.
+
+## Source identity and attribution
+
+`lib/editorial-sources.ts` removes explicit referral and UTM query parameters
+before research and automatic publication. The preservation gate compares those
+clean URLs: removing an incentive is no longer mistaken for losing a source.
+Paths, record IDs, fragments and functional parameters remain significant; a
+different page or a dead source cannot be silently substituted. Human source
+lists use the same conservative query cleanup in the verification projection
+without rewriting the stored journal. The site also removes additional legacy
+referral paths and parameters; this helper does not authorize changing paths
+or dropping functional arguments. Source-list checks still
+reject unclean generated URLs. Regression: `tests/editorial-sources.test.ts`.
+
+For a platform record, independent attribution can use a link from the official
+website/documentation to the matching account plus the matching record author
+and post ID. Both sources must be listed by the checker; an unavailable direct
+X page does not require the official website to republish the same post. An
+account name, logo or badge alone is insufficient. This is research guidance,
+not a deterministic authenticity certificate or a bypass of event/media gates.
+An explicitly labeled editorial duration estimate is checked against the steps,
+not demanded as a project's official promise. Costs, rewards and deadlines still
+require source-backed conditions. Unsupported retained activity instructions
+continue to block publication; they are not silently changed by the writer.
