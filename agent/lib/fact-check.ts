@@ -73,6 +73,8 @@ export interface Checkable {
   title: string;
   /** Digest articles need an actual sourced event, not merely a sourced rumour. */
   requireEvent?: boolean;
+  /** Optional daily-news window, in UTC calendar days; never inferred from a selected tab. */
+  eventWindow?: {from:string;to:string};
   date?: string;
   summary?: string;
   /** Тело выпуска или интро активности — что из них есть. */
@@ -367,6 +369,7 @@ export function factCheckPrompt(c: Checkable, read: ReadSource[] = []): string {
     "Проверь материал перед публикацией. Он уйдёт в канал и на сайт без редактора.",
     "",
     `Дата материала: ${String(c.date ?? "").slice(0, 10) || "не указана"}`,
+    c.eventWindow ? `Окно свежести события (UTC, включительно): ${c.eventWindow.from} — ${c.eventWindow.to}. Верни event_date (YYYY-MM-DD) самого события либо нового официального анонса по первоисточнику, а не дату агрегатора. Старый повод вне окна не подходит для ежедневного выпуска; если дата не подтверждается, event_supported=false и event_date=null.` : "",
     "Текст:",
     text,
     "",
@@ -427,7 +430,7 @@ export function factCheckPrompt(c: Checkable, read: ReadSource[] = []): string {
     "",
     "Верни СТРОГО ОДИН JSON-объект и НИЧЕГО кроме него:",
     c.requireEvent
-      ? '{"problems":[{"claim":"...","issue":"...","severity":"block","where":"body","source":"https://..."}],"sources_opened":["https://..."],"event_supported":false,"event_evidence_url":null,"media_review":[]}'
+      ? '{"problems":[{"claim":"...","issue":"...","severity":"block","where":"body","source":"https://..."}],"sources_opened":["https://..."],"event_supported":false,"event_evidence_url":null,'+(c.eventWindow?'"event_date":null,':'')+'"media_review":[]}'
       : '{"problems":[{"claim":"...","issue":"...","severity":"block","where":"body","source":"https://..."}],"sources_opened":["https://..."],"media_review":[]}',
   ]
     .filter((s) => s !== "")
@@ -542,6 +545,14 @@ export function verdictFrom(
       severity: "block",
       where: "title",
     });
+    if (c.eventWindow) {
+      const date = parsed.event_date;
+      const validDay = (v:unknown):v is string => typeof v==='string' && /^\d{4}-\d{2}-\d{2}$/.test(v) && Number.isFinite(Date.parse(v)) && new Date(v).toISOString().slice(0,10)===v;
+      if (!validDay(date) || !validDay(c.eventWindow.from) || !validDay(c.eventWindow.to) ||
+          c.eventWindow.from>c.eventWindow.to || date<c.eventWindow.from || date>c.eventWindow.to) {
+        problems.unshift({claim:c.title,issue:'дата события не подтверждена в окне свежести ежедневного выпуска',severity:'block',where:'date'});
+      }
+    }
   }
   if (!(c.items ?? []).length) {
     problems.unshift({

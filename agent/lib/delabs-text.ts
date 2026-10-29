@@ -355,3 +355,15 @@ export function oneLine(s: string, max = 160): string {
   }
   return `${out.trimEnd()}…`;
 }
+/** A rendered primary source must stay one HTTP(S) link, never inject Markdown. */
+export function primarySourceLink(items: {url:string}[] = []): string {
+  if (!items.length) return '';
+  try {
+    const raw=items[0].url;
+    if (/[\s\u0000-\u001f\u007f]/u.test(raw)) return '';
+    const u=new URL(raw);
+    if (!['https:','http:'].includes(u.protocol) || u.username || u.password) return '';
+    const url=u.href.replace(/[()[\]<>\\]/g,c=>encodeURIComponent(c).replace(/\(/g,'%28').replace(/\)/g,'%29'));
+    return `[Первоисточник](${url})`;
+  } catch { return ''; }
+}

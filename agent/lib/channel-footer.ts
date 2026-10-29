@@ -19,7 +19,7 @@
  * программно, не полагаясь на промпт. Ссылки вытянуты из @delabsru (×25 постов).
  */
 export const CHANNEL_FOOTER =
-  "💬 [ЧАТ](https://t.me/+TBw7_-wGgxRiZjQy) сообщества | [Активности](https://delabs-team.notion.site/5f1150ddc4584bd294966f2eadea6eae?v=98dc51bfd685415580f5a30554dc42c3&pvs=4) **© Copyright 2023-2026 [DeLabs](https://t.me/+GlWh_q7pcZFkNjc6)**🤑";
+  "💬 [ЧАТ](https://t.me/+TBw7_-wGgxRiZjQy) сообщества | [Гайды](https://delabs.space/activities) **© Copyright 2023-2026 [DeLabs](https://t.me/delabsru)**🤑";
 
 /**
  * Строка похожа на футер-блок (его и заменяем — и его же не тащим на сайт).

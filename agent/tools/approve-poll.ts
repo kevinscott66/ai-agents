@@ -43,7 +43,7 @@ import { CHANNEL_FOOTER, ensureChannelFooter } from "../lib/channel-footer.ts";
 import { sectionsLine } from "../lib/delabs-sections.ts";
 import { extractMessageId } from "../lib/userbot.ts";
 import { delabsChannelId, delabsSiteBase } from "../lib/delabs-env.ts";
-import { PENDING_PATH, ruDate, endSentence, itemEmoji, plainInline } from "./daily-draft.ts";
+import { PENDING_PATH, ruDate, endSentence, itemEmoji, plainInline, primarySourceLink, acquireDraftLock, releaseDraftLock } from "./daily-draft.ts";
 import type { PendingDraft, DraftArticle } from "./daily-draft.ts";
 
 const CHANNEL_ID = delabsChannelId();
@@ -615,9 +615,9 @@ export function buildFinalText(pending: PendingDraft): string {
 
   const lines: string[] = [];
   lines.push(`📰 **${headline(pending)}**`);
-  lines.push(`🗓️ ${ruDate(draftDate(pending))}`);
+  lines.push(`🗓️ Выпуск от ${ruDate(draftDate(pending))}`);
   lines.push("");
-  lines.push("Коротко о главном — разделы сайта под постом.");
+  lines.push("Коротко о главном — первоисточники под новостями.");
   lines.push("");
   pending.articles.forEach((a) => {
     // «Подробнее →» у пункта больше нет. Оно вело на страницу выпуска, адрес
@@ -636,7 +636,9 @@ export function buildFinalText(pending: PendingDraft): string {
     // поста из одних первых предложений владельцу было мало: «пускай постит в
     // таком же стиле, что и на сайте» (23.09.2026). Длина поста не страдает:
     // хвост всё равно режется на части по TG_MESSAGE_LIMIT.
-    lines.push(endSentence(plainInline(a.summary || a.blurb || "")));
+    const source=primarySourceLink(a.items);
+    if (a.items?.length && !source) throw new Error('Invalid primary source URL');
+    lines.push(`${endSentence(plainInline(a.summary || a.blurb || ""))} ${source}`.trim());
     lines.push(""); // отступ между новостями (эталон #75) + перед футером
   });
   lines.push(sectionsLine(SITE_BASE));
@@ -680,6 +682,10 @@ async function main(): Promise<void> {
     console.error("[approve-poll] pending unreadable:", (e as Error).message);
     process.exit(0);
     return;
+  }
+
+  if (pending.channelId !== undefined && pending.channelId !== CHANNEL_ID) {
+    throw new Error('Pending draft belongs to another channel');
   }
 
   // Expire по MAX_AGE_MS — 20ч, не 24: ровно сутки означали бы период таймера
@@ -804,8 +810,21 @@ async function main(): Promise<void> {
   process.exit(0);
 }
 
+/** Serialize ExecStartPost and the independent fallback poll before reading pending. */
+export async function runPublicationLocked(task:()=>Promise<void>, path=PENDING_PATH+'.publish.lock'):Promise<boolean> {
+  const token=acquireDraftLock(path);
+  if (!token) return false;
+  const release=()=>releaseDraftLock(path,token);
+  // main intentionally exits to stop GramJS's background update loop.
+  process.once('exit',release);
+  try { await task();return true; }
+  finally { process.removeListener('exit',release);release(); }
+}
+
 if (import.meta.main) {
-  main().catch((e) => {
+  runPublicationLocked(main).then(started=>{
+    if (!started) console.log('[approve-poll] another publisher is running');
+  }).catch((e) => {
     console.error("[approve-poll] fatal:", e);
     process.exit(1);
   });

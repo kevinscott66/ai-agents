@@ -1,6 +1,6 @@
 # delabs-daily-draft.service
 # Этап 1/2 пайплайна контента DeLabs: ежедневный ЧЕРНОВИК.
-# Ресёрчит свежие новости крипты+AI (Agent SDK / подписка, WebSearch), собирает
+# Ресёрчит свежие новости крипты+AI (Codex / подписка, веб-поиск + независимая проверка), собирает
 # 3-4 мини-статьи, рендерит бренд-баннер, шлёт ПРЕВЬЮ в Saved Messages юзербота
 # и пишет /opt/web3-puls/drafts/pending.json. Сам в канал не постит: публикацию
 # делает approve-poll — он вызывается ExecStartPost'ом сразу после ресёрча.
@@ -18,7 +18,9 @@ User=agent-team
 Group=agent-team
 WorkingDirectory=/opt/agent-team
 EnvironmentFile=/opt/agent-team/.env
-Environment=CLAUDE_BIN=/usr/local/bin/claude
+Environment=CODEX_BIN=/opt/agent-codex/node_modules/.bin/codex
+Environment=CODEX_AUTH_HOME=/var/lib/agent-codex
+Environment=DELABS_CHANNEL_ID=-1004471352065
 # Публикация без апрува (23.09.2026). Владелец попросил, чтобы черновики
 # уходили в канал сразу: гейт апрува снимается переменной DELABS_AUTO_PUBLISH=1
 # в /opt/agent-team/.env, и approve-poll запускается ExecStartPost'ом здесь же,
@@ -27,9 +29,9 @@ Environment=CLAUDE_BIN=/usr/local/bin/claude
 # превью) режим по-прежнему уважает: approve-poll.decideAuto.
 ExecStart=/usr/local/bin/bun /opt/agent-team/tools/daily-draft.ts
 ExecStartPost=/usr/local/bin/bun /opt/agent-team/tools/approve-poll.ts
-# 600 -> 1200: в бюджет запуска теперь входит не только ресёрч, но и публикация
-# из ExecStartPost, у которой в своём юните на это заложено 900с.
-TimeoutStartSec=1200
+# До7 ограниченных Codex-вызовов: discovery,4проверки,1исправление+проверка.
+# Бюджет включает bounded source I/O и900с доставки. Lock живёт90мин.
+TimeoutStartSec=3600
 NoNewPrivileges=true
 UMask=0077
 ProtectSystem=strict
@@ -49,7 +51,7 @@ RestrictRealtime=true
 RestrictNamespaces=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 SystemCallArchitectures=native
-ReadWritePaths=/opt/web3-puls/drafts
+ReadWritePaths=/opt/web3-puls/drafts /var/lib/agent-codex
 
 [Install]
 WantedBy=multi-user.target
