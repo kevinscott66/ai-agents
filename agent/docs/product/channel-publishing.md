@@ -139,3 +139,10 @@ a second independent source. Do not restore dead Notion/invite destinations or
 promise a website article that does not exist. Do not copy historical factual claims,
 shorten a headline to fit, invent extra stories or remove current verification gates
 to imitate a historical example. A single confirmed story remains valid.
+
+## Shared writing quality
+
+Both writers use the common [editorial quality policy](editorial-style.md), adapted
+from the owner-requested Wikipedia advice. The shared pure module must ship before
+its state/validator/tool callers in a scoped rollout. Current source/freshness and
+publication protection still applies.

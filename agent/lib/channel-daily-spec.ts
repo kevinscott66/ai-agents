@@ -2,6 +2,7 @@
 import {plainInline,itemEmoji,ruDate,primarySourceLink} from './delabs-text.ts';
 import {CHANNEL_FOOTER} from './channel-footer.ts';
 import {plainTelegramLength} from './telegram-format.ts';
+import {editorialStyleErrors} from './editorial-style.ts';
 export const CHANNEL_SPEC_VERSION=1;
 export const CHANNEL_MAX_PLAIN=1900;
 export interface DailyStory {title:string;date:string;summary:string;body:string;items:{text:string;url:string}[];emoji?:string;}
@@ -16,7 +17,7 @@ export function dailyStoryErrors(a:DailyStory):string[]{
  if(highlighted.length<1||highlighted.length>2||highlighted.some(m=>m[1].length>120)||highlighted.reduce((n,m)=>n+m[1].length,0)>lead.length/2)bad.push('ТЗ:1–2коротких жирных акцента внутри описания');
  if(a.summary.replace(/\*\*[^*\n]+\*\*/g,'').includes('*'))bad.push('ТЗ: некорректная жирная разметка описания');
  if(a.items.length<2||a.items.length>4||new Set(a.items.map(x=>x.url)).size!==a.items.length||a.items.some(x=>!primarySourceLink([x])))bad.push('ТЗ:2–4различных безопасных источника, первым официальный');
- if(/является|представляет собой|играет важную роль|(?:важно|необходимо|стоит) отметить|в современном мире|в эпоху цифровизации|не секрет, что|динамично развивается|откройте для себя|в заключение/iu.test([a.title,a.summary,a.body].join('\n')))bad.push('ТЗ: запрещённое ИИ-клише');
+ bad.push(...editorialStyleErrors(a));
  return bad;
 }
 /** Keep only audited bold spans; injected links and block/HTML markup remain text. */

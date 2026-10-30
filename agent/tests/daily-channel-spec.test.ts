@@ -9,7 +9,8 @@ body:Array.from({length:2},()=>('Компания опубликовала ус�
 items:[{text:'Официальный анонс',url:'https://example.com/announcement'},{text:'Независимое издание',url:'https://example.net/report'}],emoji:'🔥'});
 test('channel TZ validates length, complete descriptions, restrained bold, sources and no AI cliches',()=>{
  expect(dailyStoryErrors(story())).toEqual([]);
- for(const changed of [{summary:'Один заголовок без описания'},{summary:story().summary.replaceAll('**','')},{body:'Короткое тело'},{items:story().items.slice(0,1)},{summary:'**'+story().summary.replaceAll('**','')+'**'},{summary:story().summary+' Это является инновацией.'},{summary:story().summary+' [Войти](javascript:alert(1))'}])expect(dailyStoryErrors({...story(),...changed}).length).toBeGreaterThan(0);
+ expect(dailyStoryErrors({...story(),summary:story().summary+' Депозит является залогом.'})).toEqual([]);
+ for(const changed of [{summary:'Один заголовок без описания'},{summary:story().summary.replaceAll('**','')},{body:'Короткое тело'},{items:story().items.slice(0,1)},{summary:'**'+story().summary.replaceAll('**','')+'**'},{summary:story().summary+' Стоит отметить новый запуск.'},{summary:story().summary+' [Войти](javascript:alert(1))'}])expect(dailyStoryErrors({...story(),...changed}).length).toBeGreaterThan(0);
 });
 test('reference channel layout uses emoji stories, plain date, complete leads and real source links',()=>{
  const text=channelDailyText('Главное за день','2026-10-29T08:00:00Z',[story()]);

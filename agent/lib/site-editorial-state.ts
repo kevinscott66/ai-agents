@@ -1,6 +1,7 @@
 /** Pure editorial state, copy projections and selection; no research or file I/O. */
 import { activityReviewMatches } from "./activity-review.mjs";
 import { cleanEditorialSources, editorialSourceUrl } from "./editorial-sources.ts";
+import { editorialStyleErrors } from './editorial-style.ts';
 
 /** Два вида материалов, у каждого свой набор редактируемых полей. */
 export type Kind = "digests" | "activities";
@@ -179,7 +180,7 @@ export function styleExamples(manual: EditorialFile, kind: Kind = "digests", n =
       : t >= ACT_TITLE_MIN && t <= ACT_TITLE_MAX && b >= INTRO_MIN && b <= INTRO_MAX;
   };
   const all = Object.values(manual[kind] ?? {}).filter(
-    (e) => e && typeof e.title === "string" && typeof body(e) === "string" && fits(e),
+    (e) => e && typeof e.title === "string" && typeof body(e) === "string" && fits(e) && !editorialStyleErrors(e).length,
   );
   return all.slice(-n);
 }
@@ -199,6 +200,7 @@ export function checkEntry(e: Partial<EditorialEntry>, d: RawDigest): string[] {
   const title = String(e.title ?? "").trim();
   const summary = String(e.summary ?? "").trim();
   const body = String(e.body ?? "").trim();
+  bad.push(...editorialStyleErrors({ title, summary, body }));
 
   if (title.length < TITLE_MIN || title.length > TITLE_MAX)
     bad.push(`заголовок ${title.length} символов, нужно ${TITLE_MIN}-${TITLE_MAX}`);
@@ -242,6 +244,7 @@ export function checkActivity(e: Partial<EditorialEntry>, a: RawActivity): strin
   const bad: string[] = [];
   const title = String(e.title ?? "").trim();
   const intro = String(e.intro ?? "").trim();
+  bad.push(...editorialStyleErrors({ title, intro }));
 
   if (title.length < ACT_TITLE_MIN || title.length > ACT_TITLE_MAX)
     bad.push(`заголовок ${title.length} символов, нужно ${ACT_TITLE_MIN}-${ACT_TITLE_MAX}`);

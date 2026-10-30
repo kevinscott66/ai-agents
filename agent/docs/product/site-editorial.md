@@ -214,3 +214,10 @@ Deployment is paired with the site intake gate: under the existing research/refr
 locks install site queue generation first, then this tool and its binding module.
 Verify both private queues before releasing the lock. Keep owner journal edits,
 source cooldowns and existing schedules; do not clear retries to force acceptance.
+
+## Shared writing quality
+
+Both writers use the common [editorial quality policy](editorial-style.md), adapted
+from the owner-requested Wikipedia advice. The shared pure module must ship before
+its state/validator/tool callers in a scoped rollout. Current source/freshness and
+publication protection still applies.

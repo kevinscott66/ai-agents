@@ -16,6 +16,7 @@ import { dirname } from "node:path";
 import { HOUR_MS, MINUTE_MS } from "../lib/time-constants.ts";
 import {dailyStoryErrors,channelDailyText,fitDailyStories,CHANNEL_SPEC_VERSION} from '../lib/channel-daily-spec.ts';
 import { editorialResearch } from "../lib/codex-editorial.ts";
+import { EDITORIAL_STYLE_GUIDE, editorialStyleFindings } from '../lib/editorial-style.ts';
 import {factCheck, blocking, verdictLine, type Checkable, type FactVerdict} from '../lib/fact-check.ts';
 import {checkEntry, isEditorialMeta} from '../lib/site-editorial-state.ts';
 import {cleanEditorialSources} from '../lib/editorial-sources.ts';
@@ -267,6 +268,7 @@ const RESEARCH_SYSTEM = [
   "Ты — Drop Hunter, контент-редактор DeLabs (Telegram-канал @delabsru про крипту, airdrop, AI×Web3).",
   "Пишешь по-русски, живо, без ИИ-клише («в эпоху цифровизации», «давайте разберёмся», «не секрет, что», «стоит отметить»).",
   "Заголовки — конкретные, без воды и без точки в конце: из заголовка ясно, что произошло.",
+  EDITORIAL_STYLE_GUIDE,
   "Пишешь с точностью редакции delabs.space. Это выпуск в Telegram; не обещай создания новых страниц сайта или несуществующих ссылок.",
   "Каждый факт подкреплён РЕАЛЬНЫМ источником (URL, найденным через WebSearch/WebFetch). Не выдумывай ссылки.",
   "Не добавляй прогнозы сроков, будущих продуктов или влияния на рынок от себя. Контекст должен опираться на источник, а не заполнять объём правдоподобными выводами.",
@@ -437,6 +439,8 @@ export async function researchArticles(published: string[], deps: {
   };
   for (const raw of candidates) {
     const a={...raw,items:cleanEditorialSources(raw.items)};
+    for (const issue of editorialStyleFindings(a).filter(f => f.severity === 'warn'))
+      console.warn(`[daily-draft] стиль ${issue.field}: ${issue.message}`);
     const date = a.date;
     const form = [...checkEntry(a,{id:'daily',title:''}),...dailyStoryErrors(a)];
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date)) ||

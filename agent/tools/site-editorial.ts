@@ -36,6 +36,7 @@
  * ближайшей пересборке корпуса — отдельного шага публикации здесь нет.
  */
 import { editorialResearch, type ResearchOptions } from "../lib/codex-editorial.ts";
+import { EDITORIAL_STYLE_GUIDE, editorialStyleErrors, editorialStyleFindings } from '../lib/editorial-style.ts';
 import {readSourceImages} from '../lib/editorial-images.ts';
 import {cleanEditorialSources} from '../lib/editorial-sources.ts';
 import {activityReviewReceipt} from '../lib/activity-review.mjs';
@@ -86,6 +87,7 @@ export const EDITORIAL_SYSTEM = [
   "Источник факта — первоисточник: сайт, документация или официальный X проекта, либо серьёзное СМИ. Утверждение, которое есть только в посте канала и не подтвердилось, — не пиши вовсе и не ссылайся на канал как на источник.",
   "Реферальные ссылки и коды в текст не переносишь: в тексте — чистые адреса официальных страниц.",
   "Если официальный источник противоречит посту, пишешь по источнику.",
+  EDITORIAL_STYLE_GUIDE,
 ].join(" ");
 
 /**
@@ -345,6 +347,8 @@ export function publicationSubject(e: Partial<EditorialEntry>, raw: RawRecord, k
 }
 
 async function vetted(e: Partial<EditorialEntry>, raw: RawRecord, kind: Kind = "digests"): Promise<string[]> {
+  for (const issue of editorialStyleFindings(e).filter(f => f.severity === 'warn'))
+    console.warn(`[site-editorial] стиль ${raw.id}/${issue.field}: ${issue.message}`);
   const subject = publicationSubject(e, raw, kind);
   const verdict = await factCheck(subject);
   console.log(`[site-editorial] сверка ${raw.id}: ${verdictLine(verdict)}`);
@@ -361,6 +365,8 @@ export async function checkPublication(
   const form = checkEntry(proposal, raw);
   if (form.length) return form;
   const published = digestCopy(proposal, manual);
+  const styleErrors = editorialStyleErrors(published);
+  if (styleErrors.length) return styleErrors;
   if (SOURCE_ONLY_TITLE.test(published.title ?? "")) return ["итоговый заголовок называет площадку вместо события проекта"];
   if (isEditorialMeta(`${published.title ?? ""}\n${published.summary ?? ""}\n${published.body ?? ""}`)) {
     return ["итоговый текст после ручных правок описывает редакционный отказ вместо события"];
@@ -398,6 +404,8 @@ export async function checkActivityPublication(proposal: Partial<EditorialEntry>
   const form = checkActivity(proposal, raw);
   if (form.length) return form;
   const published = activityCopy(proposal, manual);
+  const styleErrors = editorialStyleErrors(published);
+  if (styleErrors.length) return styleErrors;
   if (SOURCE_ONLY_TITLE.test(published.title) || isEditorialMeta(`${published.title}\n${published.intro}`)) {
     return ["итоговая карточка содержит отказ редактора или заголовок о площадке вместо события"];
   }
