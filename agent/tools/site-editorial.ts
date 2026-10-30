@@ -35,8 +35,6 @@
  * Таймер: delabs-site-editorial.timer. Сайт подхватит написанное сам на
  * ближайшей пересборке корпуса — отдельного шага публикации здесь нет.
  */
-import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from "node:fs";
-import { dirname, join } from "node:path";
 import { editorialResearch, type ResearchOptions } from "../lib/codex-editorial.ts";
 import {readSourceImages} from '../lib/editorial-images.ts';
 import {cleanEditorialSources} from '../lib/editorial-sources.ts';
@@ -47,9 +45,17 @@ import {
   TITLE_MIN, TITLE_MAX, SUMMARY_MIN, SUMMARY_MAX, BODY_MIN, BODY_MAX,
   ACT_TITLE_MIN, ACT_TITLE_MAX, INTRO_MIN, INTRO_MAX,
   digestReviewAfter, isEditorialMeta, styleExamples, checkEntry, checkActivity,
-  dropSelfLink, pickPending, withJournalEditorial, activityCopy, digestCopy,
+  dropSelfLink, pickPending, activityCopy, digestCopy,
   type Kind, type DigestItem, type RawDigest, type RawActivity, type RawRecord, type EditorialEntry, type EditorialFile,
 } from "../lib/site-editorial-state.ts";
+
+import {
+  AUTO_PATH, siteTree, readEditorialCandidates, readManualEditorial, readJson, writeAtomic,
+} from "../lib/site-editorial-store.ts";
+
+export {
+  SITE_DIR, AUTO_PATH, siteTree, readCorpus, readEditorialCandidates, readManualEditorial, readJson, writeAtomic,
+} from "../lib/site-editorial-store.ts";
 
 export {
   KINDS, EDITORIAL_BATCH, EDITORIAL_VERSION, LABEL_TITLE, SOURCE_ONLY_TITLE,
@@ -60,56 +66,6 @@ export {
   withJournalEditorial, deferReason, activityCopy, digestCopy,
 } from "../lib/site-editorial-state.ts";
 export type { Kind, DigestItem, RawDigest, RawActivity, RawRecord, EditorialEntry, EditorialFile } from "../lib/site-editorial-state.ts";
-
-export const SITE_DIR = process.env.DELABS_SITE_DIR ?? "/opt/delabs";
-
-/**
- * Где на самом деле лежит дерево сайта.
- *
- * До 20.09.2026 `/opt/delabs` и было деревом. С переходом на релизы (AUD-021)
- * там лежат `releases/<метка>/`, а рабочая копия — за ссылкой `current`, и
- * `/opt/delabs/src` перестал существовать. Редактура этого не заметила: чтение
- * корпуса падало молча, `readJson` возвращал пустой массив, и прогон бодро
- * сообщал «без редактуры никого». Сутки все новые выпуски выходили на сайт
- * текстом поста — ошибки при этом не было ни одной.
- *
- * Поэтому раскладка определяется, а не предполагается, и обе поддерживаются:
- * переменная `DELABS_SITE_DIR` может указывать и на рабочую копию на Mac, где
- * никакого `current` нет.
- */
-export function siteTree(root: string = SITE_DIR): string {
-  return existsSync(join(root, "current", "src", "data")) ? join(root, "current") : root;
-}
-
-/**
- * Корпус читается строго: пустой список от отсутствующего файла неотличим от
- * «всё уже отредактировано», и именно это скрыло поломку выше. Лучше падение
- * юнита, которое видно в `systemctl --failed`, чем спокойный отчёт ни о чём.
- */
-export function readCorpus<T>(path: string): T[] {
-  if (!existsSync(path)) {
-    throw new Error(
-      `нет корпуса ${path} — проверь раскладку сайта (releases/current) и DELABS_SITE_DIR`,
-    );
-  }
-  const rows = JSON.parse(readFileSync(path, "utf8"));
-  if (!Array.isArray(rows)) throw new Error(`Invalid editorial corpus: ${path}`);
-  return rows as T[];
-}
-
-/** Read both private queues before any research/write; missing intake fails closed. */
-export function readEditorialCandidates(tree: string): Record<Kind, RawRecord[]> {
-  const rows = {
-    digests: readCorpus(join(tree, "src/data/current/editorial-candidates.json")),
-    activities: readCorpus(join(tree, "src/data/current/activity-candidates.json")),
-  } as Record<Kind, RawRecord[]>;
-  if (rows.activities.some(row => typeof row.activityReviewRequired !== "boolean")) {
-    throw new Error("Activity candidate queue lacks publication-review state; rebuild site intake first");
-  }
-  return rows;
-}
-export const AUTO_PATH =
-  process.env.DELABS_EDITORIAL_AUTO ?? "/var/lib/delabs-editorial/editorial.json";
 
 /**
  * Бюджет ходов на один материал.
@@ -276,26 +232,6 @@ export function extractJson(raw: string): Record<string, unknown> {
     }
   }
   throw new Error("незакрытые скобки JSON");
-}
-
-export function readJson<T>(path: string, fallback: T): T {
-  try {
-    return JSON.parse(readFileSync(path, "utf8")) as T;
-  } catch {
-    return fallback;
-  }
-}
-
-/**
- * Запись через временный файл и rename: корпус пересобирается по таймеру
- * дважды в час и может прийти ровно в момент записи. rename в пределах одного
- * каталога атомарен — читатель увидит либо прежний файл, либо новый целиком.
- */
-export function writeAtomic(path: string, data: unknown): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = join(dirname(path), `.${Date.now()}.tmp`);
-  writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n");
-  renameSync(tmp, path);
 }
 
 /** Один заход в Agent SDK по подписке. Возвращает текст последнего сообщения. */
@@ -482,8 +418,7 @@ export async function writeActivity(a: RawActivity, examples: EditorialEntry[], 
 
 export async function main(): Promise<void> {
   const tree = siteTree();
-  const manual = withJournalEditorial(readJson<EditorialFile>(join(tree, "src/data/snapshot/editorial.json"), {}),
-    JSON.parse(readFileSync(join(tree, "src/data/edits.json"), "utf8")));
+  const manual = readManualEditorial(tree);
   const auto = readJson<EditorialFile>(AUTO_PATH, {});
   const candidates = readEditorialCandidates(tree);
   const retryPath = `${AUTO_PATH}.retries.json`;

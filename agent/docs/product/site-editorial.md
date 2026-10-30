@@ -18,6 +18,13 @@ I/O, source research and final factual verification, and re-exports the existing
 public API for the daily-channel writer and regression tests. Importing the pure
 state module does not load the research adapter.
 
+`lib/site-editorial-store.ts` owns filesystem paths, strict private intake reads,
+manual snapshot/journal loading and the existing JSON/atomic-write operations.
+It imports only Node filesystem/path helpers and the pure state module; importing
+it performs no file operations. The research tool retains operation ordering,
+retry handling and factual checks and re-exports prior storage APIs for callers.
+Both state and store modules must ship with the tool in a scoped deployment.
+
 The extraction preserves batch sizes, six-hour retry policy, historical backlog
 selection, manual field precedence and the version-1 activity receipt contract.
 It does not approve new archive records or change source requirements.
