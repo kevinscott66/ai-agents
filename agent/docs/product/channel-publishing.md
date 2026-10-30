@@ -32,7 +32,7 @@ A valid edition renders a banner and sends a preview and full review to Saved
 Messages before committing a channel-bound pending draft. Preview and final post
 include escaped primary-source links. The shared footer uses current site sections,
 the public DeLabs channel, and the established community chat; obsolete Notion links
-are removed. Existing caption, Telegram formatting and custom emoji rules remain.
+are removed. Telegram formatting and custom emoji rules remain. The owner-selected visual reference is channel post83 and preceding posts78–82: clean branded cover, full first-story headline, plain date, short introduction and emoji-led stories without numbering.
 
 `approve-poll.ts` runs after drafting and from its fallback timer. An atomic publisher
 lock is acquired before either process reads pending state. Stale recovery uses
@@ -57,7 +57,7 @@ or another tool. Date display retains the existing `ruDate` clock/time-zone rule
 strict daily validation, pending locks and delivery orchestration. Its editorial
 validators import the pure `site-editorial-state.ts` rather than the editor tool.
 
-Strict numbered channel captions and complete-story fitting remain in
+Strict channel captions and complete-story fitting remain in
 `channel-daily-spec.ts`; moving legacy formatting does not alter strict TZ limits,
 footers, source links or approval/delivery policy. The new format helper must be
 included when the daily tool is installed. Existing site editor modules are not
@@ -109,11 +109,15 @@ once. A URL cannot be attributed to conflicting owners. Ownership/evidence
 assessment still depends on the model and is not a safety certification.
 
 New drafts carry `channelSpecVersion=1`. Preview and publication share the same
-numbered caption with a brief introduction, complete descriptions, source links,
+caption with a brief introduction, complete descriptions, source links,
 and canonical footer. Only complete story blocks may be removed to fit the verified
 account limit, with an overall1900plain UTF-16character ceiling. No title, paragraph
-or footer is truncated. The illustrated cover is the established default; a missing
-or failed trusted image pool uses the historically documented clean fallback.
+or footer is truncated. The daily cover uses the existing clean `renderBannerPng` template (1920×1008),
+with branded fonts, gradient, small logo, full first-story title, subtitle and date.
+The illustrated pool remains available to other tools but is not the daily default.
+This owner correction supersedes the earlier inferred illustrated-default rule.
+The first title is not cut at90characters; the banner renderer fits it, and the
+normal title validator still enforces70–130characters.
 
 Strict publication makes exactly one photo send with no split/fallback messages.
 It persists the returned message ID before readback, then verifies exact text,
@@ -122,3 +126,16 @@ entity where a link starts; identical coverage is valid. A send/readback ambigui
 retains the attempted draft and returned ID for inspection, never automatic resend.
 Existing pending drafts and weekly formats remain readable through their legacy
 branches. Format repairs and factual repairs share the same one-correction budget.
+
+## Reference layout correction — 30 October 2026
+
+The owner explicitly selected https://t.me/c/4471352065/83 and preceding posts
+as the design reference. Use the full first headline on the cover and in the caption,
+`🗓️ <date>` without «Выпуск от», «Коротко о главном — детали по ссылкам.»,
+then separate emoji + bold headline / complete lead blocks; no numeric list or
+generic «Привет!». Keep short factual bold accents, independently checked sources
+and the current canonical footer. «Подробнее →» links to the actual source; retain
+a second independent source. Do not restore dead Notion/invite destinations or
+promise a website article that does not exist. Do not copy historical factual claims,
+shorten a headline to fit, invent extra stories or remove current verification gates
+to imitate a historical example. A single confirmed story remains valid.

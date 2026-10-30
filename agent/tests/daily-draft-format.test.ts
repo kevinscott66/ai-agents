@@ -27,12 +27,15 @@ const article = (overrides: Partial<DraftArticle> = {}): DraftArticle => ({
 });
 
 describe("daily draft formatting without the delivery runtime", () => {
-  test("day title preserves legacy whitespace, fallback and word-boundary rules", () => {
+  test("day title keeps the full reference headline, including beyond the old 90-unit cut", () => {
     expect(dayTitle([])).toBe("Дайджест");
     expect(dayTitle([article({ title: "  Короткий заголовок  " })])).toBe("Короткий заголовок");
     expect(dayTitle([article({ title: "   " })])).toBe("");
-    expect(dayTitle([article({ title: "А".repeat(50) + " " + "Б".repeat(60) })])).toBe("А".repeat(50));
-    expect(dayTitle([article({ title: "А".repeat(100) })])).toBe("А".repeat(90));
+    const title = "А".repeat(50) + " " + "Б".repeat(60);
+    expect(dayTitle([article({ title })])).toBe(title);
+    expect(dayTitle([article({ title: "А".repeat(100) })])).toBe("А".repeat(100));
+    const unicodeTitle = "А".repeat(89) + "🔥 подтверждённый запуск";
+    expect(dayTitle([article({ title: unicodeTitle })])).toBe(unicodeTitle);
   });
 
   test("preview keeps exact layout, summary priority, safe source link and markup treatment", () => {

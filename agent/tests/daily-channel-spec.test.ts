@@ -11,13 +11,15 @@ test('channel TZ validates length, complete descriptions, restrained bold, sourc
  expect(dailyStoryErrors(story())).toEqual([]);
  for(const changed of [{summary:'Один заголовок без описания'},{summary:story().summary.replaceAll('**','')},{body:'Короткое тело'},{items:story().items.slice(0,1)},{summary:'**'+story().summary.replaceAll('**','')+'**'},{summary:story().summary+' Это является инновацией.'},{summary:story().summary+' [Войти](javascript:alert(1))'}])expect(dailyStoryErrors({...story(),...changed}).length).toBeGreaterThan(0);
 });
-test('strict daily output is numbered, keeps body accents and two safe sources, and uses only canonical footer',()=>{
+test('reference channel layout uses emoji stories, plain date, complete leads and real source links',()=>{
  const text=channelDailyText('Главное за день','2026-10-29T08:00:00Z',[story()]);
  const[plain,entities]=HTMLParser.parse(mdToUserbotHtml(text));
- expect(text).toContain('1. 🔥 **Google');expect(text).toContain('**$2**');expect(text).toContain('**28 октября**');
+ expect(text).toContain('\n🔥 **Google');expect(text).not.toMatch(/^\d+\. /m);expect(text).toContain('**$2**');expect(text).toContain('**28 октября**');
  expect(text).not.toContain('Разделы:');expect(text).not.toContain('notion.site');expect(text).toContain('[Активности]');
  expect(entities.filter(e=>e.className==='MessageEntityTextUrl').length).toBe(5);
- expect(plain).toContain('Выпуск от 29 октября');
+ expect(plain).toContain('🗓️ 29 октября');expect(plain).not.toContain('Выпуск от');expect(plain).not.toContain('Привет!');
+ expect(plain).toContain('Коротко о главном — детали по ссылкам.');expect(text).toContain('[Подробнее →](https://example.com/announcement)');
+ expect(plain).not.toContain('на сайте');
  expect(highlightedLead('**Факт** [обман](javascript:alert(1))')).not.toContain('[обман]');
 });
 test('caption fitting removes whole stories and cannot truncate a paragraph or footer',()=>{

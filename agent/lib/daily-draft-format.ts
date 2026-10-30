@@ -36,17 +36,9 @@ export interface DraftArticle {
    */
   siteId?: string;
 }
-/** Заголовок дня — короткий, по первой статье. */
+/** Full first-story title, as in the channel references; the cover fits its type. */
 export function dayTitle(articles: DraftArticle[]): string {
-  // Заголовок дня = байтовый заголовок первой новости. НЕ режем середину слова
-  // (баг «обрезаются заголовки и в превью тоже»: прежний .slice(0,80) рубил по
-  // 80-му символу посреди слова). Баннерный fitTitle сам ужимает длину; здесь
-  // лишь страхуемся от патологически длинного заголовка — по ГРАНИЦЕ слова.
-  const t = (articles[0]?.title ?? "Дайджест").trim();
-  if (t.length <= 90) return t;
-  const cut = t.slice(0, 90);
-  const sp = cut.lastIndexOf(" ");
-  return (sp > 40 ? cut.slice(0, sp) : cut).trim();
+  return (articles[0]?.title ?? "Дайджест").trim();
 }
 
 /**

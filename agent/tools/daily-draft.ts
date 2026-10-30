@@ -26,7 +26,7 @@ import { StringSession } from "telegram/sessions";
 import { HTMLParser } from "telegram/extensions/html";
 import { CustomFile } from "telegram/client/uploads";
 import { decryptEncryptedSession } from "./userbot-login.ts";
-import { renderBannerPng,renderIllustratedBannerPng,hasBannerPool } from "../lib/cover-banner.ts";
+import { renderBannerPng } from "../lib/cover-banner.ts";
 import { mdToUserbotHtml } from "../lib/telegram-format.ts";
 import { buildCustomEmojiEntities } from "../lib/custom-emoji-map.ts";
 import { extractMessageId } from "../lib/userbot.ts";
@@ -643,9 +643,8 @@ export function buildClient(): TelegramClient {
   );
 }
 
-/** Illustrated is the established default; the documented clean fallback stays explicit. */
+/** Channel reference posts 78–83 use the clean branded cover, not the art pool. */
 export async function renderDailyBanner(opts:Parameters<typeof renderBannerPng>[0]):Promise<Buffer> {
- if(hasBannerPool())try{const illustrated=await renderIllustratedBannerPng(opts);if(illustrated)return illustrated;}catch{console.warn('[daily-draft] illustrated cover unavailable; documented clean fallback');}
  return renderBannerPng(opts);
 }
 

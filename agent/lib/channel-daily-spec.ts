@@ -30,11 +30,13 @@ export function highlightedLead(raw:string):string {
 export function channelDailyText(title:string,createdAt:string,articles:DailyStory[]):string {
  if(!articles.length||articles.length>4)throw Error('ТЗ: выпуск должен содержать1–4подтверждённых события');
  const errors=articles.flatMap(dailyStoryErrors);if(errors.length)throw Error(errors.join('; '));
- const lines=[`📰 **${plainInline(title)}**`,`🗓️ Выпуск от ${ruDate(new Date(createdAt))}`,'','Привет! Главное в крипте и AI.',''];
- articles.forEach((a,i)=>{
-  const first=primarySourceLink(a.items).replace('[Первоисточник]','[Анонс]');
+ // Reference posts 78–83: full headline, plain date, short intro, emoji-led stories.
+ // Sources stay real: do not promise article pages that have not been published.
+ const lines=[`📰 **${plainInline(title)}**`,`🗓️ ${ruDate(new Date(createdAt))}`,'','Коротко о главном — детали по ссылкам.',''];
+ articles.forEach(a=>{
+  const first=primarySourceLink(a.items).replace('[Первоисточник]','[Подробнее →]');
   const second=primarySourceLink(a.items.slice(1)).replace('[Первоисточник]','[Второй источник]');
-  lines.push(`${i+1}. ${itemEmoji(a.emoji)} **${plainInline(a.title)}**`,`${highlightedLead(a.summary)} ${first} · ${second}`,'');
+  lines.push(`${itemEmoji(a.emoji)} **${plainInline(a.title)}**`,`${highlightedLead(a.summary)} ${first} · ${second}`,'');
  });
  lines.push(CHANNEL_FOOTER);return lines.join('\n');
 }
