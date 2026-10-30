@@ -62,3 +62,85 @@ test('remove then re-add does not resurrect an old protected manual intro',()=>{
  expect(withJournalEditorial(manual,journal).activities?.[raw.id]).toEqual({title:'New campaign title'});
  expect(manual.activities[raw.id].intro).toBe('Old protected intro');
 });
+
+const revision = {
+ version:1 as const, whatIs:'Тестовая площадка с виртуальными активами.',
+ steps:['Откройте [официальные правила](https://example.com/terms).','Используйте только тестовые средства; реальные средства не требуются.'],
+ spent:'', time:'', rewardType:'Условия приза указаны в правилах',status:'Потенциальный',
+ dateReceive:'',deadlineAt:null,url:'https://example.com/terms',raised:'',investors:'',
+};
+const corrected = {...proposal,activityRevision:revision,items:[{text:'Правила',url:'https://example.com/terms'}]};
+
+test('full revision checker sees corrected instructions and unknowns, not obsolete imported claims',async()=>{
+ const input={...raw,steps:['Deposit $100 to get guaranteed tokens'],spent:'$100',rewardType:'Guaranteed airdrop'};
+ const before=structuredClone(input);
+ let calls=0;
+ expect(await checkActivityPublication(corrected,input,{},async(entry,record,kind)=>{
+  calls++;expect(kind).toBe('activities');expect(record.steps).toEqual(revision.steps);
+  expect(record.spent).toBe('');expect(record.rewardType).toBe(revision.rewardType);
+  const checked=publicationSubject(entry,record,kind);
+  expect(checked.body).not.toContain('Deposit $100');expect(checked.body).not.toContain('Guaranteed airdrop');
+  expect(checked.body).toContain('тестовые средства');expect(checked.items).toContainEqual(corrected.items[0]);
+  return [];
+ })).toEqual([]);
+ expect(calls).toBe(1);expect(input).toEqual(before);
+});
+
+test('material human edits including empty unknown values are retained before the final check',async()=>{
+ const manual=withJournalEditorial({},[{kind:'activity',op:'patch',key:raw.id,value:{steps:['Human deposit instruction'],spent:'',deadlineAt:null}}]).activities![raw.id];
+ expect(await checkActivityPublication(corrected,raw,manual,async(_,record)=>{
+  expect(record.steps).toEqual(['Human deposit instruction']);expect(record.spent).toBe('');expect(record.deadlineAt).toBe(null);
+  return ['Human condition unsupported'];
+ })).toEqual(['Human condition unsupported']);
+});
+
+test('new revision receipt is invalidated by a changed condition and does not requeue an unchanged accepted guide',async()=>{
+ const {projectActivityRevision}=await import('../lib/activity-revision.mjs');
+ const output=projectActivityRevision(raw,corrected);
+ const entry={...corrected,activityReview:activityReviewReceipt(raw,output)};
+ expect(pickPending([raw],{}, {activities:{[raw.id]:entry}},'activities')).toEqual([]);
+ expect(pickPending([{...raw,steps:['New imported task']}],{}, {activities:{[raw.id]:entry}},'activities')).toHaveLength(1);
+ expect(pickPending([raw],{activities:{[raw.id]:{title:proposal.title,spent:'$10'} as any}}, {activities:{[raw.id]:entry}},'activities')).toHaveLength(1);
+});
+
+test('malformed/identity-changing/unsafe revisions never call the independent checker',async()=>{
+ for(const patch of [null,{}, {...revision,steps:{}},{...revision,steps:[]},{...revision,id:'new-id'},
+  {...revision,spent:0},{...revision,url:'javascript:alert(1)'},{...revision,deadlineAt:'2026-11-01'},
+  {...revision,steps:['[Click](data:text/html,bad)']},{...revision,whatIs:'<script>alert(1)</script>'}]) {
+  let calls=0;
+  const errors=await checkActivityPublication({...corrected,activityRevision:patch as any},raw,{},async()=>{calls++;return []});
+  expect(errors.length).toBeGreaterThan(0);expect(calls).toBe(0);
+ }
+ expect((await checkActivityPublication({...corrected,items:[]},raw)).length).toBeGreaterThan(0);
+});
+
+test('a substantive factual rejection still blocks the full corrected proposal',async()=>{
+ const result=await checkActivityPublication(corrected,raw,{},async()=>['No official current campaign']);
+ expect(result).toEqual(['No official current campaign']);
+});
+
+test('invalid explicitly present revisions cannot strand a private guide behind a legacy receipt',()=>{
+ const entry={...proposal,activityRevision:null as any,activityReview:activityReviewReceipt(raw,{...raw,...proposal})};
+ expect(pickPending([raw],{}, {activities:{[raw.id]:entry}},'activities')).toHaveLength(1);
+});
+
+test('actual intake ownership beats a stale replay of a skipped journal patch',async()=>{
+ const {projectActivityRevision}=await import('../lib/activity-revision.mjs');
+ const input={...raw,activityManualFields:[],spent:'Original'};
+ expect(projectActivityRevision(input,corrected,{spent:'obsolete $999'}).spent).toBe('');
+ const human={...input,activityManualFields:['spent'],spent:''};
+ expect(projectActivityRevision(human,corrected,{spent:'obsolete $999'}).spent).toBe('');
+});
+
+test('a generic overview cannot replace a source-backed program even with zero factual complaints',async()=>{
+ const {verdictFrom}=await import('../lib/fact-check.ts');
+ const subject=publicationSubject(corrected,{...raw,...revision} as any,'activities');
+ expect(subject.requireActivity).toBe(true);
+ const source=corrected.items[0].url;
+ for(const fields of [{},{activity_supported:false},{activity_supported:true,activity_source_official:true,activity_evidence_url:'https://example.com/unopened'}]) {
+  const verdict=verdictFrom({problems:[],sources_opened:[source],...fields},[],subject);
+  expect(verdict.problems.some(p=>p.severity==='block')).toBe(true);
+ }
+ const checked=verdictFrom({problems:[],sources_opened:[source],activity_supported:true,activity_source_official:true,activity_evidence_url:source},[],subject);
+ expect(checked.problems).toEqual([]);
+});

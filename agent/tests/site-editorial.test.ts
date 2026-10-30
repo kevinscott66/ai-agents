@@ -254,10 +254,12 @@ describe("активности — заголовок зовёт тратить 
     expect(same).toContain("не изменил");
   });
 
-  test("промпт несёт шаги, но запрещает их трогать: ошибка там стоит читателю денег", () => {
+  test("промпт требует полную проверяемую редакцию шагов и сохраняет ручной приоритет", () => {
     const p = activityPrompt(act(), []);
     expect(p).toContain("Переходим на сайт и запрашиваем тестовые токены.");
-    expect(p).toContain("не переписывай");
+    expect(p).toContain("activityRevision");
+    expect(p).toContain("Не меняй id, project, date, sourceUrl, origin");
+    expect(p).toContain("Завершённый сезон");
   });
 
   test("промпт отваживает от канального «отрабатываем»", () => {

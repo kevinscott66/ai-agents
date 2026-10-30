@@ -84,7 +84,7 @@ describe("editorial state compatibility", () => {
     const before = structuredClone({ manual, journal });
     const merged = withJournalEditorial(manual, journal);
     expect(merged.digests).toEqual({ story: { ...entry, title: " First title ", body: "", summary: "Final summary", items: [] } });
-    expect(merged.activities).toEqual({ story: { title: "Re-added title", intro: "" } });
+    expect(merged.activities).toEqual({ story: { title: "Re-added title", intro: "", status: "Ignored" } });
     expect({ manual, journal }).toEqual(before);
     expect(() => withJournalEditorial(manual, null)).toThrow("Invalid editorial journal");
   });

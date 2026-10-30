@@ -73,6 +73,8 @@ export interface Checkable {
   title: string;
   /** Digest articles need an actual sourced event, not merely a sourced rumour. */
   requireEvent?: boolean;
+  /** A guide needs a confirmed participation program, not a generic product overview. */
+  requireActivity?: boolean;
   requireIndependentSources?: boolean;
   /** Optional daily-news window, in UTC calendar days; never inferred from a selected tab. */
   eventWindow?: {from:string;to:string};
@@ -418,6 +420,7 @@ export function factCheckPrompt(c: Checkable, read: ReadSource[] = []): string {
     "   принудительный выкуп токена, порог ликвидации, дедлайн вывода, токен не торгуется публично,",
     "   реферальная ссылка или код в тексте, обещание награды, которого проект не давал.",
     "   Объясни связь каждого пропущенного условия с конкретным утверждением или действием читателя. Не требуй пересказа всех юридических условий: общая оговорка об изменении правил или колебании цены не становится блокером сама по себе, если текст не обещает фиксированную выплату и не предлагает участвовать на неполных условиях. Для архивной новости проверяй заявленные тогда условия, не превращая её в текущий гайд. Существенные ограничения допуска, обязательный депозит, KYC, сроки и риск потери средств по-прежнему должны быть названы, если без них описанное действие или обещание вводит в заблуждение.",
+    c.requireActivity ? "9. ОСНОВА ГАЙДА. Подтверди именно описанную кампанию, тестнет, квесты, вайтлист или другую программу участия у этого проекта, а не просто существование платформы. Общий обзор сайта или покупки/торговли без подтверждённой программы не заменяет исходную активность. Нужны официальные условия, подтверждающие шаги и существенные затраты/награды. Если программа завершена, допустим только явно архивный гайд без предложения действовать сейчас. Когда автор заменил неподтверждённый тестнет обычной торговлей за реальные деньги или перечислением неизвестного, activity_supported=false. Только при подтверждении поставь activity_supported=true, activity_source_official=true и activity_evidence_url — буквально URL из items, который реально открыт и относится именно к этой программе." : "",
     c.requireEvent ? "9. ПОВОД ДЛЯ ПУБЛИКАЦИИ. Есть ли подтверждённое событие, о котором статья сообщает читателю? Сам факт, что сторонний аккаунт опубликовал короткий прогноз или слух, не является подтверждением запуска, вайтлиста или листинга проекта. Если материал состоит из пересказа такого поста и списка того, что пока неизвестно, event_supported=false и event_evidence_url=null. Только для подтверждённого события поставь true и укажи URL действительно открытого источника. Не превращай отсутствие подтверждения в самостоятельную новость." : "",
     "",
     "severity:",
@@ -433,7 +436,7 @@ export function factCheckPrompt(c: Checkable, read: ReadSource[] = []): string {
     "",
     "Верни СТРОГО ОДИН JSON-объект и НИЧЕГО кроме него:",
     JSON.stringify({problems:[{claim:'...',issue:'...',severity:'block',where:'body',source:'https://...'}],sources_opened:['https://...'],
-      ...(c.requireEvent?{event_supported:false,event_evidence_url:null}:{}),...(c.eventWindow?{event_date:null}:{}),media_review:[],
+      ...(c.requireEvent?{event_supported:false,event_evidence_url:null}:{}),...(c.requireActivity?{activity_supported:false,activity_source_official:false,activity_evidence_url:null}:{}),...(c.eventWindow?{event_date:null}:{}),media_review:[],
       ...(c.requireIndependentSources?{independent_sources:[{url:'https://...',publisher:'...',owner:'...'}],all_claims_cross_checked:false,primary_source_official:false}:{})}),
   ]
     .filter((s) => s !== "")
@@ -537,6 +540,15 @@ export function verdictFrom(
   // Источник, текст которого лежал в промпте, прочитан независимо от того,
   // вспомнил ли фактчекер перечислить его в sources_opened.
   const opened = new Set([...openedUrls(parsed), ...read.map((r) => r.url)]).size;
+  if (c.requireActivity) {
+    const evidence = parsed.activity_evidence_url;
+    const actual = new Set([...openedUrls(parsed), ...read.map(r => r.url)]);
+    if (parsed.activity_supported !== true || parsed.activity_source_official !== true ||
+        typeof evidence !== 'string' || !/^https?:\/\//.test(evidence) ||
+        !actual.has(evidence) || !(c.items ?? []).some(item => item.url === evidence)) {
+      problems.unshift({claim:c.title,issue:'нет открытых официальных условий подтверждённой активности; обзор продукта не заменяет гайд',severity:'block',where:'body'});
+    }
+  }
   if (c.requireEvent) {
     const evidence = parsed.event_evidence_url;
     const supported = parsed.event_supported === true && typeof evidence === "string" &&

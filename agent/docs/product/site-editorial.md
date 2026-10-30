@@ -68,7 +68,7 @@ stored alongside the automatic editorial file as `<AUTO_PATH>.retries.json`, kee
 unreachable sources from occupying every batch. Success clears its deadline. If all
 attempted entries fail, the run exits unsuccessfully rather than reporting a green
 zero-result run. Existing service locking still serializes research runs. No messages
-are sent to Telegram and no activity steps/statuses are edited by this tool.
+are sent to Telegram and activity terms change only through the full checked revision contract described below.
 
 Manual title-only edits no longer exclude missing digest bodies from research. Manual
 bodies remain protected, while automatic bodies shorter than the new minimum become
@@ -95,7 +95,7 @@ entries also participate even when their raw bodies are complete.
 The live `edits.json` journal is folded into the human editorial layer. A manual
 body protects the article; title-only corrections remain available to the writer
 and final verifier. A corrupt journal fails the run rather than silently removing
-human protection. No activity steps or statuses are rewritten.
+human protection. Activity terms use the full checked revision contract below.
 
 Platform records retain bounded HTTPS media URLs from the platform's media hosts
 and optional untrusted alt text. They are references, not inspected pixels.
@@ -196,16 +196,18 @@ prompt wording alone is not evidence that a generated article is correct.
 The site decides `activityReviewRequired` before projecting public records. Exact
 legacy manual bindings can preserve historically curated guides; this migration is
 not a fresh fact check. New automatic-only or changed records remain private until
-this tool validates the final title/intro with all retained conditions and stores
-an `activityReview` binding. `lib/activity-review.mjs` must remain byte-identical to
+this tool validates a complete allowlisted `activityRevision` and all retained human
+conditions, confirms the participation program through a separately opened official
+source, and stores an `activityReview` binding. `lib/activity-review.mjs` must remain byte-identical to
 the site's `scripts/lib/activity-review.mjs`; it canonicalizes the listed material
 fields without turning unknown values into zero. `boundAt` is an integrity-binding
 timestamp, not a source/event/lifecycle claim.
 
 Human title/intro edits retain precedence, including journal edits. They no longer
 silently skip review of a new or changed activity; the verifier sees the final pair
-before a receipt is written. Steps, costs, reward/status, funding/investors and dates
-are checked but never rewritten by the agent. An unsupported retained condition
+before a receipt is written. Steps, description, costs/time, reward/status,
+funding/investors, reward date, exact deadline and URL can be source-corrected through
+version1 `activityRevision`; identity and original publication/source remain fixed. An unsupported retained condition
 blocks the update; a new title cannot hide it. Successful receipts bind source input
 and final publication, so later input or manual changes require verification again.
 Missing/old automatic receipts cannot approve new records.
@@ -221,3 +223,29 @@ Both writers use the common [editorial quality policy](editorial-style.md), adap
 from the owner-requested Wikipedia advice. The shared pure module must ship before
 its state/validator/tool callers in a scoped rollout. Current source/freshness and
 publication protection still applies.
+
+## Full guide projection and publication
+
+`lib/activity-revision.mjs` is byte-identical to the site's helper. It validates the
+complete material revision, applies normalized human-owned fields, and projects
+exactly what the final checker and site builder see. Private `activityManualFields`
+from intake is authoritative about ownership, including empty/null values; this
+avoids replaying skipped journal patches or undoing normalized human steps. Legacy
+intake without that metadata remains readable for non-mutating checks, but paired
+site-first rollout is required before normal processing with the new writer.
+
+The author must return all revision fields plus source items. Empty unknown strings
+and null deadlines are intentional; missing/zero/wrongly typed fields, identity
+changes, unsafe protocols, raw HTML or ambiguous timestamp zones are rejected before
+network verification. Human contradictions defer rather than silently overriding.
+The independent checker additionally requires `activity_supported=true`,
+`activity_source_official=true` and an actually opened listed `activity_evidence_url`.
+An otherwise factually correct generic product overview cannot pass as a guide.
+Source insufficiency or ended instructions falsely framed as active remain blocking.
+
+The input/output content binding stays version1: all revised material fields were
+already covered by its fingerprint. Copy-only legacy entries remain supported;
+invalid explicitly present revisions are queued again instead of becoming stuck
+behind an older receipt. Batch sizes, cooldowns and manual journal precedence are
+unchanged. Deployment must include the new helper and updated fact-check module,
+as well as both response-refactor helper dependencies introduced before this change.

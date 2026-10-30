@@ -1,4 +1,5 @@
 /** Pure editorial state, copy projections and selection; no research or file I/O. */
+import { ACTIVITY_TERM_FIELDS, activityRevisionErrors, projectActivityRevision } from "./activity-revision.mjs";
 import { activityReviewMatches } from "./activity-review.mjs";
 import { cleanEditorialSources, editorialSourceUrl } from "./editorial-sources.ts";
 import { editorialStyleErrors } from './editorial-style.ts';
@@ -44,8 +45,9 @@ export interface RawActivity {
   raised?: string;
   investors?: string;
   dateReceive?: string;
-  deadlineAt?: string;
+  deadlineAt?: string | null;
   activityReviewRequired?: boolean;
+  activityManualFields?: string[];
 }
 
 export type RawRecord = RawDigest & RawActivity;
@@ -63,6 +65,13 @@ export interface EditorialEntry {
   editorialVersion?: number;
   /** Editorial review schedule; never an event/deadline date. */
   reviewAfter?: string;
+  /** Human-owned activity terms read from snapshot/journal. */
+  whatIs?: string; steps?: string[]; spent?: string; time?: string; rewardType?: string;
+  status?: string; dateReceive?: string; deadlineAt?: string | null; url?: string;
+  raised?: string; investors?: string;
+  activityRevision?: { version: 1; whatIs: string; steps: string[]; spent: string; time: string;
+    rewardType: string; status: string; dateReceive: string; deadlineAt: string | null;
+    url: string; raised: string; investors: string };
   activityReview?: {version: number; inputHash: string; outputHash: string; boundAt: string};
 }
 
@@ -245,6 +254,11 @@ export function checkActivity(e: Partial<EditorialEntry>, a: RawActivity): strin
   const title = String(e.title ?? "").trim();
   const intro = String(e.intro ?? "").trim();
   bad.push(...editorialStyleErrors({ title, intro }));
+  if (e.activityRevision !== undefined) {
+    bad.push(...activityRevisionErrors(e.activityRevision));
+    for (const value of [e.activityRevision?.whatIs, ...(Array.isArray(e.activityRevision?.steps) ? e.activityRevision.steps : [])])
+      if (typeof value === 'string') bad.push(...editorialStyleErrors({ body: value }));
+  }
 
   if (title.length < ACT_TITLE_MIN || title.length > ACT_TITLE_MAX)
     bad.push(`заголовок ${title.length} символов, нужно ${ACT_TITLE_MIN}-${ACT_TITLE_MAX}`);
@@ -288,12 +302,17 @@ export function pickPending<T extends RawRecord>(
   ).map(([id]) => id);
   const byId = new Map(rows.map(row => [row.id, row]));
   const autoDone = Object.entries(auto[kind] ?? {}).filter(([id, e]) => {
+    if (kind === 'activities' && e.activityRevision !== undefined) {
+      if (activityRevisionErrors(e.activityRevision).length) return false;
+      const projected = projectActivityRevision(byId.get(id), e, manual.activities?.[id]);
+      if (activityRevisionErrors({version:1, ...Object.fromEntries(ACTIVITY_TERM_FIELDS.map(key => [key, projected[key]]))}).length) return false;
+    }
     const revised = (e.editorialVersion ?? 1) >= 2;
     return kind === "digests"
       ? (e.body?.trim().length ?? 0) >= (revised ? BODY_MIN : LEGACY_BODY_REVIEW_BELOW) &&
           !digestNeedsReview(byId.get(id) ?? { id, title: e.title }, e, now)
       : Boolean(byId.get(id)) && activityReviewMatches(byId.get(id),
-          { ...byId.get(id), ...activityCopy(e, manual.activities?.[id]) }, e.activityReview, now);
+          projectActivityRevision(byId.get(id), e, manual.activities?.[id]), e.activityReview, now);
   }).map(([id]) => id);
   const done = new Set([...manualDone, ...autoDone]);
   const eligible = rows
@@ -314,18 +333,24 @@ export function withJournalEditorial(manual: EditorialFile, journal: unknown): E
   const result: EditorialFile = { ...manual, digests: { ...manual.digests }, activities: { ...manual.activities } };
   if (!Array.isArray(journal)) throw new Error("Invalid editorial journal");
   for (const edit of journal) {
-    if (!["digest", "activity"].includes(edit?.kind) || !["patch", "add", "remove"].includes(edit.op) || typeof edit.key !== "string") continue;
+    if (!["digest", "activity"].includes(edit?.kind) || !["patch", "add", "remove"].includes(edit.op) || (edit.kind !== "activity" && typeof edit.key !== "string")) continue;
+    const key = edit.kind === "activity" ? (edit.key ?? edit.value?.id) : edit.key;
+    if (typeof key !== "string" || !key) continue;
     const kind: Kind = edit.kind === "digest" ? "digests" : "activities";
     if (edit.op === "remove") {
-      delete result[kind]![edit.key];
+      delete result[kind]![key];
       continue;
     }
     const fields: Partial<EditorialEntry> = {};
     for (const key of (kind === "digests" ? ["title", "summary", "body"] : ["title", "intro"]) as ("title" | "summary" | "body" | "intro")[]) {
       if (typeof edit.value?.[key] === "string") fields[key] = edit.value[key];
     }
+    if (kind === "activities") {
+      for (const key of ACTIVITY_TERM_FIELDS)
+        if (Object.prototype.hasOwnProperty.call(edit.value ?? {}, key)) (fields as Record<string, unknown>)[key] = edit.value[key];
+    }
     if (kind === "digests" && Array.isArray(edit.value?.items)) fields.items = edit.value.items;
-    if (Object.keys(fields).length) result[kind]![edit.key] = { ...result[kind]![edit.key], ...fields };
+    if (Object.keys(fields).length) result[kind]![key] = { ...result[kind]![key], ...fields };
   }
   return result;
 }
