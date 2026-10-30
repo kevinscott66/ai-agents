@@ -9,6 +9,19 @@ including unpublished drafts, retained manual corrections and journal changes.
 Both queues are loaded and validated before any research/write; absent/malformed
 activity intake fails instead of falling back to public activities or an empty list.
 
+## Module boundaries
+
+`lib/site-editorial-state.ts` owns the pure editorial types, content checks, review
+schedule, pending selection and human journal/copy resolution. It does not read
+files, start research or publish. `tools/site-editorial.ts` retains intake/output
+I/O, source research and final factual verification, and re-exports the existing
+public API for the daily-channel writer and regression tests. Importing the pure
+state module does not load the research adapter.
+
+The extraction preserves batch sizes, six-hour retry policy, historical backlog
+selection, manual field precedence and the version-1 activity receipt contract.
+It does not approve new archive records or change source requirements.
+
 `tools/site-editorial.ts` uses `lib/codex-editorial.ts` to research primary sources,
 then the existing factual verifier before publishing editorial overlays. Headlines
 must match the same project, event, date and conditions as the body. Engaging wording
