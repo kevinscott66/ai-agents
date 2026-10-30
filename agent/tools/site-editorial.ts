@@ -36,6 +36,7 @@
  * ближайшей пересборке корпуса — отдельного шага публикации здесь нет.
  */
 import { editorialResearch, type ResearchOptions } from "../lib/codex-editorial.ts";
+import { extractModelObject as extractJson } from "../lib/model-json.ts";
 import { EDITORIAL_STYLE_GUIDE, editorialStyleErrors, editorialStyleFindings } from '../lib/editorial-style.ts';
 import {readSourceImages} from '../lib/editorial-images.ts';
 import {cleanEditorialSources} from '../lib/editorial-sources.ts';
@@ -211,30 +212,8 @@ export function activityPrompt(a: RawActivity, examples: EditorialEntry[]): stri
     .join("\n");
 }
 
-/** Вытащить первый сбалансированный {...} из текста модели и распарсить. */
-export function extractJson(raw: string): Record<string, unknown> {
-  const start = raw.indexOf("{");
-  if (start < 0) throw new Error("в ответе модели нет JSON-объекта");
-  let depth = 0;
-  let inStr = false;
-  let esc = false;
-  for (let i = start; i < raw.length; i++) {
-    const ch = raw[i];
-    if (inStr) {
-      if (esc) esc = false;
-      else if (ch === "\\") esc = true;
-      else if (ch === '"') inStr = false;
-      continue;
-    }
-    if (ch === '"') inStr = true;
-    else if (ch === "{") depth++;
-    else if (ch === "}") {
-      depth--;
-      if (depth === 0) return JSON.parse(raw.slice(start, i + 1));
-    }
-  }
-  throw new Error("незакрытые скобки JSON");
-}
+// Shared JSON decoder; keep the former tool export for existing callers.
+export { extractModelObject as extractJson } from "../lib/model-json.ts";
 
 /** Один заход в Agent SDK по подписке. Возвращает текст последнего сообщения. */
 async function ask(prompt: string, options: ResearchOptions = {}): Promise<string> {

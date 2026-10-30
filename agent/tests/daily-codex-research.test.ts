@@ -56,6 +56,33 @@ test('independent checker sees final cleaned content and a bounded event window,
  expect(calls).toBe(1);expect(result).toHaveLength(1);expect(result[0].items[0].url).not.toContain('referral');
 });
 
+test('writer and verifier share the captured UTC day at the year and timezone boundary',async()=>{
+ for (const instant of ['2026-12-31T23:59:59.999Z','2027-01-01T00:00:00.001Z','2027-01-01T00:30:00+03:00']) {
+  const clock=Date.parse(instant),today=new Date(clock).toISOString().slice(0,10);
+  const a={...article(),date:today};let checked=0;
+  const result=await researchArticles([],{now:clock,ask:async(_system,prompt)=>{
+   expect(prompt).toContain(`Сегодня ${today} (UTC)`);
+   expect(prompt).toContain(`"date":"${today}"`);
+   return JSON.stringify({articles:[a]});
+  },verify:async c=>{
+   checked++;expect(c.eventWindow).toEqual({from:new Date(clock-86400000).toISOString().slice(0,10),to:today});return passed();
+  }});
+  expect(checked).toBe(1);expect(result[0].date).toBe(today);
+ }
+});
+
+test('malformed initial and repaired responses cannot reach verification or create a draft',async()=>{
+ for (const response of ['{"articles":null}','{"articles":{}}','{"articles":[]','No JSON']) {
+  let calls=0;
+  await expect(researchArticles([],{now,ask:async()=>response,verify:async()=>{calls++;return passed();}})).rejects.toThrow();
+  expect(calls).toBe(0);
+ }
+ let writes=0,checks=0;
+ await expect(researchArticles([],{now,ask:async()=>++writes===1?JSON.stringify({articles:[article()]}):'{"articles":null}',
+  verify:async()=>{checks++;return {...passed(),problems:[{claim:'claim',issue:'unsupported',severity:'block'}]};}})).rejects.toThrow('No fresh');
+ expect(writes).toBe(2);expect(checks).toBe(1);
+});
+
 test('all-rejected and zero-open-source runs never produce a draft; fewer confirmed stories are allowed',async()=>{
  for(const verdict of [{...passed(),opened:0},{...passed(),problems:[{claim:'reward',issue:'unsupported reward',severity:'block' as const}]}]) {
   await expect(researchArticles([],{now,ask:ask([article()]),verify:async()=>verdict})).rejects.toThrow('No fresh');

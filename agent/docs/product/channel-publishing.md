@@ -63,6 +63,16 @@ footers, source links or approval/delivery policy. The new format helper must be
 included when the daily tool is installed. Existing site editor modules are not
 changed by this daily presentation refactor.
 
+`daily-research-content.ts` decodes both the initial model response and the single
+allowed repair. It owns the existing four-article/four-source selection, derived
+source counts and normalization; missing dates remain empty for the later freshness
+gate to reject. It does not perform network or factual verification. The tool keeps
+its `articlesFromResearch` export for callers. The shared `model-json.ts` reader is
+also used by the site editor through its existing `extractJson` export: malformed
+first objects fail rather than scanning ahead for another answer. Both new helpers
+must be installed before the updated tool modules. The initial daily prompt and
+event-window verifier use the same captured UTC clock, including across midnight.
+
 ## Operations
 
 The daily timer is opt-in, at 08:00 UTC (11:00 Moscow), persistent across downtime.
