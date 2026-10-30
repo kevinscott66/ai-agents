@@ -47,6 +47,22 @@ publishes without approval and respects a readable explicit owner veto. Without
 that flag it waits for the established owner reaction/reply. Do not enable automatic
 mode or change channel identity implicitly.
 
+## Rendering boundary
+
+`lib/daily-draft-format.ts` owns the existing daily article types, day title,
+legacy preview/caption, full owner review and UTF-16 message chunking. It reuses
+`delabs-text.ts` and `text-cut.ts` without importing Telegram, research, persistence
+or another tool. Date display retains the existing `ruDate` clock/time-zone rules.
+`tools/daily-draft.ts` re-exports its prior formatting API/types and keeps research,
+strict daily validation, pending locks and delivery orchestration. Its editorial
+validators import the pure `site-editorial-state.ts` rather than the editor tool.
+
+Strict numbered channel captions and complete-story fitting remain in
+`channel-daily-spec.ts`; moving legacy formatting does not alter strict TZ limits,
+footers, source links or approval/delivery policy. The new format helper must be
+included when the daily tool is installed. Existing site editor modules are not
+changed by this daily presentation refactor.
+
 ## Operations
 
 The daily timer is opt-in, at 08:00 UTC (11:00 Moscow), persistent across downtime.
