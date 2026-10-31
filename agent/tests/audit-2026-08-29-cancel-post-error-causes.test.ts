@@ -22,7 +22,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 // Порядок импортов значим: если первым в частичном прогоне вычисляется
 // lib/tools-schema.ts, круговая зависимость роняет весь файл на
 // `Cannot access 'INLINE_TOOL_NAMES' before initialization`
-// (agent-sdk-runtime.ts:347). В полном гейте порядок задают другие файлы,
+// (agent-sdk-runtime.ts, INLINE_TOOL_NAMES). В полном гейте порядок задают другие файлы,
 // в одиночном прогоне — этот импорт.
 import "../lib/agent-sdk-runtime.ts";
 import { db } from "../lib/db.ts";

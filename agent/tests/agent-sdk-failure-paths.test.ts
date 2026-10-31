@@ -117,3 +117,7 @@ describe("дневной бюджет действует и на подписо�
     expect(() => checkBudget(AGENT)).not.toThrow();
   });
 });
+
+ test("startup timeout never replays the task", () => {
+   expect(shouldFallbackToRaw(new AgentSdkRunError("timeout", {sideEffects:false,partialText:"",subtype:"startup_timeout"}), true)).toBe(false);
+ });
