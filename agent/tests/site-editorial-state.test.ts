@@ -155,3 +155,13 @@ describe("editorial state compatibility", () => {
     expect({ raw, manual, auto }).toEqual(before);
   });
 });
+
+test('source-bound maintenance reopens a published guide queue without bypassing cooldowns',()=>{
+ const row={id:'maintenance-guide',project:'Fixture',title:'Fixture: Test',intro:'Existing guide',date:'2026-10-30',origin:'telegram',steps:['Read the official rules'],whatIs:'Fixture',spent:'',time:'',rewardType:'',status:'Не проверено',dateReceive:'',deadlineAt:null,url:'https://example.com',raised:'',investors:'',activityReviewRequired:false} as RawActivity;
+ const published={title:row.title,intro:row.intro,activityReview:activityReviewReceipt(row,row,now-1000)};
+ expect(pickPending([row],{}, {activities:{[row.id]:published}},'activities',2,{},now)).toEqual([]);
+ const due={...row,activityMaintenanceRequired:true};
+ expect(pickPending([due],{}, {activities:{[row.id]:published}},'activities',2,{},now).map(r=>r.id)).toEqual([row.id]);
+ expect(pickPending([due],{}, {activities:{[row.id]:published}},'activities',2,{['activities:'+row.id]:now+1000},now)).toEqual([]);
+ expect(withJournalEditorial({activities:{}},[{kind:'activity',op:'patch',key:row.id,value:{spent:'Human retained'}}]).activities?.[row.id].spent).toBe('Human retained');
+});

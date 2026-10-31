@@ -249,3 +249,13 @@ invalid explicitly present revisions are queued again instead of becoming stuck
 behind an older receipt. Batch sizes, cooldowns and manual journal precedence are
 unchanged. Deployment must include the new helper and updated fact-check module,
 as well as both response-refactor helper dependencies introduced before this change.
+
+## Autonomous source-change intake
+
+The website's bounded source checker can emit private `activityMaintenanceRequired`
+on a published guide after a substantive, independently verified source change.
+This bypasses only the previous-publication queue skip and matching-old-receipt skip;
+it never approves a revision, clears a retry cooldown or changes human ownership.
+The full existing terms/steps/source/form/final receipt gates still run. A successful
+new receipt clears the signal on the next website build; a mere note/check does not.
+No new Telegram publishing or model permissions are introduced.
