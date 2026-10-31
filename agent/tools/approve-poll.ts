@@ -1,3 +1,4 @@
+import {channelDailyText,CHANNEL_SPEC_VERSION,CHANNEL_MAX_PLAIN,sameChannelEntities} from '../lib/channel-daily-spec.ts';
 /**
  * approve-poll.ts — поллер апрува черновика DeLabs (этап 2 из 2: publish).
  *
@@ -43,7 +44,7 @@ import { CHANNEL_FOOTER, ensureChannelFooter } from "../lib/channel-footer.ts";
 import { sectionsLine } from "../lib/delabs-sections.ts";
 import { extractMessageId } from "../lib/userbot.ts";
 import { delabsChannelId, delabsSiteBase } from "../lib/delabs-env.ts";
-import { PENDING_PATH, ruDate, endSentence, itemEmoji, plainInline } from "./daily-draft.ts";
+import { PENDING_PATH, ruDate, endSentence, itemEmoji, plainInline, primarySourceLink, renderDailyBanner, acquireDraftLock, releaseDraftLock } from "./daily-draft.ts";
 import type { PendingDraft, DraftArticle } from "./daily-draft.ts";
 
 const CHANNEL_ID = delabsChannelId();
@@ -613,11 +614,12 @@ export function buildFinalText(pending: PendingDraft): string {
     return ensureChannelFooter(`${text}\n\n${FOOTER}`);
   }
 
+  if(pending.channelSpecVersion===CHANNEL_SPEC_VERSION)return channelDailyText(headline(pending),pending.createdAt,pending.articles);
   const lines: string[] = [];
   lines.push(`📰 **${headline(pending)}**`);
-  lines.push(`🗓️ ${ruDate(draftDate(pending))}`);
+  lines.push(`🗓️ Выпуск от ${ruDate(draftDate(pending))}`);
   lines.push("");
-  lines.push("Коротко о главном — разделы сайта под постом.");
+  lines.push("Коротко о главном — первоисточники под новостями.");
   lines.push("");
   pending.articles.forEach((a) => {
     // «Подробнее →» у пункта больше нет. Оно вело на страницу выпуска, адрес
@@ -636,7 +638,9 @@ export function buildFinalText(pending: PendingDraft): string {
     // поста из одних первых предложений владельцу было мало: «пускай постит в
     // таком же стиле, что и на сайте» (23.09.2026). Длина поста не страдает:
     // хвост всё равно режется на части по TG_MESSAGE_LIMIT.
-    lines.push(endSentence(plainInline(a.summary || a.blurb || "")));
+    const source=primarySourceLink(a.items);
+    if (a.items?.length && !source) throw new Error('Invalid primary source URL');
+    lines.push(`${endSentence(plainInline(a.summary || a.blurb || ""))} ${source}`.trim());
     lines.push(""); // отступ между новостями (эталон #75) + перед футером
   });
   lines.push(sectionsLine(SITE_BASE));
@@ -680,6 +684,10 @@ async function main(): Promise<void> {
     console.error("[approve-poll] pending unreadable:", (e as Error).message);
     process.exit(0);
     return;
+  }
+
+  if (pending.channelId !== undefined && pending.channelId !== CHANNEL_ID) {
+    throw new Error('Pending draft belongs to another channel');
   }
 
   // Expire по MAX_AGE_MS — 20ч, не 24: ровно сутки означали бы период таймера
@@ -730,11 +738,12 @@ async function main(): Promise<void> {
 
   // Пир резолвится в prepareSend и переиспользуется в send — так сетевой
   // вызов остаётся ДО отметки публикации.
+  let strictCaptionLimit=1024;
   let channelPeer: Awaited<ReturnType<typeof client.getInputEntity>> | null = null;
 
   const outcome = await runApprovedPublish(pending, {
     renderBanner: (head) =>
-      renderBannerPng({
+      (pending.channelSpecVersion===CHANNEL_SPEC_VERSION?renderDailyBanner:renderBannerPng)({
         title: head,
         subtitle: pending.kind === "weekly" ? "Что было за неделю" : "Свежее в крипте и AI",
         date: ruDate(draftDate(pending)),
@@ -747,13 +756,26 @@ async function main(): Promise<void> {
       // Разметку прогоняем вхолостую тем же кодом, что и отправка: HTMLParser
       // бросает на битой разметке, и лучше узнать это сейчас, а не после того
       // как автоповтор уже запрещён.
-      renderForUserbot(finalText);
+      const rendered=renderForUserbot(finalText);
+      if(pending.channelSpecVersion===CHANNEL_SPEC_VERSION){
+        const self:any=await client.getMe();strictCaptionLimit=self.premium?2048:1024;
+        if(rendered.plain.length>Math.min(strictCaptionLimit,CHANNEL_MAX_PLAIN))throw Error('ТЗ: выпуск не помещается одним сообщением');
+      }
     },
     send: async (finalText, _head, banner) => {
       // prepareSend отработал выше — иначе сюда не дошли бы.
       const peer = channelPeer ?? (await client.getInputEntity(CHANNEL_ID));
       const buf = Buffer.isBuffer(banner) ? banner : Buffer.from(banner);
       const render = renderForUserbot;
+      if(pending.channelSpecVersion===CHANNEL_SPEC_VERSION) {
+        const {plain,entities}=render(finalText);
+        const sent:any=await client.sendFile(peer,{file:new CustomFile('banner.png',buf.length,'',buf),caption:plain,formattingEntities:entities});
+        const msgId=extractMessageId(sent);if(!msgId)throw Error('No publication ID; inspect channel, do not retry');
+        pending.publishedMsgId=msgId;writePendingAtomic(pending);
+        const [message]:any[]=await client.getMessages(peer,{ids:[msgId]});
+        if(!message||message.message!==plain||message.media?.className!=='MessageMediaPhoto'||!sameChannelEntities(entities,message.entities??[]))throw Error('Channel readback mismatch; inspect existing post, do not resend');
+        return {msgId,tailTotal:0,tailSent:0};
+      }
       return sendDigest(finalText, buf, {
         sendPhoto: async (caption) => {
           const { plain, entities } = render(caption);
@@ -804,8 +826,21 @@ async function main(): Promise<void> {
   process.exit(0);
 }
 
+/** Serialize ExecStartPost and the independent fallback poll before reading pending. */
+export async function runPublicationLocked(task:()=>Promise<void>, path=PENDING_PATH+'.publish.lock'):Promise<boolean> {
+  const token=acquireDraftLock(path);
+  if (!token) return false;
+  const release=()=>releaseDraftLock(path,token);
+  // main intentionally exits to stop GramJS's background update loop.
+  process.once('exit',release);
+  try { await task();return true; }
+  finally { process.removeListener('exit',release);release(); }
+}
+
 if (import.meta.main) {
-  main().catch((e) => {
+  runPublicationLocked(main).then(started=>{
+    if (!started) console.log('[approve-poll] another publisher is running');
+  }).catch((e) => {
     console.error("[approve-poll] fatal:", e);
     process.exit(1);
   });

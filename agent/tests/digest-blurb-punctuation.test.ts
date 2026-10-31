@@ -59,8 +59,9 @@ describe("блёрб дайджеста: ровно один знак конца
       },
     ] as any;
     const text = buildPreviewText(arts);
-    expect(text).toContain("Биржа объявила листинг. [Подробнее");
-    expect(text).toContain("Раунд вёл a16z! [Подробнее");
+    expect(text).toContain("\nБиржа объявила листинг.\n");
+    expect(text.endsWith("Раунд вёл a16z!")).toBe(true);
+    expect(text).not.toContain("Подробнее");
     expect(text).not.toContain("..");
     expect(text).not.toContain("!.");
     // Отступы (эталон #75) на месте — правка касается только пунктуации.

@@ -31,9 +31,12 @@ import {
   activityPrompt,
   checkActivity,
   checkEntry,
+  checkPublication,
   dropSelfLink,
   editorialPrompt,
   extractJson,
+  isEditorialMeta,
+  needsDigestEditorial,
   pickPending,
   readCorpus,
   siteTree,
@@ -71,6 +74,11 @@ describe("checkEntry — что не пустим на сайт", () => {
     expect(bad.join(" ")).toContain("ярлык");
   });
 
+  test("пост в X не становится героем заголовка вместо проверенного события", () => {
+    const bad = checkEntry(good({ title: "Публикация в X сообщила о выходе RSGP на Base" }), digest());
+    expect(bad.join(" ")).toContain("площадку вместо события");
+  });
+
   test("заголовок, не отличающийся от канального, — это не редактура", () => {
     const raw = digest();
     // Длину подгоняем, чтобы сработала именно проверка на совпадение.
@@ -106,13 +114,50 @@ describe("pickPending — кого берём в работу", () => {
     digest({ id: "a", date: "2026-09-18" }),
     digest({ id: "b", date: "2026-09-20" }),
     digest({ id: "c", date: "2026-09-19" }),
-    digest({ id: "api", date: "2026-09-20", origin: "api" }),
+    digest({ id: "api", date: "2026-09-20", origin: "api", title: "Fermah открыл приём заявок на тестирование нового продукта", body: "Факты и контекст. ".repeat(60) }),
   ];
   const empty = { digests: {} };
 
-  test("берём только выпуски канала: у выпусков API редактура своя", () => {
+  test("полные архивные материалы не переписываем без причины", () => {
     const ids = pickPending(rows, empty, empty).map((d) => d.id);
     expect(ids).not.toContain("api");
+  });
+
+  test("короткие и ярлыковые API/saved публикации попадают в общую очередь", () => {
+    const api = digest({ id: "api-short", origin: "api", body: "Проверенный короткий текст.", date: "2026-09-21" });
+    const saved = digest({ id: "saved-label", origin: "saved", title: "Fermah: Открыт вайтлист", body: "Текст. ".repeat(100), date: "2026-09-22" });
+    expect(needsDigestEditorial(api)).toBe(true);
+    expect(needsDigestEditorial(saved)).toBe(true);
+    expect(pickPending([api, saved], empty, empty).map((d) => d.id)).toEqual(["saved-label", "api-short"]);
+  });
+
+  test("при переполнении один слот достаётся самому старому долгу", () => {
+    const all = Array.from({ length: 5 }, (_, i) => digest({ id: `news-${i}`, date: `2026-10-0${i + 1}` }));
+    expect(pickPending(all, empty, empty, "digests", 3).map((d) => d.id)).toEqual(["news-4", "news-3", "news-0"]);
+  });
+
+  test("редакционный отказ не считается готовой статьёй и возвращается в очередь", () => {
+    const failed = good({ title: "Материал об Entropy не выйдет без подтверждённых источников" });
+    const row = digest({ id: "negative" });
+    expect(isEditorialMeta(failed.title)).toBe(true);
+    expect(checkEntry(failed, row).join(" ")).toContain("редакционный отказ");
+    expect(pickPending([row], empty, { digests: { negative: failed } }).map((d) => d.id)).toEqual(["negative"]);
+  });
+
+  test("старые короткие правки повторно проверяются один раз, новые короткие не зацикливаются", () => {
+    const row = digest({ id: "brief" });
+    const brief = good({ body: "Факт и контекст. ".repeat(28) });
+    expect(brief.body!.length).toBeGreaterThanOrEqual(BODY_MIN);
+    expect(brief.body!.length).toBeLessThan(600);
+    expect(pickPending([row], empty, { digests: { brief } }).map((d) => d.id)).toEqual(["brief"]);
+    expect(pickPending([row], empty, { digests: { brief: { ...brief, editorialVersion: 2 } } })).toEqual([]);
+  });
+
+  test("подтверждаемая короткая новость не обязана быть растянута до 600 знаков", () => {
+    const short = good({ body: "Fermah открыл набор участников для тестирования. Условия и сроки названы на официальной странице проекта.\n\nЗаявка не означает гарантированного доступа или вознаграждения. Перед подключением кошелька стоит сверить адрес сайта с анонсом проекта.\n\nПроект не объявлял о токене и не публиковал условия раздачи. Следующие этапы будут указаны в документации." });
+    expect(short.body!.length).toBeGreaterThanOrEqual(BODY_MIN);
+    expect(short.body!.length).toBeLessThan(600);
+    expect(checkEntry(short, digest())).toEqual([]);
   });
 
   test("свежие вперёд: читателю важнее сегодняшний выпуск, чем позавчерашний", () => {
@@ -186,14 +231,14 @@ describe("активности — заголовок зовёт тратить 
     expect(checkActivity(okAct(), act())).toEqual([]);
   });
 
-  test("без оговорки после тире не пускаем: это половина пользы заголовка", () => {
-    const bad = checkActivity(okAct({ title: "Lora открыла тестнет аренды ценовой экспозиции на MegaETH и раздаёт очки" }), act());
-    expect(bad.join(" ")).toContain("после тире");
+  test("естественный заголовок без тире проходит, условия остаются в интро", () => {
+    const bad = checkActivity(okAct({ title: "На MegaETH открылся тестнет аренды ценовой экспозиции Lora" }), act());
+    expect(bad).toEqual([]);
   });
 
-  test("заголовок без названия проекта не годится: карточку ищут по проекту", () => {
-    const bad = checkActivity(okAct({ title: "Команда открыла тестнет аренды экспозиции на MegaETH — токен не анонсирован" }), act());
-    expect(bad.join(" ")).toContain("Lora");
+  test("проект уже указан отдельно на карточке", () => {
+    const bad = checkActivity(okAct({ title: "Открылся тестнет аренды ценовой экспозиции на MegaETH" }), act());
+    expect(bad).toEqual([]);
   });
 
   test("границы интро отбивают и отписку, и простыню", () => {
@@ -209,10 +254,12 @@ describe("активности — заголовок зовёт тратить 
     expect(same).toContain("не изменил");
   });
 
-  test("промпт несёт шаги, но запрещает их трогать: ошибка там стоит читателю денег", () => {
+  test("промпт требует полную проверяемую редакцию шагов и сохраняет ручной приоритет", () => {
     const p = activityPrompt(act(), []);
     expect(p).toContain("Переходим на сайт и запрашиваем тестовые токены.");
-    expect(p).toContain("не переписывай");
+    expect(p).toContain("activityRevision");
+    expect(p).toContain("Не меняй id, project, date, sourceUrl, origin");
+    expect(p).toContain("Завершённый сезон");
   });
 
   test("промпт отваживает от канального «отрабатываем»", () => {
@@ -313,19 +360,36 @@ describe("раскладка сайта", () => {
     writeFileSync(join(dir, "digests.json"), JSON.stringify([{ id: "a" }]));
     expect(readCorpus(join(siteTree(root), "src/data/current/digests.json"))).toEqual([{ id: "a" }]);
   });
+
+  test("неопубликованный черновик остаётся в отдельной очереди редактора", () => {
+    const root = join(tmp, "draft-layout");
+    const current = join(root, "src/data/current");
+    mkdirSync(current, { recursive: true });
+    writeFileSync(join(current, "editorial-candidates.json"), JSON.stringify([digest({ id: "unpublished" })]));
+    writeFileSync(join(current, "digests.json"), JSON.stringify([]));
+    const candidates = readCorpus<RawDigest>(join(current, "editorial-candidates.json"));
+    expect(pickPending(candidates, {}, {}, "digests").map(row => row.id)).toEqual(["unpublished"]);
+    expect(readCorpus(join(current, "digests.json"))).toEqual([]);
+  });
+
+  test("отсутствующая очередь не выглядит отсутствием новых заметок", () => {
+    expect(() => readCorpus(join(tmp, "missing-editorial-candidates.json"))).toThrow(/нет корпуса/);
+  });
 });
 
-describe("норма длины — по выпускам, написанным руками (22.09.2026)", () => {
+describe("короткие проверенные новости и границы объёма", () => {
   test("выпуск в две строки не проходит: так выглядели сырые посты рядом с разбором", () => {
     const bad = checkEntry(
       good({ title: "CypherSquad проводит минт NFT на Zcash", summary: "Минт сегодня в 20:00.", body: "Проверяем доступ через чекер." }),
       digest(),
     );
-    expect(bad.length).toBe(3);
+    expect(bad.join(" ")).toContain("лид");
+    expect(bad.join(" ")).toContain("тело");
   });
 
-  test("тело одним сплошным абзацем не проходит", () => {
-    expect(checkEntry(good({ body: "Абзац. ".repeat(90) }), digest()).join(" ")).toContain("одним абзацем");
+  test("короткий пост не проходит как расширенный разбор, источники обязательны", () => {
+    expect(checkEntry(good({ body: "Проверенная деталь события. ".repeat(8) }), digest()).join(" ")).toContain("тело");
+    expect(checkEntry(good({items: []}), digest()).join(" ")).toContain("потеряны ссылки");
   });
 
   test("слишком длинный лид отбраковывается так же, как короткий", () => {
@@ -348,4 +412,61 @@ describe("норма длины — по выпускам, написанным 
     expect(note).toContain("лид 120 символов");
     expect(note).toContain("JSON");
   });
+});
+
+// A blocked source must not consume the same slots every half-hour.
+test("retry cooldown frees slots and expires", () => {
+  const rows=[digest({id:"blocked",date:"2026-10-06"}),digest({id:"next",date:"2026-10-05"})];
+  expect(pickPending(rows,{}, {}, "digests",1,{"digests:blocked":200},100)[0].id).toBe("next");
+  expect(pickPending(rows,{}, {}, "digests",1,{"digests:blocked":200},201)[0].id).toBe("blocked");
+});
+
+ test("title-only manual edits allow expansion; full manual bodies stay protected", () => {
+ const rows=[digest({id:"title"}),digest({id:"body"}),digest({id:"short-auto"})];
+ const manual={digests:{title:good({body:undefined}),body:good({body:"Короткий ручной текст"})}};
+ const auto={digests:{"short-auto":good({body:"Старый короткий пост"})}};
+ expect(pickPending(rows,manual,auto).map(r=>r.id).sort()).toEqual(["short-auto","title"]);
+ });
+
+ test("fact checker sees retained manual title and blocks a contradictory published pair", async () => {
+ const proposal=good({title:"Fermah отложил открытие вайтлиста — прежняя дата отменена"});
+ const manual={title:"Fermah открыл вайтлист — заявки принимают сегодня"};
+ let checked=false;
+ const result=await checkPublication(proposal,digest(),manual,async (published)=>{
+   checked=true;
+   expect(published.title).toBe(manual.title);
+   expect(published.body).toBe(proposal.body);
+   return ["Сохранённый заголовок противоречит исследованным фактам"];
+ });
+ expect(checked).toBe(true);
+ expect(result).toHaveLength(1);
+ });
+
+
+test("Initia-style non-verification headlines are rejected and remain eligible for research", () => {
+ const row=digest({id:"initia-stub",project:"Initia"});
+ const failed=good({title:"Сообщение об инциденте в Initia требует подтверждения первоисточниками",editorialVersion:2});
+ expect(isEditorialMeta(failed.title)).toBe(true);
+ expect(checkEntry(failed,row).join(" ")).toContain("редакционный отказ");
+ expect(pickPending([row],{}, {digests:{[row.id]:failed}}).map(d=>d.id)).toEqual([row.id]);
+ expect(checkEntry({defer:true} as Partial<EditorialEntry>,row).join(" ")).toContain("редакционной очереди");
+});
+
+test("a retained manual stub cannot bypass rejection after overlaying an otherwise valid proposal", async () => {
+ let verified=false;
+ const result=await checkPublication(good(),digest(),{title:"Сообщение об инциденте в Initia требует подтверждения первоисточниками"},async()=>{verified=true;return [];});
+ expect(result.join(" ")).toContain("редакционный отказ");
+ expect(verified).toBe(false);
+});
+
+test("qualified confirmed news is not confused with an editorial refusal", () => {
+ expect(isEditorialMeta("Initia остановила сеть после инцидента. Размер ущерба пока не подтверждён.")).toBe(false);
+ expect(isEditorialMeta("Суд требует подтверждения права собственности")).toBe(false);
+ expect(isEditorialMeta("Сообщение Initia опровергло слухи о выпуске дополнительных INIT")).toBe(false);
+});
+
+
+test("equivalent no-confirmation headline is rejected without excluding secondary-detail caveats",()=>{
+ expect(isEditorialMeta("Официального подтверждения инцидента в Initia пока нет\nПричины инцидента и ущерб пока неизвестны.")).toBe(true);
+ expect(isEditorialMeta("Initia подтвердила остановку L1 и роллапов 23 октября\nНе удалось проверить ключевые параметры компенсации: команда их пока не назвала.")).toBe(false);
 });

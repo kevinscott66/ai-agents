@@ -13,7 +13,7 @@
  * дают один и тот же ответ на одних и тех же данных.
  */
 import { describe, expect, test } from "bun:test";
-import { articlesFromResearch } from "../tools/daily-draft.ts";
+import { articlesFromResearch, researchPrompt } from "../tools/daily-draft.ts";
 
 const base = { title: "Заголовок", body: "Тело статьи", summary: "Суть. Вторая фраза." };
 
@@ -110,23 +110,16 @@ describe("остальной разбор не поехал", () => {
     expect(parse([{ ...base, summary: "" }])[0]!.blurb).toBe("Заголовок");
   });
 
-  test("дата: своя, если пришла; иначе сегодня", () => {
+  test("неизвестная дата остаётся неизвестной, а не превращается в сегодняшнюю", () => {
     expect(parse([{ ...base, date: "2026-08-19" }])[0]!.date).toBe("2026-08-19");
-    expect(parse([{ ...base, date: "" }])[0]!.date).toBe(
-      new Date().toISOString().slice(0, 10),
-    );
+    for (const date of ["", undefined, null, 0])
+      expect(parse([{ ...base, date }])[0]!.date).toBe("");
   });
 });
 
 describe("промпт больше не просит поле, которого не слушаем", () => {
-  test("ни в инструкции, ни в примере JSON нет sourceCount", async () => {
-    const text = await Bun.file(
-      new URL("../tools/daily-draft.ts", import.meta.url).pathname,
-    ).text();
-    const prompt = text.slice(
-      text.indexOf("function researchPrompt"),
-      text.indexOf("function extractJson"),
-    );
+  test("ни в инструкции, ни в примере JSON нет sourceCount", () => {
+    const prompt = researchPrompt([]);
     expect(prompt).toContain("items: массив {text,url}");
     expect(prompt).not.toContain("sourceCount");
   });
