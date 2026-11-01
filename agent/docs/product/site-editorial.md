@@ -183,6 +183,16 @@ not demanded as a project's official promise. Costs, rewards and deadlines still
 require source-backed conditions. Unsupported retained activity instructions
 continue to block publication; they are not silently changed by the writer.
 
+The root Entropy URL also uses the known referral parameter `r`; that exception
+is host/path-bound, so unrelated `r` query values remain functional. If a writer
+omits X share parameters `s`/`t` from an exact HTTPS x.com status URL, source
+reconciliation restores the original clean URL before form and factual checks.
+The website therefore receives the same source address and retains added checked
+sources. Reconciliation never appends a missing item, follows redirects, changes
+an author/post ID, removes functional parameters, or treats another path as the
+same page (for example a waitlist route or NFT invite route). Invalid or truly
+missing sources still fail the existing preservation gate.
+
 Risk complaints must explain how an omission makes a concrete claim or reader
 action misleading. A historical announcement without a fixed-payout promise or
 current participation instructions does not require reproducing every general

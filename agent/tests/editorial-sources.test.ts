@@ -1,5 +1,5 @@
 import {expect, test} from 'bun:test';
-import {editorialSourceUrl, cleanEditorialSources} from '../lib/editorial-sources.ts';
+import {editorialSourceUrl, cleanEditorialSources, preserveEditorialSources} from '../lib/editorial-sources.ts';
 import {checkEntry, checkPublication, editorialPrompt, type EditorialEntry} from '../tools/site-editorial.ts';
 import {factCheckPrompt} from '../lib/fact-check.ts';
 
@@ -70,4 +70,57 @@ test('checker guidance requires independent account attribution and distinguishe
  expect(prompt).toContain('не обещает фиксированную выплату');
  expect(prompt).toContain('Для архивной новости проверяй заявленные тогда условия');
  expect(prompt).toContain('Существенные ограничения допуска, обязательный депозит, KYC');
+});
+
+test('Entropy referral r can be removed without losing the source; other functional r parameters remain',()=>{
+ const row={...raw,items:[{text:'Referrals',url:'https://entropy.io/?r=entropyregister'}]};
+ expect(editorialSourceUrl(row.items[0].url)).toBe('https://entropy.io/');
+ expect(checkEntry({...entry,items:[{text:'Условия',url:'https://entropy.io/'}]},row)).toEqual([]);
+ for(const url of ['https://example.com/?r=report','https://entropy.io/docs?r=section',
+   'https://entropy.io.evil.example/?r=code','https://sub.entropy.io/?r=code']) {
+  expect(editorialSourceUrl(url)).toBe(url);
+ }
+});
+
+test('writer may omit X share tracking while published sources retain the original post address',()=>{
+ const original='https://x.com/nadoHQ/status/2115828381329580065?s=20';
+ const proposed=[{text:'Официальный анонс',url:'https://x.com/nadoHQ/status/2115828381329580065'}];
+ const required=[{text:'PRIME',url:original}];
+ const final=preserveEditorialSources(proposed,required);
+ expect(final).toEqual([{text:'Официальный анонс',url:original}]);
+ expect(checkEntry({...entry,items:final},{...raw,items:required})).toEqual([]);
+ expect(proposed[0].url).not.toBe(original);
+ expect(required[0].url).toBe(original);
+ expect(preserveEditorialSources([{text:'Share',url:original+'&t=share'}],required)[0].url).toBe(original);
+});
+
+test('source reconciliation cannot invent a missing URL or substitute a page, author, post or functional query',()=>{
+ const source={text:'Post',url:'https://x.com/nadoHQ/status/123?s=20&id=42'};
+ for(const url of ['https://x.com/nadoHQ/status/124?id=42','https://x.com/Other/status/123?id=42',
+  'https://x.com/nadoHQ/status/123?id=43','https://x.com/nadoHQ/status/123',
+  'https://x.com.evil.example/nadoHQ/status/123?id=42','https://twitter.com/nadoHQ/status/123?id=42']) {
+  expect(preserveEditorialSources([{text:'Changed',url}],[source])[0].url).toBe(url);
+ }
+ expect(preserveEditorialSources([], [source])).toEqual([]);
+ for(const [url,original] of [['https://waitlist.arcus.xyz/','https://waitlist.arcus.xyz/s'],
+   ['https://squeekchain.com/genesis','https://squeekchain.com/genesis/i/z9w4ngyr']]) {
+  const required=[{text:'Required',url:original}];
+  expect(preserveEditorialSources([{text:'Different',url}],required)[0].url).toBe(url);
+  expect(checkEntry({...entry,items:[{text:'Different',url}]},{...raw,items:required}).join()).toContain('потеряны');
+ }
+});
+
+
+test('reconciled share links and added sources still reach final factual verification',async()=>{
+ const required=[{text:'PRIME',url:'https://x.com/nadoHQ/status/2115828381329580065?s=20'}];
+ const items=preserveEditorialSources([{text:'Анонс',url:'https://x.com/nadoHQ/status/2115828381329580065'},
+  {text:'Официальные условия',url:'https://app.nado.xyz/?ref=abc'}],required);
+ let checked=false;
+ const errors=await checkPublication({...entry,items},{...raw,items:required},{},async published=>{
+  checked=true;
+  expect(published.items).toEqual([{text:'Анонс',url:required[0].url},{text:'Официальные условия',url:'https://app.nado.xyz/'}]);
+  return ['источники не подтверждают условие участия'];
+ });
+ expect(checked).toBe(true);
+ expect(errors).toEqual(['источники не подтверждают условие участия']);
 });

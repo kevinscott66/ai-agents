@@ -10,7 +10,9 @@ export function editorialSourceUrl(raw: string): string {
     if (!['https:', 'http:'].includes(url.protocol)) return raw;
     let changed = false;
     for (const key of [...url.searchParams.keys()]) {
-      if (TRACKING.test(key)) { url.searchParams.delete(key); changed = true; }
+      // Entropy's root invitation uses r; on other pages/sites r can select data.
+      const entropyReferral = url.hostname === 'entropy.io' && url.pathname === '/' && key === 'r';
+      if (TRACKING.test(key) || entropyReferral) { url.searchParams.delete(key); changed = true; }
     }
     return changed ? url.href : raw;
   } catch { return raw; }
@@ -19,4 +21,31 @@ export function editorialSourceUrl(raw: string): string {
 export function cleanEditorialSources<T extends {url: string}>(items: T[]): T[] {
   return items.map(item => item && typeof item.url === 'string'
     ? {...item, url: editorialSourceUrl(item.url)} : item);
+}
+
+/** Only share tracking on an exact X post can differ. Paths, authors, record IDs
+ * and functional parameters still identify different sources. No redirects/fetches.
+ */
+function sourceKey(raw: string): string {
+  const clean = editorialSourceUrl(raw);
+  try {
+    const url = new URL(clean);
+    if (url.protocol === 'https:' && url.hostname === 'x.com' && !url.port &&
+        !url.username && !url.password && /^\/[A-Za-z0-9_]+\/status\/\d+$/.test(url.pathname)) {
+      url.searchParams.delete('s');
+      url.searchParams.delete('t');
+      return url.href;
+    }
+  } catch { /* Invalid sources remain subject to the existing form checks. */ }
+  return clean;
+}
+
+/** Keep the input source's exact clean address when a writer drops X share noise.
+ * Do not append omitted sources or silently replace a different/dead source page.
+ * This also keeps the verifier and the website's strict preservation gate aligned.
+ */
+export function preserveEditorialSources<T extends {url: string}>(items: T[], required: {url: string}[]): T[] {
+  const originals = new Map(required.map(item => [sourceKey(item.url), editorialSourceUrl(item.url)]));
+  return cleanEditorialSources(items).map(item => item && typeof item.url === 'string'
+    ? {...item, url: originals.get(sourceKey(item.url)) ?? item.url} : item);
 }
