@@ -46,6 +46,7 @@
  */
 import { editorialResearch, type ResearchOptions } from "./codex-editorial.ts";
 import {readSourceImages} from './editorial-images.ts';
+import {platformArticle} from './platform-article.ts';
 
 export type Severity = "block" | "warn";
 
@@ -224,9 +225,13 @@ export async function readTweetRecord(
 
   const fx = await get(`https://api.fxtwitter.com/${ref.user}/status/${ref.id}`);
   const t = fx?.tweet;
-  if (t && (t.text || sourceMedia(t).length)) return {
-    url, text: formatTweet(t.author?.screen_name ?? ref.user, t.created_at, t.text ?? ""), media: sourceMedia(t),
-  };
+  if (t && (t.text || sourceMedia(t).length)) {
+    const article = platformArticle(t);
+    const media = sourceMedia({...t, media: {...t.media,
+      photos: [...(Array.isArray(t.media?.photos) ? t.media.photos : []), ...(article?.images ?? []).map(url => ({url}))]}});
+    return {url, text: formatTweet(t.author?.screen_name ?? ref.user, t.created_at, t.text ?? "") +
+      (article ? "\n\n" + article.text : ""), media};
+  }
 
   const syn = await get(`https://cdn.syndication.twimg.com/tweet-result?id=${ref.id}&token=a`);
   if (syn && (syn.text || sourceMedia(syn).length)) return {

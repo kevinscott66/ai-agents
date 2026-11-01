@@ -294,3 +294,31 @@ A deployment of this structural refactor must include the new queue helper befor
 the caller state module; a scoped one-file replacement is no longer sufficient.
 Rollback restores the previous caller first; an unused helper does not change
 content or receipts. This is a source contract, not a claim of installation.
+
+
+## Cross-run failure context and attached articles
+
+`<AUTO_PATH>.failures.json` is private version1 diagnostic storage, separate from
+six-hour retry timestamps and public editorial output. Each reason is bounded to
+6000 characters and bound to the exact raw input plus retained human overlay.
+The normal next eligible attempt receives it explicitly as untrusted diagnostic
+context, never as a source or an approval. A changed source or human field drops
+old context; success removes only that entry. Missing files migrate to an empty
+v1 store; corrupt/unknown schemas fail before research rather than silently
+forgetting failures. No cooldown is cleared to enable a retry, and this does not
+authorize overwriting manual copy. Activity status errors report the rejected
+value so the writer can repair it instead of guessing another synonym.
+
+For a post that links an X Article, the source reader now retains full text blocks
+already attached to the same platform response. The article ID must match the
+post's link. Preview-only/malformed/mismatched articles are not full evidence.
+The extractor bounds text, blocks, referenced links and media; it performs no
+extra fetches. Article links are labeled unopened; images pass the existing fixed
+platform-host filter and separate media review. Publication and modification dates
+remain explicit source metadata, not an inferred event date or a claim of current
+availability. Independent author/event/factual verification remains mandatory.
+
+A scoped deployment includes platform-article and editorial-feedback helpers
+before fact-check/store/tool callers, under the existing research.lock. Preserve
+manual/auto/retry files; the diagnostic file is runtime state and never belongs in
+the public bundle or a Git commit. Rollback may retain the unused v1 file.

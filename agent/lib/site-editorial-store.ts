@@ -1,6 +1,7 @@
 /** Filesystem boundary for editorial intake, human overlays and automatic output. */
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
+import {parseFailureFeedback,type FailureFile} from "./editorial-feedback.ts";
 import { withJournalEditorial, type Kind, type RawRecord, type EditorialFile } from "./site-editorial-state.ts";
 
 export const SITE_DIR = process.env.DELABS_SITE_DIR ?? "/opt/delabs";
@@ -79,3 +80,11 @@ export function writeAtomic(path: string, data: unknown): void {
   renameSync(tmp, path);
 }
 
+
+/** Absence is the v1 migration; corruption must not silently erase prior context. */
+export function readFailureFeedback(path: string): FailureFile {
+  let text: string;
+  try {text = readFileSync(path, "utf8");}
+  catch (error) {if ((error as NodeJS.ErrnoException).code === "ENOENT") return {version: 1, entries: {}};throw error;}
+  return parseFailureFeedback(JSON.parse(text));
+}
