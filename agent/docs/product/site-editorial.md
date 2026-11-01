@@ -259,3 +259,14 @@ it never approves a revision, clears a retry cooldown or changes human ownership
 The full existing terms/steps/source/form/final receipt gates still run. A successful
 new receipt clears the signal on the next website build; a mere note/check does not.
 No new Telegram publishing or model permissions are introduced.
+
+### Fair guide maintenance selection
+
+Activities keep separate maintenance and new-draft lanes within the existing
+two-item batch: one eligible source-changed guide and one draft when both exist.
+Within either lane untouched work precedes previously failed work; expired
+retry timestamps provide last-attempt order before publication date/id ties.
+This prevents newer repeatedly refused drafts from starving old changed guides.
+The six-hour retry gate still runs first, batch size is unchanged, and neither
+selection priority nor the private flag approves content or changes human fields.
+Digest ordering and its historical backlog slot are unchanged.

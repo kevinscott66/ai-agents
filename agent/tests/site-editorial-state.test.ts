@@ -165,3 +165,32 @@ test('source-bound maintenance reopens a published guide queue without bypassing
  expect(pickPending([due],{}, {activities:{[row.id]:published}},'activities',2,{['activities:'+row.id]:now+1000},now)).toEqual([]);
  expect(withJournalEditorial({activities:{}},[{kind:'activity',op:'patch',key:row.id,value:{spent:'Human retained'}}]).activities?.[row.id].spent).toBe('Human retained');
 });
+
+const queuedActivity=(id:string,date:string,maintenance=false):RawActivity=>({
+ id,project:'Fixture',title:'Fixture programme',intro:'Source programme conditions.',date,origin:'telegram',
+ steps:['Read the official rules.'],whatIs:'Fixture',spent:'',time:'',rewardType:'',status:'Не проверено',
+ dateReceive:'',deadlineAt:null,url:'https://example.com',raised:'',investors:'',
+ activityReviewRequired:!maintenance,activityMaintenanceRequired:maintenance,
+});
+test('an old changed guide gets a batch slot alongside a new draft without bypassing cooldown',()=>{
+ const changed=queuedActivity('changed','2026-01-01',true),newest=queuedActivity('new','2026-10-30'),other=queuedActivity('other','2026-10-29');
+ expect(pickPending([newest,other,changed],{}, {},'activities',2,{},now).map(row=>row.id)).toEqual(['changed','new']);
+ expect(pickPending([newest,other,changed],{}, {},'activities',2,{'activities:changed':now+1},now).map(row=>row.id)).toEqual(['new','other']);
+});
+test('untouched activity candidates precede previously failed candidates after their cooldown expires',()=>{
+ const failed=queuedActivity('failed','2026-10-30'),untouched=queuedActivity('untouched','2026-01-01');
+ expect(pickPending([failed,untouched],{}, {},'activities',1,{'activities:failed':now-1},now).map(row=>row.id)).toEqual(['untouched']);
+});
+test('repeated six-hour deferrals cannot starve old maintenance guides or untouched drafts',()=>{
+ const changed=Array.from({length:11},(_,i)=>queuedActivity('changed-'+i,'2026-01-01',true));
+ const drafts=Array.from({length:44},(_,i)=>queuedActivity('draft-'+i,new Date(Date.UTC(2026,8,1+i)).toISOString()));
+ const rows=[...drafts,...changed],retry:Record<string,number>={},seen=new Set<string>();
+ for(let round=0;round<48;round++) {
+  const at=now+round*30*60*1000;
+  for(const row of pickPending(rows,{}, {},'activities',2,retry,at)) {
+   seen.add(row.id);retry['activities:'+row.id]=at+6*60*60*1000;
+  }
+  if(round===10)expect(changed.every(row=>seen.has(row.id))).toBe(true);
+ }
+ expect(rows.every(row=>seen.has(row.id))).toBe(true);
+});

@@ -323,7 +323,17 @@ export function pickPending<T extends RawRecord>(
       (kind === "digests" && ["api", "saved"].includes(r.origin ?? "") && (Boolean(auto.digests?.[r.id]) || needsDigestEditorial(r)))) &&
       !(kind === "activities" && r.activityReviewRequired === false && r.activityMaintenanceRequired !== true) &&
       !done.has(r.id) && !(retryAfter[`${kind}:${r.id}`] > now))
-    .sort((a, b) => String(b.date ?? "").localeCompare(String(a.date ?? "")) || a.id.localeCompare(b.id));
+    .sort((a, b) => (kind === "activities"
+      ? (retryAfter[`${kind}:${a.id}`] ?? 0) - (retryAfter[`${kind}:${b.id}`] ?? 0)
+      : 0) || String(b.date ?? "").localeCompare(String(a.date ?? "")) || a.id.localeCompare(b.id));
+  // A changed old guide must not wait behind a permanent loop of newer drafts.
+  // Reserve a slot for each lane; expired retries remain behind untouched work.
+  if (kind === "activities") {
+    const maintenance = eligible.filter(row => (row as RawActivity).activityMaintenanceRequired === true);
+    const drafts = eligible.filter(row => (row as RawActivity).activityMaintenanceRequired !== true);
+    if (maintenance.length && drafts.length && limit >= 2)
+      return [maintenance[0], ...drafts.slice(0, limit - 1), ...maintenance.slice(1)].slice(0, limit);
+  }
   // Recent stories remain first, but one slot per digest batch pays down the
   // historical backlog instead of letting each day's new posts starve it.
   if (kind === "digests" && limit >= 2 && eligible.length > limit)
