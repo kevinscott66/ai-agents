@@ -40,6 +40,10 @@ service secrets, no local execution/tools, and bounded output/time. Only web sea
 reasoning and assistant text events are accepted. Existing content validators and
 fact-check rejection remain mandatory before writing editorial data. Site refresh
 remains the publication step; Telegram publication is not part of this migration.
+For digest articles, the checker must also return a supported concrete event and
+an opened evidence URL. A sourced third-party prediction alone is insufficient;
+missing event evidence fails closed. Generic source-first headlines are rejected
+before the checker runs. Activity copy retains its separate verification rules.
 
 The separate daily/weekly draft jobs remain paused until their migration is tested.
 Operational paths, rollout and rollback belong to the private ops handoff.

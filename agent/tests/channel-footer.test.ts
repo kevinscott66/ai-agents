@@ -2,8 +2,8 @@ import { describe, it, expect } from "bun:test";
 import { ensureChannelFooter } from "../lib/action-dispatch.ts";
 
 const CHAT = "https://t.me/+TBw7_-wGgxRiZjQy";
-const ACT = "delabs-team.notion.site";
-const DELABS = "https://t.me/+GlWh_q7pcZFkNjc6";
+const ACT = "https://delabs.space/activities";
+const DELABS = "https://t.me/delabsru";
 
 describe("ensureChannelFooter", () => {
   it("заменяет 2-строчный футер без ссылок на канонический со ссылками", () => {
@@ -18,6 +18,7 @@ describe("ensureChannelFooter", () => {
     expect(out).toContain(`[ЧАТ](${CHAT})`);
     expect(out).toContain(ACT);
     expect(out).toContain(`[DeLabs](${DELABS})`);
+    expect(out).not.toContain('notion.site');
     // тело пункта сохранилось, дубля футера нет
     expect(out).toContain("Описание пункта.");
     expect(out.match(/Copyright/g)?.length).toBe(1);
