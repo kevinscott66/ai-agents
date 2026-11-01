@@ -270,3 +270,17 @@ This prevents newer repeatedly refused drafts from starving old changed guides.
 The six-hour retry gate still runs first, batch size is unchanged, and neither
 selection priority nor the private flag approves content or changes human fields.
 Digest ordering and its historical backlog slot are unchanged.
+
+### Selection module boundary
+
+`site-editorial-state.ts` owns eligibility: manual protection, receipt/revision
+checks, private maintenance admission and cooldown filtering. It passes already
+eligible rows to `site-editorial-queue.ts`, which reads ordering metadata only
+and returns the original row references without mutating the input array. The queue uses type-only imports, has no runtime
+cycle, storage access, model call or publication permission. The existing
+`pickPending` export/signature remains the integration entry point.
+
+A deployment of this structural refactor must include the new queue helper before
+the caller state module; a scoped one-file replacement is no longer sufficient.
+Rollback restores the previous caller first; an unused helper does not change
+content or receipts. This is a source contract, not a claim of installation.
