@@ -185,7 +185,7 @@ continue to block publication; they are not silently changed by the writer.
 
 The root Entropy URL also uses the known referral parameter `r`; that exception
 is host/path-bound, so unrelated `r` query values remain functional. If a writer
-omits X share parameters `s`/`t` from an exact HTTPS x.com status URL, source
+omits X share parameters `a`/`s`/`t` from an exact HTTPS x.com status URL, source
 reconciliation restores the original clean URL before form and factual checks.
 The website therefore receives the same source address and retains added checked
 sources. Reconciliation never appends a missing item, follows redirects, changes
