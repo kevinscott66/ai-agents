@@ -32,6 +32,7 @@ function sourceKey(raw: string): string {
     const url = new URL(clean);
     if (url.protocol === 'https:' && url.hostname === 'x.com' && !url.port &&
         !url.username && !url.password && /^\/[A-Za-z0-9_]+\/status\/\d+$/.test(url.pathname)) {
+      url.searchParams.delete('a');
       url.searchParams.delete('s');
       url.searchParams.delete('t');
       return url.href;

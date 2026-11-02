@@ -94,6 +94,66 @@ test('writer may omit X share tracking while published sources retain the origin
  expect(preserveEditorialSources([{text:'Share',url:original+'&t=share'}],required)[0].url).toBe(original);
 });
 
+test('Backpack and Human canonical post links retain their original a/s share addresses and still need factual approval',async()=>{
+ for(const original of [
+  'https://x.com/Backpack/status/2116832290575876141?a=FcRcuw47Dvqm90rdjDE&s=20',
+  'https://x.com/humntech/status/2108580066552951000?a=oTRwttHhIkS9GMThTLE&s=09',
+ ]) {
+  const required=[{text:'Анонс',url:original}];
+  const proposed=[{text:'Официальный анонс',url:original.split('?')[0]}];
+  const items=preserveEditorialSources(proposed,required);
+  expect(items).toEqual([{text:'Официальный анонс',url:original}]);
+  expect(checkEntry({...entry,items},{...raw,items:required})).toEqual([]);
+  expect(proposed[0].url).toBe(original.split('?')[0]);
+  expect(required[0].url).toBe(original);
+  let verified=false;
+  const errors=await checkPublication({...entry,items},{...raw,items:required},{},async published=>{
+   verified=true;expect(published.items).toEqual(items);
+   return ['официальный источник не подтверждает обещанную награду'];
+  });
+  expect(verified).toBe(true);
+  expect(errors).toEqual(['официальный источник не подтверждает обещанную награду']);
+ }
+});
+
+test('a share reconciliation cannot restore an omitted source or change its author, status, destination or functional parameters',()=>{
+ const original='https://x.com/Backpack/status/2116832290575876141?a=share&s=20&id=42&code=access#terms';
+ const required=[{text:'Анонс',url:original}];
+ const canonical='https://x.com/Backpack/status/2116832290575876141?id=42&code=access#terms';
+ expect(preserveEditorialSources([{text:'Анонс',url:canonical}],required)[0].url).toBe(original);
+ const missing=preserveEditorialSources([],required);
+ expect(missing).toEqual([]);
+ expect(checkEntry({...entry,items:missing},{...raw,items:required}).join()).toContain('потеряны');
+ for(const url of [
+  canonical.replace('Backpack','Other'),canonical.replace('Backpack','backpack'),
+  canonical.replace('2116832290575876141','2116832290575876142'),
+  canonical.replace('x.com','twitter.com'),canonical.replace('x.com','x.com.evil.example'),
+  canonical.replace('id=42','id=43'),canonical.replace('&code=access',''),
+  canonical.replace('#terms','#other'),canonical.replace('https:','http:'),
+  canonical.replace('x.com','user@x.com'),canonical.replace('x.com','x.com:444'),
+ ]) {
+  const items=preserveEditorialSources([{text:'Изменённый источник',url}],required);
+  expect(items[0].url).toBe(url);
+  expect(checkEntry({...entry,items},{...raw,items:required}).join()).toContain('потеряны');
+ }
+});
+
+test('a remains functional outside the existing exact HTTPS x.com status boundary',()=>{
+ for(const original of [
+  'https://example.com/Backpack/status/2116832290575876141?a=report',
+  'https://twitter.com/Backpack/status/2116832290575876141?a=report',
+  'https://x.com/Backpack?a=report','https://x.com/i/article/2116832290575876141?a=report',
+  'https://x.com/Backpack/status/2116832290575876141/photo/1?a=report',
+  'https://x.com/Backpack/status/2116832290575876141?A=report',
+ ]) {
+  const url=original.split('?')[0],required=[{text:'Источник',url:original}];
+  expect(editorialSourceUrl(original)).toBe(original);
+  const items=preserveEditorialSources([{text:'Источник',url}],required);
+  expect(items[0].url).toBe(url);
+  expect(checkEntry({...entry,items},{...raw,items:required}).join()).toContain('потеряны');
+ }
+});
+
 test('source reconciliation cannot invent a missing URL or substitute a page, author, post or functional query',()=>{
  const source={text:'Post',url:'https://x.com/nadoHQ/status/123?s=20&id=42'};
  for(const url of ['https://x.com/nadoHQ/status/124?id=42','https://x.com/Other/status/123?id=42',
