@@ -25,6 +25,7 @@ export interface RawDigest {
   project?: string;
   origin?: string;
   sourceUrl?: string;
+  priorPublications?: import("./editorial-history.ts").PriorPublication[];
 }
 
 /** Активность (карточка «что сделать ради дропа»), как её собрал сайт. */
