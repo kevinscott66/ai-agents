@@ -199,3 +199,17 @@ test('concurrent automatic publishers cannot read and deliver the same pending t
   expect(existsSync(path)).toBe(false);
  } finally {release();rmSync(dir,{recursive:true,force:true});}
 });
+
+test('one batch repair fixes all malformed stories, preserving strict gates and topic binding',async()=>{
+ const a=article('Alpha'),b={...article('Omega'),title:'Omega снизил комиссию переводов своего токена до одного цента для всех пользователей',items:[{text:'Project',url:'https://omega.org/update'},{text:'Independent',url:'https://news.org/omega'}]};
+ let asks=0,checks=0;
+ const result=await researchArticles([],{now,ask:async(_s,prompt)=>{
+  asks++;
+  if(asks===1)return JSON.stringify({articles:[{...a,summary:a.summary.replaceAll('**','')},{...b,title:'Omega запустил продукт'}]});
+  expect(prompt).toContain('жирных');expect(prompt).toContain('70–130');
+  return JSON.stringify({articles:[a,b]});
+ },verify:async()=>{checks++;return passed();}});
+ expect(asks).toBe(2);expect(checks).toBe(2);expect(result.map(x=>x.title)).toEqual([a.title,b.title]);
+ let seen=0;
+ await expect(researchArticles([],{now,ask:async()=>JSON.stringify({articles:[++seen===1?{...a,summary:'short'}:b]}),verify:async()=>passed()})).rejects.toThrow('No fresh');
+});

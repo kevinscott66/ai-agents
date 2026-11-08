@@ -156,3 +156,32 @@ Both writers use the common [editorial quality policy](editorial-style.md), adap
 from the owner-requested Wikipedia advice. The shared pure module must ship before
 its state/validator/tool callers in a scoped rollout. Current source/freshness and
 publication protection still applies.
+
+## Bounded edition repair and event comparison — 8 November 2026
+
+One correction call now receives all rejected candidates and their individual
+format/factual findings. Up to four corrected stories must retain an original
+source URL and independently pass the same final gates; failed sources, stale
+news and duplicates do not become eligible through this repair. No additional
+unbounded model loop, send or fallback delivery was introduced.
+
+The verifier receives bounded related publication history and must explicitly
+confirm a new material event with an actually opened source from the final story.
+A new paraphrase, URL or “tomorrow” reminder of an existing launch announcement is
+not novelty. A real launch, postponement, new season or changed terms can qualify.
+The site editor uses this same check, excluding the current ID and publications
+later than the historical article. History-read errors fail before drafting.
+`editorial-history.ts` selects comparison data; it never merges articles by name.
+Human-reviewed duplicate mappings on the site preserve both old routes.
+
+The second independent source remains part of the verification/review, but the
+caption no longer uses the owner-rejected phrase «Второй источник»; its link is
+labelled «Источник». This does not remove the independent-owner evidence gate.
+
+The November rollout must also include `daily-research-content.ts` and
+`model-json.ts`: production's daily tool still had the older inline parser when
+these changes were prepared. Compare the actual installed modules against the
+reviewed release manifest and back them up; do not assume Git parent equals the
+installed daily tool. This rollout retains the new shared decoder and captured
+UTC date used by both writer and verifier. Neither channel identity nor timer
+activation changes as part of this code installation.

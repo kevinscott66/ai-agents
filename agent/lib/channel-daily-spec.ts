@@ -9,7 +9,7 @@ export interface DailyStory {title:string;date:string;summary:string;body:string
 const accents=(s:string)=>[...s.matchAll(/\*\*([^*\n]+)\*\*/g)];
 export function dailyStoryErrors(a:DailyStory):string[]{
  const bad:string[]=[];const lead=plainInline(a.summary).trim();
- if(a.title.length<70||a.title.length>130)bad.push('ТЗ: заголовок должен содержать70–130знаков');
+ if(plainInline(a.title).trim().length<70||plainInline(a.title).trim().length>130)bad.push('ТЗ: заголовок должен содержать70–130знаков');
  if(lead.length<180||lead.length>340)bad.push('ТЗ: описание пункта должно содержать180–340знаков');
  if(a.body.length<600||a.body.length>1200||a.body.trim().split(/\n\s*\n/).length<2||a.body.trim().split(/\n\s*\n/).length>3)bad.push('ТЗ: полный материал600–1200знаков,2–3абзаца');
  if(/https?:\/\/|(?:javascript|data|vbscript):|<[^>]*>|\[[^\]]+\]\(/iu.test(a.title+' '+a.summary))bad.push('ТЗ: ссылки добавляются из проверенных источников, HTML запрещён');
@@ -36,7 +36,7 @@ export function channelDailyText(title:string,createdAt:string,articles:DailySto
  const lines=[`📰 **${plainInline(title)}**`,`🗓️ ${ruDate(new Date(createdAt))}`,'','Коротко о главном — детали по ссылкам.',''];
  articles.forEach(a=>{
   const first=primarySourceLink(a.items).replace('[Первоисточник]','[Подробнее →]');
-  const second=primarySourceLink(a.items.slice(1)).replace('[Первоисточник]','[Второй источник]');
+  const second=primarySourceLink(a.items.slice(1)).replace('[Первоисточник]','[Источник]');
   lines.push(`${itemEmoji(a.emoji)} **${plainInline(a.title)}**`,`${highlightedLead(a.summary)} ${first} · ${second}`,'');
  });
  lines.push(CHANNEL_FOOTER);return lines.join('\n');

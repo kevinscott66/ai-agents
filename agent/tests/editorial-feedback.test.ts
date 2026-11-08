@@ -44,6 +44,7 @@ test('normal main remembers a failed review across fresh processes and only retr
  try {
   const {mkdirSync}=require('node:fs');mkdirSync(join(dir,'src/data/current'),{recursive:true});mkdirSync(join(dir,'src/data/snapshot'));
   writeFileSync(join(dir,'src/data/current/editorial-candidates.json'),JSON.stringify([{...raw,items:[]}]))
+  writeFileSync(join(dir,'src/data/current/digests.json'),'[]');
   writeFileSync(join(dir,'src/data/current/activity-candidates.json'),'[]');writeFileSync(join(dir,'src/data/edits.json'),'[]');writeFileSync(auto,'{}');
   const run=(at:number,wantFeedback:boolean)=>{
    const script=`import {mock} from 'bun:test';let calls=0,feedback=false;Date.now=()=>${at};console.log=()=>{};console.warn=()=>{};
