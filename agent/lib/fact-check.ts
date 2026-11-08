@@ -517,14 +517,7 @@ export function openedCount(parsed: Record<string, unknown>): number {
   return openedUrls(parsed).length;
 }
 
-/**
- * Собрать вердикт из ответа модели и статусов ссылок.
- *
- * Отдельная функция, потому что здесь живёт правило, ради которого всё
- * затевалось: «проблем нет» от агента, не открывшего ни одной страницы, — это
- * не «всё в порядке», а «проверка не состоялась», и публиковать по нему нельзя.
- * Материал без единой ссылки — тот же случай: проверять нечем.
- */
+
 /** Caption access must not silently count as inspection of an attached image. */
 export function mediaProblems(parsed: Record<string, unknown>, c: Checkable, read: ReadSource[]): FactProblem[] {
   const decisions = Array.isArray(parsed.media_review) ? parsed.media_review : [];
@@ -539,6 +532,14 @@ export function mediaProblems(parsed: Record<string, unknown>, c: Checkable, rea
   return problems;
 }
 
+/**
+ * Собрать вердикт из ответа модели и статусов ссылок.
+ *
+ * Отдельная функция, потому что здесь живёт правило, ради которого всё
+ * затевалось: «проблем нет» от агента, не открывшего ни одной страницы, — это
+ * не «всё в порядке», а «проверка не состоялась», и публиковать по нему нельзя.
+ * Материал без единой ссылки — тот же случай: проверять нечем.
+ */
 export function verdictFrom(
   parsed: Record<string, unknown>,
   links: LinkStatus[],

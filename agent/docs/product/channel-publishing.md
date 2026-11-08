@@ -177,3 +177,11 @@ Human-reviewed duplicate mappings on the site preserve both old routes.
 The second independent source remains part of the verification/review, but the
 caption no longer uses the owner-rejected phrase «Второй источник»; its link is
 labelled «Источник». This does not remove the independent-owner evidence gate.
+
+The November rollout must also include `daily-research-content.ts` and
+`model-json.ts`: production's daily tool still had the older inline parser when
+these changes were prepared. Compare the actual installed modules against the
+reviewed release manifest and back them up; do not assume Git parent equals the
+installed daily tool. This rollout retains the new shared decoder and captured
+UTC date used by both writer and verifier. Neither channel identity nor timer
+activation changes as part of this code installation.

@@ -35,6 +35,7 @@
  * Таймер: delabs-site-editorial.timer. Сайт подхватит написанное сам на
  * ближайшей пересборке корпуса — отдельного шага публикации здесь нет.
  */
+import {HOUR_MS} from "../lib/time-constants.ts";
 import { editorialResearch, type ResearchOptions } from "../lib/codex-editorial.ts";
 import { extractModelObject as extractJson } from "../lib/model-json.ts";
 import { EDITORIAL_STYLE_GUIDE, editorialStyleErrors, editorialStyleFindings } from '../lib/editorial-style.ts';
@@ -270,13 +271,7 @@ export async function askChecked<T>(prompt: string, check: (p: T) => Promise<str
   throw new Error(bad.join("; "));
 }
 
-/**
- * Чем проверять. У выпуска это список источников, у активности — ссылка на
- * страницу проекта: другого первоисточника у карточки «что сделать ради дропа»
- * и не бывает. Материал, под которым нет ни одной ссылки, проверить нечем —
- * `verdictFrom` такой случай блокирует, и это правильно: редактуры не будет,
- * новая карточка останется в закрытой очереди.
- */
+
 /** App URLs are often JS-only; the announcement is already linked in intro/steps.
  * Only extract X post references here, without introducing arbitrary new fetch URLs. */
 export function activitySources(a: RawActivity): DigestItem[] {
@@ -294,6 +289,13 @@ export function activitySources(a: RawActivity): DigestItem[] {
   return [...result.values()];
 }
 
+/**
+ * Чем проверять. У выпуска это список источников, у активности — ссылка на
+ * страницу проекта: другого первоисточника у карточки «что сделать ради дропа»
+ * и не бывает. Материал, под которым нет ни одной ссылки, проверить нечем —
+ * `verdictFrom` такой случай блокирует, и это правильно: редактуры не будет,
+ * новая карточка останется в закрытой очереди.
+ */
 function sources(e: Partial<EditorialEntry>, raw: RawRecord, kind: Kind): DigestItem[] {
   if (kind === "activities") return cleanEditorialSources([...(e.items ?? []), ...activitySources(raw as RawActivity)]);
   const items = e.items ?? raw.items ?? [];
@@ -475,7 +477,7 @@ export async function main(): Promise<void> {
       } catch (err) {
         failures.entries[`${kind}:${r.id}`] = failureEntry(err instanceof Error ? err.message : String(err), r, manual[kind]?.[r.id] ?? {});
         writeAtomic(failurePath, failures);
-        retryAfter[`${kind}:${r.id}`] = Date.now() + 6 * 60 * 60 * 1000;
+        retryAfter[`${kind}:${r.id}`] = Date.now() + 6 * HOUR_MS;
         writeAtomic(retryPath, retryAfter);
         console.warn(`[site-editorial] пропущен ${r.id}: ${(err as Error).message}`);
       }

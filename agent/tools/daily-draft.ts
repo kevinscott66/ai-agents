@@ -242,7 +242,7 @@ const STOPWORDS = new Set([
 /** Отличительные слова заголовка (>4 символов, не стоп-слова) для дедупа. */
 function keyWords(s: string): Set<string> {
   return new Set(
-    normTitle(s).replace(/увол[а-яё]*/gu,"увольнение")
+    normTitle(s).replace(/увол[а-яё]*/gu,"увольнение").replace(/выпуст[а-яё]*/gu,"выпуск")
       .split(" ")
       .filter((w) => w.length > 4 && !STOPWORDS.has(w)),
   );
@@ -322,8 +322,8 @@ export function researchPrompt(exclude: string[], now = Date.now()): string {
   ].join("\n");
 }
 
-/** The writer cannot publish or access Telegram; every candidate gets a fresh verifier call. */
-/** Reuse the existing DNS-pinned, size/redirect/deadline-bounded source transport.
+/** The writer cannot publish or access Telegram; every candidate gets a fresh verifier call.
+ * Reuse the existing DNS-pinned, size/redirect/deadline-bounded source transport.
  * Never pass model-supplied URLs to an unrestricted server fetch. */
 export async function verifyDailyArticle(article:Checkable):Promise<FactVerdict> {
   for (const item of article.items??[]) {

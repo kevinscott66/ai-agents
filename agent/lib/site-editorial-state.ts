@@ -1,4 +1,5 @@
 /** Pure editorial state, copy projections and selection; no research or file I/O. */
+import {DAY_MS} from "./time-constants.ts";
 import { ACTIVITY_TERM_FIELDS, activityRevisionErrors, projectActivityRevision } from "./activity-revision.mjs";
 import { activityReviewMatches } from "./activity-review.mjs";
 import { cleanEditorialSources, editorialSourceUrl } from "./editorial-sources.ts";
@@ -108,7 +109,6 @@ export const EDITORIAL_BATCH: Record<Kind, number> = { digests: 3, activities: 2
 export const LABEL_TITLE = /^[\p{L}\p{N}_]+:\s/u;
 export const SOURCE_ONLY_TITLE = /^(?:(?:публикация|пост|сообщение|запись)\s+в\s+(?:X|Twitter|соцсети)\b|[^.!?\n]{1,60}\s+(?:опубликовал[аи]?|разместил[аи]?)\s+(?:ссылк\p{L}*|пост|запись)\s+(?:на|в|о)\s)/iu;
 export const EDITORIAL_VERSION = 3;
-const DAY_MS = 24 * 60 * 60 * 1000;
 const RECENT_REVIEW_DAYS = 30;
 
 /** Scheduling metadata is not evidence that a forecast event occurred. */
